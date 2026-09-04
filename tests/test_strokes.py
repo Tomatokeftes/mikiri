@@ -369,3 +369,69 @@ def test_demo_follow_through_is_not_a_second_stroke(tracked_session):
     assert len(frames) == len(set(frames))
     for a, b in zip(frames, frames[1:]):
         assert (b - a) / tracked_session.info.fps >= MIN_STROKE_GAP_S
+
+
+# --- the shuttle search, wired through the session -------------------------------
+
+
+def test_shuttle_search_on_a_clip_with_no_shuttle_finds_nothing_and_survives(tracked_session):
+    """The demo clip has no shuttle. That must be a quiet zero, not a crash."""
+    found = tracked_session.find_shuttle_launches()
+    assert found == 0
+    series = tracked_session.strokes()
+    assert series is not None and series.strokes
+    assert all(s.shot is None for s in series.strokes)
+
+
+def test_shot_names_appear_only_once_a_launch_is_recorded(tracked_session):
+    """Injecting a launch is the only way a stroke gets a name."""
+    from mikiri.shuttle import Launch
+
+    series = tracked_session.strokes()
+    frame = series.strokes[0].frame
+    assert series.strokes[0].shot is None
+
+    tracked_session._launches = {
+        frame: Launch(
+            frame=frame,
+            direction_deg=-40.0,  # steeply downward
+            rising=False,
+            speed_px_s=4000.0,
+            speed_bh=14.0,
+            speed_mps=None,
+            speed_uncertainty=None,
+            n_points=6,
+            confidence=0.9,
+            note="synthetic",
+        )
+    }
+    named = tracked_session.strokes()
+    hit = named.strokes[0]
+    assert hit.shot is not None
+    assert 0.0 < hit.shot_confidence <= 1.0
+    # The evidence must describe the launch, not just repeat the descriptor.
+    assert hit.evidence
+    assert "no shuttle evidence" not in hit.evidence
+    assert hit.label() == hit.shot
+
+
+def test_a_weak_launch_leaves_the_stroke_unnamed(tracked_session):
+    from mikiri.shuttle import Launch
+
+    series = tracked_session.strokes()
+    frame = series.strokes[0].frame
+    tracked_session._launches = {
+        frame: Launch(
+            frame=frame,
+            direction_deg=-40.0,
+            rising=False,
+            speed_px_s=4000.0,
+            speed_bh=14.0,
+            speed_mps=None,
+            speed_uncertainty=None,
+            n_points=2,
+            confidence=0.05,  # below the naming threshold
+            note="too few points",
+        )
+    }
+    assert tracked_session.strokes().strokes[0].shot is None
