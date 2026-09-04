@@ -101,6 +101,10 @@ class ProjectSession:
         #: Why camera recovery from the net posts failed, if it did. The court
         #: calibration stays usable either way, so this is a note, not an error.
         self.court_camera_error: str | None = None
+        #: Shuttle launches keyed by contact frame, once the search has run.
+        #: Expensive (it decodes video), so it is never computed implicitly:
+        #: the UI asks for it and it survives until tracking is re-run.
+        self._launches: dict | None = None
         self.lock = threading.RLock()
 
     # -- opening ---------------------------------------------------------
@@ -522,15 +526,16 @@ class ProjectSession:
     def strokes(self) -> StrokeSeries | None:
         """Detected contacts with their descriptors, or ``None`` before tracking.
 
-        Shot names are not attached here: they need evidence beyond the body,
-        which :mod:`mikiri.shots` supplies when a shuttle launch was recovered.
+        Shot names are attached only where a shuttle launch was recovered for
+        that contact; every other stroke keeps its descriptor and an empty
+        ``shot``. Run :meth:`find_shuttle_launches` to populate them.
         """
         eff = self.effective_keypoints()
         if eff is None:
             return None
         calib = self.project.court
         camera = calib.camera if (calib is not None and calib.has_camera()) else None
-        return detect_strokes(
+        series = detect_strokes(
             eff[0],
             self.info.fps,
             self.racket(),
@@ -540,6 +545,68 @@ class ProjectSession:
             homography=self.homography(),
             camera=camera,
         )
+        if self._launches:
+            from mikiri.shots import name_shots
+
+            name_shots(series, self._launches)
+        return series
+
+    def find_shuttle_launches(
+        self,
+        check_cancel: Callable[[], None] | None = None,
+        progress: Callable[[float, str], None] | None = None,
+    ) -> int:
+        """Search for the shuttle in the frames just after each detected contact.
+
+        Deliberately local rather than rally-long: tracking a shuttle across a
+        whole clip on consumer footage is unreliable, but the frames right after
+        a known contact are the easy case, and the launch direction and speed
+        they yield are exactly what names a shot.
+
+        Returns the number of contacts a launch was recovered for.
+        """
+        from mikiri.shuttle import background_plate, launch_after_hit
+
+        series = self.strokes()
+        racket = self.racket()
+        eff = self.effective_keypoints()
+        if series is None or racket is None or eff is None or not series.strokes:
+            return 0
+        start = self.pose_start
+        bh = body_height_px(eff[0], self.project.conf_threshold)
+        if not np.isfinite(bh) or bh <= 0:
+            return 0
+        calib = self.project.court
+        camera = calib.camera if (calib is not None and calib.has_camera()) else None
+        H = self.homography()
+
+        found: dict[int, object] = {}
+        with VideoReader(self.info.path, self.info) as reader:
+            plate = background_plate(reader, self.project.trim_start, self.project.trim_end)
+            for k, stroke in enumerate(series.strokes):
+                if check_cancel is not None:
+                    check_cancel()
+                if progress is not None:
+                    progress(k / max(len(series.strokes), 1), f"Shuttle after contact {k + 1}")
+                head = racket.head[stroke.frame]
+                if not np.isfinite(head).all():
+                    continue
+                launch = launch_after_hit(
+                    reader,
+                    start + stroke.frame,
+                    (float(head[0]), float(head[1])),
+                    self.info.fps,
+                    float(bh),
+                    homography=H,
+                    camera=camera,
+                    plate=plate,
+                    contact_height_m=stroke.contact_height_m,
+                )
+                if launch is not None:
+                    found[stroke.frame] = launch
+        with self.lock:
+            self._launches = found
+        return len(found)
 
     def racket(self) -> RacketSeries | None:
         """Racket-head estimate for the effective keypoints, or ``None``."""

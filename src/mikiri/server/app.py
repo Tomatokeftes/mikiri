@@ -628,6 +628,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "no such event") from exc
         return s.state()
 
+    @app.post("/api/projects/{pid}/shuttle")
+    def find_shuttle(pid: str) -> dict:
+        s = session(pid)
+
+        def work(job: Job) -> dict:
+            n = s.find_shuttle_launches(job.check_cancel, job.set_progress)
+            return {"launches": n}
+
+        job = st.jobs.start("shuttle", work)
+        return {"job_id": job.id}
+
     @app.get("/api/projects/{pid}/events/suggest")
     def suggest(pid: str) -> dict:
         s = session(pid)

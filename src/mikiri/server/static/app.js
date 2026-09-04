@@ -1213,6 +1213,17 @@ function bindUI() {
   const optionThenPose = (key) => async (e) => { applyState(await api('PUT', `/api/projects/${S.pid}/options`, { [key]: e.target.value })); await loadPose(); S.suggestions = S.pose ? S.pose.suggestions : null; renderAll(); };
   $('#movement').addEventListener('change', optionThenPose('movement'));
   $('#coach-level').addEventListener('change', optionThenPose('coach_level'));
+  $('#shuttle-btn').addEventListener('click', async () => {
+    const btn = $('#shuttle-btn');
+    btn.disabled = true; setStatus('Looking for the shuttle after each contact...');
+    try {
+      const { job_id } = await api('POST', `/api/projects/${S.pid}/shuttle`);
+      const res = await pollJob(job_id, (j) => setStatus(j.message || 'Searching for the shuttle...'));
+      const n = (res && res.result && res.result.launches) || 0;
+      applyState(await api('GET', `/api/projects/${S.pid}`)); await loadPose(); renderAll();
+      setStatus(n ? `Shuttle found after ${n} contact${n === 1 ? '' : 's'}` : 'No shuttle found; strokes keep their descriptions');
+    } catch (e) { setStatus(e.message, true); } finally { btn.disabled = false; }
+  });
   $('#racket-hand').addEventListener('change', optionThenPose('racket_hand'));
   $('#lead-leg').addEventListener('change', optionThenPose('lead_leg'));
   $('#conf-threshold').addEventListener('change', async (e) => { applyState(await api('PUT', `/api/projects/${S.pid}/options`, { conf_threshold: +e.target.value })); await loadPose(); renderAll(); });
