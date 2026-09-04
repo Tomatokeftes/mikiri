@@ -56,10 +56,19 @@ net, 13.40 at the far baseline).
 - Ankle keypoints sit a few centimetres above the floor and jitter by a few
   pixels, which becomes 5 to 15 cm at typical phone distances. Speeds are
   therefore reliable to roughly 0.3 m/s, distances to a few percent.
-- A camera behind the court gives good position along the court and poor
-  position across it far away; a raised camera at the side does the opposite.
-  For footwork, higher and further back is better; for joint angles, side-on
-  is better. They are different filming set-ups.
+- The error is strongly anisotropic, and it is the *depth* direction that
+  suffers: a camera behind the court gives good position **across** the court
+  and poor position **along** it, increasingly so with distance. At the far
+  baseline the error ellipse is typically five times longer along the court
+  than across it. A raised camera at the side does the opposite. (The
+  intuition is line judging: baseline calls are made from the side, because
+  depth down the length of the court is exactly what a view along it cannot
+  resolve.)
+- Height helps and setback hurts, and not equally: depth error goes roughly as
+  `d^2 / (f * h)` for camera height `h` and distance `d`, so it is inversely
+  proportional to height but grows with the *square* of distance. Higher and
+  **closer** is better; back off only as far as framing the court requires.
+  For joint angles, side-on is better. They are different filming set-ups.
 - Rolling shutter, wide-angle distortion near the image edges and a camera
   that moves during the clip all break the calibration silently: check the
   track against the video before trusting the numbers.

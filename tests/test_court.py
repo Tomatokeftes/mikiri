@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +16,7 @@ from mikiri.court import (
     build_track,
     compute_homography,
     court_to_image,
+    court_uncertainty_grid,
     draw_court,
     image_to_court,
     preset_points,
@@ -166,3 +168,93 @@ def test_session_court_and_export(tracked_session: ProjectSession, tmp_path: Pat
     from mikiri.project import Project
 
     assert Project.load(path).court.preset == "half_doubles"
+
+
+# --- camera geometry wired through the session ---------------------------------
+
+
+def _synth_camera():
+    """A pinhole camera over the court, reusing the geometry test's helper."""
+    from tests.test_geometry import Camera
+
+    return Camera(ground=(3.05, -4.0), height=3.0)
+
+
+def test_set_court_recovers_the_camera_from_post_tops(tracked_session):
+    from mikiri.geometry import NET_POST_HEIGHT
+    from mikiri.court import DOUBLES_WIDTH as W, NET_Y as NY
+
+    cam = _synth_camera()
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    image_points = cam.floor(corners).tolist()
+    tops = cam.project(
+        np.array([[0.0, NY, NET_POST_HEIGHT], [W, NY, NET_POST_HEIGHT]])
+    ).tolist()
+
+    calib = tracked_session.set_court("doubles_corners", image_points, None, 0, tops)
+    assert calib.has_camera()
+    assert calib.camera.height_m == pytest.approx(3.0, abs=0.01)
+    assert np.allclose(calib.camera.ground_point, (3.05, -4.0), atol=0.02)
+    assert tracked_session.court_camera_error is None
+
+
+def test_bad_post_tops_do_not_break_the_calibration(tracked_session):
+    cam = _synth_camera()
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    image_points = cam.floor(corners).tolist()
+    # Both "tops" on the floor: implies a camera at infinity.
+    bad = cam.floor(np.array([[0.0, 6.70], [6.10, 6.70]])).tolist()
+
+    calib = tracked_session.set_court("doubles_corners", image_points, None, 0, bad)
+    assert calib.is_valid()  # the court itself is still usable
+    assert not calib.has_camera()
+    assert tracked_session.court_camera_error
+
+
+def test_court_track_carries_uncertainty(tracked_session):
+    cam = _synth_camera()
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    tracked_session.set_court("doubles_corners", cam.floor(corners).tolist(), None, 0)
+    track = tracked_session.court_track()
+    assert track is not None and track.cov is not None
+    assert track.cov.shape == (track.positions.shape[0], 2, 2)
+    finite = np.isfinite(track.cov).all(axis=(1, 2))
+    if finite.any():
+        assert (np.linalg.eigvalsh(track.cov[finite]) >= -1e-12).all()  # positive semi-definite
+
+
+def test_court_uncertainty_payload_is_json_ready(tracked_session):
+    cam = _synth_camera()
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    tracked_session.set_court("doubles_corners", cam.floor(corners).tolist(), None, 0)
+    payload = tracked_session.court_uncertainty()
+    assert payload is not None
+    n = len(payload["points"])
+    assert n > 0
+    assert len(payload["major_m"]) == len(payload["minor_m"]) == len(payload["angle_deg"]) == n
+    assert all(a >= b for a, b in zip(payload["major_m"], payload["minor_m"]))
+    json.dumps(payload)  # must survive serialisation
+
+
+def test_far_court_uncertainty_exceeds_near_court(tracked_session):
+    """The claim the UI makes must hold on a real calibration."""
+    cam = _synth_camera()
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    tracked_session.set_court("doubles_corners", cam.floor(corners).tolist(), None, 0)
+    payload = tracked_session.court_uncertainty()
+    pts = np.asarray(payload["points"])
+    major = np.asarray(payload["major_m"])
+    near = major[pts[:, 1] < 3.0].mean()
+    far = major[pts[:, 1] > 10.0].mean()
+    assert far > 2 * near
+
+
+def test_draw_court_accepts_uncertainty_without_crashing(tracked_session):
+    cam = _synth_camera()
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    tracked_session.set_court("doubles_corners", cam.floor(corners).tolist(), None, 0)
+    H = tracked_session.homography()
+    track = tracked_session.court_track()
+    grid = court_uncertainty_grid(H, tracked_session.project.court)
+    img = draw_court(track.positions, current=0, cov=track.cov, uncertainty=grid, heat=True)
+    assert img.ndim == 3 and img.shape[2] == 3 and img.dtype == np.uint8

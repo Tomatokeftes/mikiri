@@ -226,15 +226,28 @@ function renderVideo() {
     }
   }
   // court calibration points (stored, and the ones being clicked)
-  const courtPts = S.courtPick ? S.courtPick.points : (($('#show-court').checked && S.state.court && S.state.court.image_points) ? S.state.court.image_points : []);
+  const showStored = $('#show-court').checked && S.state.court && S.state.court.image_points;
+  const courtPts = S.courtPick ? S.courtPick.points : (showStored ? S.state.court.image_points : []);
+  // How many of those are floor points; anything beyond is a net-post top.
+  const nFloor = S.courtPick ? S.courtPick.courtNeeded : (courtPts ? courtPts.length : 0);
+  const postPts = S.courtPick ? S.courtPick.points.slice(nFloor) : (showStored ? (S.state.court.post_tops_image || []) : []);
   if (courtPts && courtPts.length) {
     ctx.strokeStyle = S.courtPick ? '#00e5ff' : '#ffd166'; ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = 2; ctx.font = 'bold 12px sans-serif';
-    courtPts.forEach(([x, y], i) => {
+    courtPts.slice(0, nFloor).forEach(([x, y], i) => {
       const cx = x * scale, cy = y * scale;
       ctx.beginPath(); ctx.moveTo(cx - 9, cy); ctx.lineTo(cx + 9, cy); ctx.moveTo(cx, cy - 9); ctx.lineTo(cx, cy + 9); ctx.stroke();
       ctx.fillText(String(i + 1), cx + 6, cy - 6);
     });
-    if (courtPts.length >= 2) { ctx.setLineDash([4, 4]); ctx.beginPath(); courtPts.forEach(([x, y], i) => (i ? ctx.lineTo(x * scale, y * scale) : ctx.moveTo(x * scale, y * scale))); if (courtPts.length >= 4) ctx.closePath(); ctx.stroke(); ctx.setLineDash([]); }
+    const floorPts = courtPts.slice(0, nFloor);
+    if (floorPts.length >= 2) { ctx.setLineDash([4, 4]); ctx.beginPath(); floorPts.forEach(([x, y], i) => (i ? ctx.lineTo(x * scale, y * scale) : ctx.moveTo(x * scale, y * scale))); if (floorPts.length >= 4) ctx.closePath(); ctx.stroke(); ctx.setLineDash([]); }
+  }
+  if (postPts && postPts.length) {
+    ctx.strokeStyle = '#b388ff'; ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = 2; ctx.font = 'bold 12px sans-serif';
+    postPts.forEach(([x, y], i) => {
+      const cx = x * scale, cy = y * scale;
+      ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillText(i === 0 ? 'L post' : 'R post', cx + 8, cy - 6);
+    });
   }
   // event badge
   const ev = S.state.events.find((x) => x.frame === S.frame);
@@ -700,7 +713,7 @@ function bindVideoCanvas() {
     if (!S.state || ev.button !== 0) return;
     const p = canvasToVideo(ev);
     if (S.calibPick) { S.calibPick.points.push([p.x, p.y]); renderVideo(); if (S.calibPick.points.length === 2) finishCalibPoints(); return; }
-    if (S.courtPick) { S.courtPick.points.push([p.x, p.y]); renderVideo(); setStatus(`Court point ${S.courtPick.points.length} of ${S.courtPick.needed}`); if (S.courtPick.points.length >= S.courtPick.needed) finishCourtPick(); return; }
+    if (S.courtPick) { S.courtPick.points.push([p.x, p.y]); renderVideo(); if (S.courtPick.points.length >= S.courtPick.needed) { finishCourtPick(); } else { setStatus(courtPickPrompt()); renderCourt(); } return; }
     if (!S.edit || !S.pose) return;
     const j = nearestJoint(p.x, p.y, p.scale);
     if (j == null) return;
@@ -847,20 +860,47 @@ function openCourtModal() {
   const updateHint = () => { const p = presets.find((x) => x.id === sel.value); $('#court-hint').textContent = p ? p.hint : ''; };
   sel.onchange = updateHint; updateHint();
   const c = S.state.court;
-  $('#court-status').textContent = c && c.image_points && c.image_points.length ? `Calibrated with ${c.image_points.length} points (${c.preset}), reprojection error ${c.reprojection_error_m} m.` : 'Not calibrated.';
+  const bits = [];
+  if (c && c.image_points && c.image_points.length) {
+    bits.push(`Calibrated with ${c.image_points.length} points (${c.preset}), reprojection error ${c.reprojection_error_m} m.`);
+    if (c.camera) bits.push(`Camera ${c.camera.height_m.toFixed(2)} m high, ${describeCameraSpot(c.camera)}.`);
+    else if (S.state.court_camera_error) bits.push(`Net posts not usable: ${S.state.court_camera_error}`);
+    else bits.push('No camera geometry: far-court positions carry an uncorrected bias.');
+  } else {
+    bits.push('Not calibrated.');
+  }
+  $('#court-status').textContent = bits.join(' ');
+}
+function describeCameraSpot(cam) {
+  const [x, y] = cam.ground_point;
+  const behind = y < 0 ? `${(-y).toFixed(1)} m behind the near baseline` : `${y.toFixed(1)} m up the court`;
+  return `${behind}, ${Math.abs(x - 3.05) < 0.6 ? 'near the centre line' : (x < 3.05 ? 'left of centre' : 'right of centre')}`;
 }
 function startCourtPick() {
   const presets = (S.state.meta.court && S.state.meta.court.presets) || [];
   const p = presets.find((x) => x.id === $('#court-preset').value) || presets[0];
-  S.courtPick = { preset: p.id, needed: p.n_points, points: [] };
+  const posts = $('#court-posts').checked;
+  S.courtPick = { preset: p.id, needed: p.n_points + (posts ? 2 : 0), courtNeeded: p.n_points, posts, points: [] };
   closeModals(); setStatus(`Court calibration: ${p.hint}`); renderVideo(); renderCourt();
+}
+function courtPickPrompt() {
+  const k = S.courtPick;
+  if (!k) return '';
+  const i = k.points.length;
+  if (i < k.courtNeeded) return `Court point ${i + 1} of ${k.courtNeeded}`;
+  return i === k.courtNeeded ? 'Now click the top of the LEFT net post' : 'Now click the top of the RIGHT net post';
 }
 async function finishCourtPick() {
   const pick = S.courtPick; S.courtPick = null;
+  const body = { preset: pick.preset, image_points: pick.points.slice(0, pick.courtNeeded), frame: S.frame };
+  if (pick.posts) body.post_tops = pick.points.slice(pick.courtNeeded);
   try {
-    const st = await api('PUT', `/api/projects/${S.pid}/court`, { preset: pick.preset, image_points: pick.points, frame: S.frame });
+    const st = await api('PUT', `/api/projects/${S.pid}/court`, body);
     applyState(st); await loadPose(); renderAll();
-    setStatus(`Court calibrated (reprojection error ${st.court.reprojection_error_m} m)`);
+    const cam = st.court && st.court.camera;
+    setStatus(cam
+      ? `Court calibrated (reprojection error ${st.court.reprojection_error_m} m); camera ${cam.height_m.toFixed(2)} m high`
+      : `Court calibrated (reprojection error ${st.court.reprojection_error_m} m)${st.court_camera_error ? ` -- net posts not usable: ${st.court_camera_error}` : ''}`);
   } catch (e) { setStatus(e.message, true); renderVideo(); }
 }
 function renderCourt() {
@@ -887,8 +927,17 @@ function renderCourt() {
   ctx.strokeStyle = '#222'; ctx.lineWidth = 2.5; line(-0.3, meta.net_y, meta.width + 0.3, meta.net_y);
   const pos = S.pose && S.pose.positions;
   if (pos) {
+    // Heat: each sample is smeared by its own measured uncertainty, so the far
+    // court reads as the smear it really is rather than a crisp dot.
+    const sig = S.pose.position_sigma;
     ctx.fillStyle = 'rgba(230,30,30,0.10)';
-    for (const p of pos) if (p) { const [x, y] = P(p[0], p[1]); ctx.beginPath(); ctx.arc(x, y, 0.35 * scale, 0, Math.PI * 2); ctx.fill(); }
+    pos.forEach((p, i) => {
+      if (!p) return;
+      const [x, y] = P(p[0], p[1]);
+      const s = sig && sig[i] ? sig[i] : null;
+      const r = Math.max(0.25, s ? s[0] : 0.35) * scale;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    });
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.beginPath(); let pen = false;
     for (const p of pos) { if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
     ctx.stroke();
@@ -897,24 +946,49 @@ function renderCourt() {
     const fw = S.pose.footwork;
     if (fw && fw.base_m) { const [x, y] = P(fw.base_m[0], fw.base_m[1]); ctx.strokeStyle = '#ffdc00'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 7, y); ctx.lineTo(x + 7, y); ctx.moveTo(x, y - 7); ctx.lineTo(x, y + 7); ctx.stroke(); }
   }
+  // 1-sigma position error across the court: shows where the map can be trusted.
+  const unc = S.showUncertainty !== false && S.state.court_uncertainty;
+  if (unc && unc.points.length) {
+    ctx.strokeStyle = 'rgba(90,230,255,0.85)'; ctx.lineWidth = 1;
+    unc.points.forEach(([gx, gy], i) => {
+      const [x, y] = P(gx, gy);
+      ctx.beginPath();
+      // Court y runs up the image while canvas rotation runs clockwise, so negate.
+      ctx.ellipse(x, y, Math.max(1, unc.major_m[i] * scale), Math.max(1, unc.minor_m[i] * scale), -unc.angle_deg[i] * Math.PI / 180, 0, Math.PI * 2);
+      ctx.stroke();
+    });
+    const worst = Math.max(...unc.major_m);
+    ctx.fillStyle = 'rgba(90,230,255,0.9)'; ctx.font = '9px sans-serif';
+    ctx.fillText(`1-sigma error, worst ${Math.round(worst * 100)} cm`, 4, Hh - 4);
+  }
   const fw = S.pose && S.pose.footwork; const el = $('#footwork-metrics');
   if (fw && fw.distance_m != null) {
     const zones = fw.zone_seconds ? Object.entries(fw.zone_seconds).map(([k, v]) => `${k} ${v} s`).join(', ') : '';
     const pi = poseIndex(S.frame);
     const cur = (pos && pi >= 0 && pos[pi]) ? pos[pi] : null;
     const sp = S.pose.speed && pi >= 0 ? S.pose.speed[pi] : null;
-    el.innerHTML = [
+    const u = fw.position_uncertainty_m;
+    const rows = [
       ['now', cur ? `x ${cur[0].toFixed(2)} m, y ${cur[1].toFixed(2)} m${sp != null ? `, ${sp.toFixed(1)} m/s` : ''}` : '-'],
-      ['distance', `${fw.distance_m} m in ${fw.duration_s} s`],
+      ['distance', `${fw.distance_m} m in ${fw.duration_s} s${fw.distance_uncertainty_m ? ` (+/- ${fw.distance_uncertainty_m} m)` : ''}`],
       ['speed', `avg ${fw.avg_speed_mps} m/s, peak ${fw.peak_speed_mps} m/s`],
       ['direction changes', String(fw.direction_changes)],
       ['base', `x ${fw.base_m[0]} m, y ${fw.base_m[1]} m`],
       ['from base', `mean ${fw.mean_distance_from_base_m} m, max ${fw.max_distance_from_base_m} m`],
       ['zones', zones],
       ['measured', `${fw.frames_measured} of ${fw.frames_total} frames`],
-    ].map(([k, v]) => `<span class="k">${k}</span><span>${v}</span>`).join('');
+    ];
+    if (u) rows.push(['position error', `${Math.round(u.median_along_court * 100)} cm along court, ${Math.round(u.median_across_court * 100)} cm across (worst ${Math.round(u.worst_along_court * 100)} cm)`]);
+    if (fw.camera) {
+      rows.push(['camera', `${fw.camera.height_m} m high at x ${fw.camera.ground_point_m[0]}, y ${fw.camera.ground_point_m[1]}`]);
+      if (fw.ankle_bias_corrected_m) rows.push(['bias corrected', `${Math.round(fw.ankle_bias_corrected_m.far_baseline * 100)} cm at the far baseline`]);
+    } else {
+      rows.push(['camera', 'unknown -- click the net-post tops to correct the far-court bias']);
+    }
+    if (fw.jump_clearance_m != null) rows.push(['jump clearance', `${(fw.jump_clearance_m * 100).toFixed(0)} cm`]);
+    el.innerHTML = rows.map(([k, v]) => `<span class="k">${k}</span><span>${v}</span>`).join('');
   } else {
-    el.innerHTML = S.courtPick ? `<span class="k">clicking</span><span>${S.courtPick.points.length} of ${S.courtPick.needed} points</span>` : '<span class="k">footwork</span><span>run tracking to see the track</span>';
+    el.innerHTML = S.courtPick ? `<span class="k">clicking</span><span>${courtPickPrompt()}</span>` : '<span class="k">footwork</span><span>run tracking to see the track</span>';
   }
 }
 

@@ -27,7 +27,9 @@ from mikiri.court import (
     CourtTrack,
     build_track,
     compute_homography,
+    court_uncertainty_grid,
     preset_points,
+    recover_camera,
 )
 from mikiri.events import EventSuggestion, flight_time_s
 from mikiri.export import ExportInputs, ExportOptions, export_pack
@@ -67,6 +69,14 @@ from mikiri.video import FrameCache, VideoInfo, VideoReader, fit_size, probe_vid
 HEIGHT_TO_HEAD_ANKLE_CM = 7.5
 
 
+def _ellipse_axes(cov: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """1-sigma semi-major and semi-minor axes in metres for ``(n, 2, 2)`` covariances."""
+    from mikiri.geometry import error_ellipse
+
+    major, minor, _ = error_ellipse(cov)
+    return major, minor
+
+
 class ProjectSession:
     """One open clip with its analysis state."""
 
@@ -84,6 +94,9 @@ class ProjectSession:
         self._eff: tuple[np.ndarray, np.ndarray] | None = None
         self._angles: AngleTable | None = None
         self.last_export: dict | None = None
+        #: Why camera recovery from the net posts failed, if it did. The court
+        #: calibration stays usable either way, so this is a note, not an error.
+        self.court_camera_error: str | None = None
         self.lock = threading.RLock()
 
     # -- opening ---------------------------------------------------------
@@ -375,8 +388,16 @@ class ProjectSession:
         image_points: list[list[float]],
         court_points: list[list[float]] | None = None,
         frame: int | None = None,
+        post_tops: list[list[float]] | None = None,
     ) -> CourtCalibration:
-        """Store a court calibration from clicked image points (raises ``ValueError``)."""
+        """Store a court calibration from clicked image points (raises ``ValueError``).
+
+        ``post_tops`` is the optional pair of net-post tops. When both are given
+        the camera's position and height are recovered from them, which corrects
+        the off-plane ankle bias and unlocks heights in metres. Bad post clicks
+        never invalidate the court itself: the calibration is stored either way
+        and ``camera`` is simply left unset.
+        """
         if court_points is None:
             if preset not in PRESETS:
                 raise ValueError(f"unknown court preset {preset!r}")
@@ -384,15 +405,29 @@ class ProjectSession:
         pts = [[float(x), float(y)] for x, y in image_points]
         if len(pts) != len(court_points) or len(pts) < 4:
             raise ValueError(f"expected {len(court_points)} clicked points, got {len(pts)}")
-        _, err = compute_homography(pts, court_points)
+        H, err = compute_homography(pts, court_points)
+        tops = [[float(x), float(y)] for x, y in (post_tops or [])]
+        calib = CourtCalibration(
+            image_points=pts,
+            court_points=[[float(x), float(y)] for x, y in court_points],
+            preset=preset,
+            frame=frame,
+            reprojection_error_m=round(float(err), 4),
+            post_tops_image=tops,
+        )
+        if len(tops) >= 2:
+            try:
+                calib.camera = recover_camera(calib, H)
+            except ValueError as exc:
+                # A misclick should degrade the feature, not the calibration.
+                self.court_camera_error = str(exc)
+            else:
+                self.court_camera_error = None
+        else:
+            self.court_camera_error = None
         with self.lock:
-            self.project.court = CourtCalibration(
-                image_points=pts,
-                court_points=[[float(x), float(y)] for x, y in court_points],
-                preset=preset,
-                frame=frame,
-                reprojection_error_m=round(float(err), 4),
-            )
+            self.project.court = calib
+            self._invalidate()
             return self.project.court
 
     def clear_court(self) -> None:
@@ -415,7 +450,38 @@ class ProjectSession:
         eff = self.effective_keypoints()
         if H is None or eff is None:
             return None
-        return build_track(eff[0], H, self.info.fps, self.project.conf_threshold, self.flights())
+        calib = self.project.court
+        camera = calib.camera if (calib is not None and calib.has_camera()) else None
+        return build_track(
+            eff[0],
+            H,
+            self.info.fps,
+            self.project.conf_threshold,
+            self.flights(),
+            camera=camera,
+            calibration=calib,
+        )
+
+    def court_uncertainty(self) -> dict | None:
+        """Error ellipses across the court for display, or ``None`` without calibration.
+
+        Returns a payload of court points, 1-sigma semi-axes in metres and the
+        ellipse angle in degrees, ready for the browser to draw.
+        """
+        H = self.homography()
+        if H is None:
+            return None
+        from mikiri.geometry import error_ellipse
+
+        grid, cov = court_uncertainty_grid(H, self.project.court)
+        major, minor, angle = error_ellipse(cov)
+        ok = np.isfinite(major) & np.isfinite(minor) & np.isfinite(angle)
+        return {
+            "points": [[round(float(x), 2), round(float(y), 2)] for x, y in grid[ok]],
+            "major_m": [round(float(v), 3) for v in major[ok]],
+            "minor_m": [round(float(v), 3) for v in minor[ok]],
+            "angle_deg": [round(float(np.degrees(v)), 1) for v in angle[ok]],
+        }
 
     def racket(self) -> RacketSeries | None:
         """Racket-head estimate for the effective keypoints, or ``None``."""
@@ -785,6 +851,8 @@ class ProjectSession:
             "lead_leg": p.lead_leg,
             "assessment": self.assessment() if self.raw_keypoints() is not None else None,
             "court": None if p.court is None else p.court.model_dump(),
+            "court_uncertainty": self.court_uncertainty(),
+            "court_camera_error": self.court_camera_error,
             "footwork": (track.metrics if (track := self.court_track()) is not None else None),
             "last_export": self.last_export,
             "meta": {
@@ -846,6 +914,17 @@ class ProjectSession:
             else [None if not np.isfinite(v) else round(float(v), 2) for v in track.speed],
             "airborne": None if track is None else track.airborne.tolist(),
             "footwork": None if track is None else track.metrics,
+            # 1-sigma position error per frame, so the UI can show the track's
+            # own confidence rather than a single clip-wide figure.
+            "position_sigma": None
+            if track is None or track.cov is None
+            else [
+                None if not np.isfinite(a) else [round(float(a), 3), round(float(b), 3)]
+                for a, b in zip(*_ellipse_axes(track.cov))
+            ],
+            "foot_height_m": None
+            if track is None or track.height_m is None
+            else [None if not np.isfinite(v) else round(float(v), 3) for v in track.height_m],
             "racket": None if (racket := self.racket()) is None else racket.to_dict(),
         }
 

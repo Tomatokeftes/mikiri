@@ -128,6 +128,7 @@ class CourtBody(BaseModel):
     image_points: list[list[float]]
     court_points: list[list[float]] | None = None
     frame: int | None = None
+    post_tops: list[list[float]] | None = None
 
 
 class SaveBody(BaseModel):
@@ -517,7 +518,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def set_court(pid: str, body: CourtBody) -> dict:
         s = session(pid)
         try:
-            s.set_court(body.preset, body.image_points, body.court_points, body.frame)
+            s.set_court(
+                body.preset, body.image_points, body.court_points, body.frame, body.post_tops
+            )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return s.state()
