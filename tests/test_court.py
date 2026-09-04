@@ -181,15 +181,14 @@ def _synth_camera():
 
 
 def test_set_court_recovers_the_camera_from_post_tops(tracked_session):
+    from mikiri.court import DOUBLES_WIDTH as W
+    from mikiri.court import NET_Y as NY
     from mikiri.geometry import NET_POST_HEIGHT
-    from mikiri.court import DOUBLES_WIDTH as W, NET_Y as NY
 
     cam = _synth_camera()
     corners = np.asarray(preset_points("doubles_corners"), dtype=float)
     image_points = cam.floor(corners).tolist()
-    tops = cam.project(
-        np.array([[0.0, NY, NET_POST_HEIGHT], [W, NY, NET_POST_HEIGHT]])
-    ).tolist()
+    tops = cam.project(np.array([[0.0, NY, NET_POST_HEIGHT], [W, NY, NET_POST_HEIGHT]])).tolist()
 
     calib = tracked_session.set_court("doubles_corners", image_points, None, 0, tops)
     assert calib.has_camera()

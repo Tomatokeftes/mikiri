@@ -1,0 +1,508 @@
+"""Swing detection and honest stroke description.
+
+Finding *when* a player hit the shuttle is tractable from the pose alone.
+Saying *what* the shot was is not, and the literature is unusually clear about
+why: smash, clear and drop share almost identical overhead kinematics right up
+to impact and separate only on racket-face angle and what the shuttle does
+afterwards. Studies with a sensor bolted to the racket handle still lose eleven
+accuracy points going from "which stroke" to "where did it go", and on video
+the shuttle trajectory alone out-performs the whole body pose.
+
+So this module reports two tiers and never blurs them.
+
+**The descriptor** is always produced and is close to always right, because
+each axis is a coarse geometric fact about the body at contact:
+
+* contact height -- overhead, sidearm or underarm, from the wrist against the
+  shoulder and hip;
+* side -- forehand or backhand, from whether the hitting arm has crossed the
+  torso midline, which needs no knowledge of which way the player faces;
+* court zone -- rear, mid or front, from the homography-projected feet.
+
+That yields "overhead forehand from the rearcourt": a true statement, useful
+for coaching, and free of invented precision.
+
+**The shot name** (smash, clear, drop, ...) is only attached when there is
+evidence for it beyond the body, which in practice means the shuttle's launch
+direction recovered by :mod:`mikiri.shuttle`. Without that evidence the field
+stays ``None`` rather than guessing, and the reason is recorded.
+
+Everything is measured in body heights per second and in fractions of the
+player's own height, so a threshold tuned on a near-court player still holds
+when the same player is at the far baseline and half the size in pixels.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+
+from mikiri.keypoints import KP, body_height_px
+from mikiri.racket import RacketSeries
+from mikiri.smoothing import fill_gaps, savgol
+
+#: Weights of the tennis swing-detection signal (wrist speed dominates, with
+#: elbow and shoulder displacement damping single-joint keypoint noise).
+SIGNAL_WEIGHTS = (0.5, 0.3, 0.2)
+#: Shortest believable gap between two contacts, seconds. Fast net exchanges and
+#: flat drives run about a third of a second apart; below this it is one swing
+#: detected twice.
+MIN_STROKE_GAP_S = 0.30
+#: A swing peak must reach this many body heights per second of wrist speed.
+#: Recreational strokes are slower than elite ones, so it is deliberately low
+#: and the prominence test below does most of the rejecting.
+MIN_PEAK_SPEED_BH = 1.1
+#: A peak must also stand this far above the surrounding trough, in the same
+#: units, which is what separates a swing from general court movement.
+MIN_PEAK_PROMINENCE_BH = 0.7
+#: Half-width of the window described around a contact, seconds.
+STROKE_WINDOW_S = 0.5
+
+#: Contact-height classes, as a fraction of the player's own height measured
+#: from the ankles: above the shoulder, between shoulder and hip, below the hip.
+HEIGHT_CLASSES = ("overhead", "sidearm", "underarm")
+#: Shot names this module will attach when the evidence supports them.
+SHOT_NAMES = ("serve", "smash", "clear", "drop", "drive", "net", "lift", "block")
+
+
+@dataclass
+class Stroke:
+    """One detected contact, described as far as the evidence honestly allows."""
+
+    frame: int  # index into the pose array
+    confidence: float  # 0..1 that a stroke happened here at all
+    height_class: str  # overhead | sidearm | underarm
+    side: str  # forehand | backhand | unknown
+    zone: str  # rear | mid | front | far | unknown
+    racket_speed_bh: float  # body heights per second at contact
+    racket_speed_mps: float | None = None
+    contact_height_m: float | None = None  # needs camera geometry
+    contact_height_bh: float | None = None  # above the floor, in body heights
+    court_position_m: list[float] | None = None
+    airborne: bool = False
+    shot: str | None = None  # only when evidence beyond the body supports it
+    shot_confidence: float = 0.0
+    evidence: str = ""  # why the shot is or is not named
+
+    def descriptor(self) -> str:
+        """The always-defensible label, e.g. ``"overhead forehand from rearcourt"``."""
+        side = "" if self.side == "unknown" else f"{self.side} "
+        where = "" if self.zone == "unknown" else f" from {self.zone}court"
+        return f"{self.height_class} {side}stroke{where}".replace("  ", " ")
+
+    def label(self) -> str:
+        """The shot name when it was earned, otherwise the descriptor."""
+        return self.shot if self.shot else self.descriptor()
+
+    def to_dict(self) -> dict:
+        """JSON-friendly view."""
+        return {
+            "frame": int(self.frame),
+            "confidence": round(float(self.confidence), 2),
+            "height_class": self.height_class,
+            "side": self.side,
+            "zone": self.zone,
+            "descriptor": self.descriptor(),
+            "label": self.label(),
+            "racket_speed_bh": round(float(self.racket_speed_bh), 2),
+            "racket_speed_mps": None
+            if self.racket_speed_mps is None
+            else round(float(self.racket_speed_mps), 1),
+            "contact_height_m": None
+            if self.contact_height_m is None
+            else round(float(self.contact_height_m), 2),
+            "contact_height_bh": None
+            if self.contact_height_bh is None
+            else round(float(self.contact_height_bh), 2),
+            "court_position_m": None
+            if self.court_position_m is None
+            else [round(float(v), 2) for v in self.court_position_m],
+            "airborne": bool(self.airborne),
+            "shot": self.shot,
+            "shot_confidence": round(float(self.shot_confidence), 2),
+            "evidence": self.evidence,
+        }
+
+
+@dataclass
+class StrokeSeries:
+    """Detected strokes plus the per-frame signal they came from."""
+
+    strokes: list[Stroke] = field(default_factory=list)
+    signal: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    fps: float = 30.0
+
+    def to_dict(self) -> dict:
+        """JSON-friendly view."""
+        return {
+            "strokes": [s.to_dict() for s in self.strokes],
+            "signal": [None if not np.isfinite(v) else round(float(v), 3) for v in self.signal],
+            "counts": self.counts(),
+        }
+
+    def counts(self) -> dict:
+        """How many strokes of each descriptor axis and each named shot."""
+        out: dict[str, dict[str, int]] = {"height_class": {}, "side": {}, "zone": {}, "shot": {}}
+        for s in self.strokes:
+            for key, value in (
+                ("height_class", s.height_class),
+                ("side", s.side),
+                ("zone", s.zone),
+                ("shot", s.shot or "unnamed"),
+            ):
+                out[key][value] = out[key].get(value, 0) + 1
+        return out
+
+
+def swing_signal(
+    keypoints: np.ndarray, fps: float, racket_hand: str = "right", conf_thr: float = 0.3
+) -> np.ndarray:
+    """Per-frame swing activity, in body heights per second.
+
+    A weighted blend of hitting-wrist speed with elbow and shoulder
+    displacement. The wrist carries the signal; the other two damp the
+    single-keypoint jitter that would otherwise fire on a bad frame. Dividing
+    by the player's pixel height makes the result scale-free, so one threshold
+    serves the near and the far court.
+
+    Args:
+        keypoints: ``(n, 26, 3)`` effective keypoints.
+        fps: Frames per second.
+        racket_hand: ``"right"`` or ``"left"``.
+        conf_thr: Minimum keypoint confidence to use a joint.
+
+    Returns:
+        ``(n,)`` signal, ``nan`` where the arm is not visible.
+    """
+    kp = np.asarray(keypoints, dtype=float)
+    n = kp.shape[0]
+    if n == 0:
+        return np.zeros(0)
+    bh = body_height_px(kp, conf_thr)
+    if not np.isfinite(bh) or bh <= 0:
+        return np.full(n, np.nan)
+    side = "left" if racket_hand == "left" else "right"
+
+    def speed_of(name: str) -> np.ndarray:
+        j = kp[:, KP[f"{side}_{name}"]]
+        xy = np.where((j[:, 2] >= conf_thr)[:, None], j[:, :2], np.nan)
+        filled = np.stack([fill_gaps(xy[:, 0]), fill_gaps(xy[:, 1])], axis=1)
+        if not np.isfinite(filled).all():
+            return np.full(n, np.nan)
+        vel = np.gradient(filled, 1.0 / fps, axis=0)
+        return np.hypot(vel[:, 0], vel[:, 1]) / bh
+
+    w1, w2, w3 = SIGNAL_WEIGHTS
+    sig = w1 * speed_of("wrist") + w2 * speed_of("elbow") + w3 * speed_of("shoulder")
+    if np.isfinite(sig).sum() >= 5:
+        win = max(5, int(round(0.1 * fps)) | 1)
+        sig = savgol(fill_gaps(sig), window=win, polyorder=2)
+    return sig
+
+
+def _peaks(sig: np.ndarray, fps: float, min_speed: float, min_prominence: float) -> list[int]:
+    """Local maxima that are fast enough and stand clear of their surroundings."""
+    n = sig.shape[0]
+    if n < 3:
+        return []
+    gap = max(1, int(round(MIN_STROKE_GAP_S * fps)))
+    order = np.argsort(sig)[::-1]
+    chosen: list[int] = []
+    for i in order:
+        v = sig[i]
+        if not np.isfinite(v) or v < min_speed:
+            break  # sorted descending: everything after is worse
+        if any(abs(int(i) - c) < gap for c in chosen):
+            continue
+        lo = max(0, int(i) - gap)
+        hi = min(n, int(i) + gap + 1)
+        window = sig[lo:hi]
+        trough = np.nanmin(window) if np.isfinite(window).any() else np.nan
+        if not np.isfinite(trough) or (v - trough) < min_prominence:
+            continue
+        chosen.append(int(i))
+    return sorted(chosen)
+
+
+def _height_class(kp_frame: np.ndarray, conf_thr: float) -> tuple[str, float]:
+    """Contact height class from the wrist against the shoulder and hip lines.
+
+    Returns ``(class, confidence)``; the class is ``"sidearm"`` with zero
+    confidence when the reference joints are not visible.
+    """
+    wrist_r, wrist_l = kp_frame[KP["right_wrist"]], kp_frame[KP["left_wrist"]]
+    wrist = wrist_r if wrist_r[2] >= wrist_l[2] else wrist_l
+    sh = [kp_frame[KP[f"{s}_shoulder"]] for s in ("left", "right")]
+    hp = [kp_frame[KP[f"{s}_hip"]] for s in ("left", "right")]
+    sh_ok = [p for p in sh if p[2] >= conf_thr]
+    hp_ok = [p for p in hp if p[2] >= conf_thr]
+    if wrist[2] < conf_thr or not sh_ok or not hp_ok:
+        return "sidearm", 0.0
+    shoulder_y = float(np.mean([p[1] for p in sh_ok]))
+    hip_y = float(np.mean([p[1] for p in hp_ok]))
+    torso = hip_y - shoulder_y  # positive: image y grows downwards
+    if torso <= 1e-6:
+        return "sidearm", 0.0
+    # 0 at the shoulder, 1 at the hip, negative above the shoulder.
+    t = (float(wrist[1]) - shoulder_y) / torso
+    if t < -0.15:
+        return "overhead", float(min(1.0, 0.5 + abs(t)))
+    if t > 1.0:
+        return "underarm", float(min(1.0, 0.5 + (t - 1.0)))
+    return "sidearm", float(0.5 + 0.5 * min(abs(t), abs(1.0 - t)))
+
+
+def _side(kp_frame: np.ndarray, racket_hand: str, conf_thr: float) -> tuple[str, float]:
+    """Forehand or backhand, from whether the hitting arm crossed the torso midline.
+
+    Deliberately independent of which way the player faces: a backhand is a
+    stroke played with the arm across the body, and "across" is a fact about the
+    arm and the torso, not about the camera.
+    """
+    hand = "left" if racket_hand == "left" else "right"
+    wrist = kp_frame[KP[f"{hand}_wrist"]]
+    own = kp_frame[KP[f"{hand}_shoulder"]]
+    other = kp_frame[KP[f"{'right' if hand == 'left' else 'left'}_shoulder"]]
+    if min(wrist[2], own[2], other[2]) < conf_thr:
+        return "unknown", 0.0
+    axis = float(own[0]) - float(other[0])  # points from the off shoulder to the hitting one
+    if abs(axis) < 1e-6:
+        return "unknown", 0.0
+    midline = 0.5 * (float(own[0]) + float(other[0]))
+    # Signed position of the wrist along the shoulder axis, in shoulder widths.
+    t = (float(wrist[0]) - midline) / (0.5 * abs(axis)) * (1.0 if axis > 0 else -1.0)
+    if t > 0.15:
+        return "forehand", float(min(1.0, 0.4 + abs(t) / 2.0))
+    if t < -0.15:
+        return "backhand", float(min(1.0, 0.4 + abs(t) / 2.0))
+    return "unknown", 0.2
+
+
+def _zone(position: np.ndarray | None) -> str:
+    """Court zone of a contact from its court-metre position."""
+    from mikiri.court import NET_Y, SHORT_SERVICE_FROM_NET
+
+    if position is None or not np.isfinite(position).all():
+        return "unknown"
+    y = float(position[1])
+    if y > NET_Y:
+        return "far"
+    if y < 2.5:
+        return "rear"
+    if y < NET_Y - SHORT_SERVICE_FROM_NET:
+        return "mid"
+    return "front"
+
+
+def detect_strokes(
+    keypoints: np.ndarray,
+    fps: float,
+    racket: RacketSeries | None = None,
+    racket_hand: str = "right",
+    conf_thr: float = 0.3,
+    track=None,
+    homography: np.ndarray | None = None,
+    camera=None,
+    min_speed_bh: float = MIN_PEAK_SPEED_BH,
+    min_prominence_bh: float = MIN_PEAK_PROMINENCE_BH,
+) -> StrokeSeries:
+    """Find contacts and describe each one as far as the evidence allows.
+
+    Args:
+        keypoints: ``(n, 26, 3)`` effective keypoints.
+        fps: Frames per second.
+        racket: Racket-head series, used for the speed reported at contact.
+        racket_hand: ``"right"`` or ``"left"``.
+        conf_thr: Minimum keypoint confidence.
+        track: Optional :class:`~mikiri.court.CourtTrack` giving court position.
+        homography: Image-to-court homography, needed for contact height.
+        camera: Optional :class:`~mikiri.geometry.CameraGeometry`; with it the
+            contact height is reported in metres.
+        min_speed_bh: Peak speed a swing must reach.
+        min_prominence_bh: How far a peak must stand above its surroundings.
+
+    Returns:
+        A :class:`StrokeSeries`. Shot names are left unset here; attach them
+        with :func:`mikiri.shots.name_shots` once shuttle evidence exists.
+    """
+    kp = np.asarray(keypoints, dtype=float)
+    n = kp.shape[0]
+    sig = swing_signal(kp, fps, racket_hand, conf_thr)
+    series = StrokeSeries(signal=sig, fps=fps)
+    if n == 0 or not np.isfinite(sig).any():
+        return series
+
+    bh = body_height_px(kp, conf_thr)
+    for i in _peaks(sig, fps, min_speed_bh, min_prominence_bh):
+        frame = int(i)
+        height_class, hc_conf = _height_class(kp[frame], conf_thr)
+        side, side_conf = _side(kp[frame], racket_hand, conf_thr)
+        pos = None
+        airborne = False
+        if track is not None and frame < track.positions.shape[0]:
+            p = track.positions[frame]
+            if np.isfinite(p).all():
+                pos = p
+            airborne = bool(track.airborne[frame])
+        speed_bh = 0.0
+        speed_mps = None
+        if racket is not None and frame < racket.speed_bh.shape[0]:
+            v = racket.speed_bh[frame]
+            speed_bh = float(v) if np.isfinite(v) else 0.0
+            if racket.speed_mps is not None and np.isfinite(racket.speed_mps[frame]):
+                speed_mps = float(racket.speed_mps[frame])
+
+        contact_m, contact_bh = _contact_height(
+            kp, racket, frame, bh, homography, camera, pos, conf_thr
+        )
+        # Confidence in the detection itself: how far the peak stood out,
+        # tempered by whether the descriptive joints were actually visible.
+        peak = float(sig[frame]) if np.isfinite(sig[frame]) else 0.0
+        detect_conf = float(np.clip((peak - min_speed_bh) / max(min_speed_bh, 1e-6), 0.0, 1.0))
+        series.strokes.append(
+            Stroke(
+                frame=frame,
+                confidence=round(0.5 + 0.5 * detect_conf, 3),
+                height_class=height_class,
+                side=side,
+                zone=_zone(pos),
+                racket_speed_bh=speed_bh,
+                racket_speed_mps=speed_mps,
+                contact_height_m=contact_m,
+                contact_height_bh=contact_bh,
+                court_position_m=None if pos is None else [float(pos[0]), float(pos[1])],
+                airborne=airborne,
+                evidence="no shuttle evidence: descriptor only",
+            )
+        )
+        # Keep the weakest descriptive confidence visible on the stroke.
+        series.strokes[-1].confidence = round(
+            min(series.strokes[-1].confidence, 0.5 + 0.5 * max(hc_conf, side_conf)), 3
+        )
+    return series
+
+
+def _contact_height(
+    kp: np.ndarray,
+    racket: RacketSeries | None,
+    frame: int,
+    bh: float,
+    homography: np.ndarray | None,
+    camera,
+    position: np.ndarray | None,
+    conf_thr: float,
+) -> tuple[float | None, float | None]:
+    """Contact height above the floor, in metres and in body heights.
+
+    The metre figure assumes the contact point is vertically above the player's
+    floor position. A badminton reach is up to about 0.8 m off that vertical,
+    which for a typical set-up puts a couple of tenths of a metre of error on
+    the answer -- fine for telling an overhead contact from a net contact, not
+    fine for comparing two overheads.
+    """
+    point = None
+    if (
+        racket is not None
+        and frame < racket.head.shape[0]
+        and np.isfinite(racket.head[frame]).all()
+    ):
+        point = racket.head[frame]
+    if point is None:
+        w = kp[frame, KP["right_wrist"]]
+        w2 = kp[frame, KP["left_wrist"]]
+        w = w if w[2] >= w2[2] else w2
+        if w[2] < conf_thr:
+            return None, None
+        point = w[:2]
+
+    height_bh = None
+    ankles = [kp[frame, KP[f"{s}_ankle"]] for s in ("left", "right")]
+    ok = [a for a in ankles if a[2] >= conf_thr]
+    if ok and np.isfinite(bh) and bh > 0:
+        floor_y = float(np.mean([a[1] for a in ok]))
+        height_bh = float((floor_y - float(point[1])) / bh)
+
+    height_m = None
+    if camera is not None and homography is not None and position is not None:
+        from mikiri.court import image_to_court
+        from mikiri.geometry import height_from_offset
+
+        mapped = image_to_court(np.asarray(homography, dtype=float), np.asarray([point]))
+        if np.isfinite(mapped).all():
+            z = height_from_offset(mapped, np.asarray([position], dtype=float), camera)
+            if np.isfinite(z[0]):
+                height_m = float(z[0])
+    return height_m, height_bh
+
+
+def stroke_window(frame: int, fps: float, n: int) -> tuple[int, int]:
+    """Frame range describing one stroke, clipped to the array.
+
+    Roughly a second centred on the contact, which is what the stroke-recognition
+    literature converges on from three independent directions.
+    """
+    half = max(1, int(round(STROKE_WINDOW_S * fps)))
+    return max(0, frame - half), min(n - 1, frame + half)
+
+
+def rally_segments(
+    strokes: list[Stroke], fps: float, max_gap_s: float = 4.0
+) -> list[tuple[int, int]]:
+    """Group strokes into rallies by the silence between them.
+
+    A gap longer than ``max_gap_s`` with no contact is taken as the end of a
+    rally. This is a heuristic about pacing, not a scoring rule: it cannot see
+    the score, so a long tactical pause reads as a rally break.
+
+    Args:
+        strokes: Detected strokes, in frame order.
+        fps: Frames per second.
+        max_gap_s: Silence that separates two rallies.
+
+    Returns:
+        ``(first_frame, last_frame)`` pairs, one per rally.
+    """
+    if not strokes:
+        return []
+    gap = max_gap_s * fps
+    out: list[tuple[int, int]] = []
+    start = prev = strokes[0].frame
+    for s in strokes[1:]:
+        if s.frame - prev > gap:
+            out.append((start, prev))
+            start = s.frame
+        prev = s.frame
+    out.append((start, prev))
+    return out
+
+
+def summarise(series: StrokeSeries) -> dict:
+    """Headline stroke numbers for the metrics panel and the export pack."""
+    strokes = series.strokes
+    out: dict = {"n_strokes": len(strokes)}
+    if not strokes:
+        return out
+    counts = series.counts()
+    out["by_height"] = counts["height_class"]
+    out["by_side"] = counts["side"]
+    out["by_zone"] = counts["zone"]
+    named = [s for s in strokes if s.shot]
+    out["n_named"] = len(named)
+    if named:
+        out["by_shot"] = counts["shot"]
+    speeds = [s.racket_speed_bh for s in strokes if s.racket_speed_bh > 0]
+    if speeds:
+        out["peak_racket_speed_bh"] = round(float(np.max(speeds)), 2)
+        out["mean_racket_speed_bh"] = round(float(np.mean(speeds)), 2)
+    heights = [s.contact_height_m for s in strokes if s.contact_height_m is not None]
+    if heights:
+        out["mean_contact_height_m"] = round(float(np.mean(heights)), 2)
+        out["max_contact_height_m"] = round(float(np.max(heights)), 2)
+    rallies = rally_segments(strokes, series.fps)
+    out["n_rallies"] = len(rallies)
+    if rallies:
+        out["strokes_per_rally"] = round(len(strokes) / len(rallies), 1)
+        spans = [(b - a) / series.fps for a, b in rallies]
+        out["mean_rally_s"] = round(float(np.mean(spans)), 1)
+    return out

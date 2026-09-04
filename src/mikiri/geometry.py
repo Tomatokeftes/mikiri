@@ -54,6 +54,11 @@ ANKLE_HEIGHT = 0.075
 SIGMA_KEYPOINT_PX = 2.5
 #: Default 1-sigma error of a hand-clicked court landmark, in pixels.
 SIGMA_CLICK_PX = 3.0
+#: Ellipse scale for 95% coverage in two dimensions: ``sqrt(chi2(0.95, 2))``.
+#: A one-sigma ellipse covers only 39.35% of a 2-D Gaussian, so quoting "1
+#: sigma" as if it were the familiar 68% figure overstates the accuracy by a
+#: wide margin. Reported error ellipses use this instead.
+NSIGMA_95 = 2.4477468306808364
 
 
 class CameraGeometry(BaseModel):

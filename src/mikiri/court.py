@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from mikiri.geometry import (
     ANKLE_HEIGHT,
+    NSIGMA_95,
     SIGMA_CLICK_PX,
     SIGMA_KEYPOINT_PX,
     CameraGeometry,
@@ -405,6 +406,50 @@ def build_track(
     return track
 
 
+def _coverage_shape(positions: np.ndarray) -> dict | None:
+    """Shape of the region a player actually covered, from its spread.
+
+    Three numbers taken from the sample mean and 2x2 covariance of the track:
+    where the centre of the player's coverage sits relative to the middle of
+    their half, how elongated that coverage is, and which way the long axis
+    points. Published comparisons put elite players near the centre with a
+    near-circular spread, and developing players shifted toward the net with a
+    front-to-back oval, so the shape carries coaching signal the raw heat map
+    does not.
+
+    Args:
+        positions: ``(k, 2)`` finite court positions in metres.
+
+    Returns:
+        A summary dict, or ``None`` when there are too few points.
+    """
+    if positions.shape[0] < 10:
+        return None
+    centre = positions.mean(axis=0)
+    cov = np.cov(positions.T)
+    if not np.isfinite(cov).all():
+        return None
+    vals, vecs = np.linalg.eigh(cov)
+    vals = np.maximum(vals, 0.0)
+    major_v, minor_v = float(vals[1]), float(vals[0])
+    if major_v <= 1e-9:
+        return None
+    axis = vecs[:, 1]
+    # Angle from the court's long (front-back) axis, folded to 0..90 degrees.
+    angle = abs(math.degrees(math.atan2(abs(float(axis[0])), abs(float(axis[1])))))
+    # Half-court centre: mid-width, and mid-way between baseline and net.
+    ref_y = NET_Y / 2.0
+    return {
+        "centroid_m": [round(float(centre[0]), 2), round(float(centre[1]), 2)],
+        "offset_across_m": round(float(centre[0] - CENTRE_X), 2),
+        "offset_toward_net_m": round(float(centre[1] - ref_y), 2),
+        "spread_major_m": round(math.sqrt(major_v), 2),
+        "spread_minor_m": round(math.sqrt(minor_v), 2),
+        "eccentricity": round(math.sqrt(max(0.0, 1.0 - minor_v / major_v)), 2),
+        "axis_deg_from_front_back": round(angle, 1),
+    }
+
+
 def footwork_metrics(track: CourtTrack, base: tuple[float, float] | None = None) -> dict:
     """Distance, speed, direction changes, zone times and base-related figures."""
     pos, speed, fps = track.positions, track.speed, track.fps
@@ -454,10 +499,16 @@ def footwork_metrics(track: CourtTrack, base: tuple[float, float] | None = None)
     # single figure because the error is strongly anisotropic: along the court is
     # typically several times worse than across it.
     if track.cov is not None:
-        major, minor, angle = error_ellipse(track.cov)
+        # Quoted at 95% coverage, not at one sigma. In two dimensions a
+        # one-sigma ellipse holds only 39.4% of the distribution, so reporting
+        # it invites the reader's one-dimensional 68% intuition and overstates
+        # the accuracy badly.
+        major, minor, _ = error_ellipse(track.cov, nsigma=NSIGMA_95)
+        sigma_major, _, _ = error_ellipse(track.cov)
         good = np.isfinite(major)
         if good.any():
             out["position_uncertainty_m"] = {
+                "coverage": "95%",
                 "median_along_court": round(float(np.nanmedian(major[good])), 3),
                 "median_across_court": round(float(np.nanmedian(minor[good])), 3),
                 "worst_along_court": round(float(np.nanmax(major[good])), 3),
@@ -466,10 +517,21 @@ def footwork_metrics(track: CourtTrack, base: tuple[float, float] | None = None)
                     1,
                 ),
             }
-            # Distance is a sum of steps, so its error grows only as sqrt(n).
+            # Path length is a sum of independent steps, so its error grows as
+            # the square root of the step count rather than linearly. Built from
+            # the one-sigma axis, then widened once to stay a 95% figure.
             n_steps = max(int(ok.sum()) - 1, 1)
-            step_sigma = float(np.nanmedian(major[good])) * math.sqrt(2.0)
-            out["distance_uncertainty_m"] = round(step_sigma * math.sqrt(n_steps), 2)
+            fin = np.isfinite(sigma_major)
+            step_sigma = float(np.nanmedian(sigma_major[fin])) * math.sqrt(2.0)
+            out["distance_uncertainty_m"] = round(NSIGMA_95 * step_sigma * math.sqrt(n_steps), 2)
+
+        # Where the player lived, as a shape rather than a picture. The
+        # literature's elite signature is a centroid near the court centre and
+        # a near-circular spread; a developing player's is pulled toward the net
+        # and stretched front-to-back.
+        spread = _coverage_shape(p)
+        if spread:
+            out["coverage_shape"] = spread
 
     if track.camera is not None:
         cam = track.camera
@@ -644,7 +706,7 @@ def draw_court(
         )
     if uncertainty is not None:
         grid, gcov = uncertainty
-        major, minor, angle = error_ellipse(np.asarray(gcov, dtype=float))
+        major, minor, angle = error_ellipse(np.asarray(gcov, dtype=float), nsigma=NSIGMA_95)
         worst = 0.0
         for (gx, gy), a, b, th in zip(np.asarray(grid, dtype=float), major, minor, angle):
             if not (np.isfinite(a) and np.isfinite(b) and np.isfinite(th)):
@@ -664,7 +726,7 @@ def draw_court(
                 cv2.LINE_AA,
             )
         if worst > 0:
-            note = f"1-sigma position error, worst {worst * 100:.0f} cm"
+            note = f"95% position error, worst {worst * 100:.0f} cm"
             cv2.putText(
                 img, note, (8, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 0, 0), 3, cv2.LINE_AA
             )

@@ -959,7 +959,7 @@ function renderCourt() {
     });
     const worst = Math.max(...unc.major_m);
     ctx.fillStyle = 'rgba(90,230,255,0.9)'; ctx.font = '9px sans-serif';
-    ctx.fillText(`1-sigma error, worst ${Math.round(worst * 100)} cm`, 4, Hh - 4);
+    ctx.fillText(`95% error, worst ${Math.round(worst * 100)} cm`, 4, Hh - 4);
   }
   const fw = S.pose && S.pose.footwork; const el = $('#footwork-metrics');
   if (fw && fw.distance_m != null) {
@@ -978,7 +978,7 @@ function renderCourt() {
       ['zones', zones],
       ['measured', `${fw.frames_measured} of ${fw.frames_total} frames`],
     ];
-    if (u) rows.push(['position error', `${Math.round(u.median_along_court * 100)} cm along court, ${Math.round(u.median_across_court * 100)} cm across (worst ${Math.round(u.worst_along_court * 100)} cm)`]);
+    if (u) rows.push(['position error (95%)', `${Math.round(u.median_along_court * 100)} cm along court, ${Math.round(u.median_across_court * 100)} cm across (worst ${Math.round(u.worst_along_court * 100)} cm)`]);
     if (fw.camera) {
       rows.push(['camera', `${fw.camera.height_m} m high at x ${fw.camera.ground_point_m[0]}, y ${fw.camera.ground_point_m[1]}`]);
       if (fw.ankle_bias_corrected_m) rows.push(['bias corrected', `${Math.round(fw.ankle_bias_corrected_m.far_baseline * 100)} cm at the far baseline`]);

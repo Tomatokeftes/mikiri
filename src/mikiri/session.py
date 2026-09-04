@@ -70,10 +70,10 @@ HEIGHT_TO_HEAD_ANKLE_CM = 7.5
 
 
 def _ellipse_axes(cov: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """1-sigma semi-major and semi-minor axes in metres for ``(n, 2, 2)`` covariances."""
-    from mikiri.geometry import error_ellipse
+    """95% semi-major and semi-minor axes in metres for ``(n, 2, 2)`` covariances."""
+    from mikiri.geometry import NSIGMA_95, error_ellipse
 
-    major, minor, _ = error_ellipse(cov)
+    major, minor, _ = error_ellipse(cov, nsigma=NSIGMA_95)
     return major, minor
 
 
@@ -465,22 +465,23 @@ class ProjectSession:
     def court_uncertainty(self) -> dict | None:
         """Error ellipses across the court for display, or ``None`` without calibration.
 
-        Returns a payload of court points, 1-sigma semi-axes in metres and the
-        ellipse angle in degrees, ready for the browser to draw.
+        Returns a payload of court points, 95%-coverage semi-axes in metres and
+        the ellipse angle in degrees, ready for the browser to draw.
         """
         H = self.homography()
         if H is None:
             return None
-        from mikiri.geometry import error_ellipse
+        from mikiri.geometry import NSIGMA_95, error_ellipse
 
         grid, cov = court_uncertainty_grid(H, self.project.court)
-        major, minor, angle = error_ellipse(cov)
+        major, minor, angle = error_ellipse(cov, nsigma=NSIGMA_95)
         ok = np.isfinite(major) & np.isfinite(minor) & np.isfinite(angle)
         return {
             "points": [[round(float(x), 2), round(float(y), 2)] for x, y in grid[ok]],
             "major_m": [round(float(v), 3) for v in major[ok]],
             "minor_m": [round(float(v), 3) for v in minor[ok]],
             "angle_deg": [round(float(np.degrees(v)), 1) for v in angle[ok]],
+            "coverage": "95%",
         }
 
     def racket(self) -> RacketSeries | None:
