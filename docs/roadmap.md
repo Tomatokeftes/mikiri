@@ -22,6 +22,22 @@ move" needs court coordinates, not pixels.
 
 **Status: done** (court calibration modal, court map, footwork metrics, `positions.csv` and `court.png`; see `docs/footwork.md`). Phase 1b, tracking the opponent as a second person, is still open.
 
+### Phase 1c: camera geometry and honest error bars
+
+**Status: done** (`src/mikiri/geometry.py`, `docs/footwork.md`).
+
+Four court corners map the floor but cannot recover height, and they silently
+misplace anything off the floor. Clicking the two net-post tops -- verticals of
+known height at known court points -- pins the camera down, which corrects the
+ankle bias (92 cm at the far baseline from a 1.6 m tripod, systematic, not
+noise), yields jump clearance and contact height in metres, and completes the
+uncertainty model. Position error is propagated through the homography rather
+than asserted, reported as a 95% ellipse, and used as the heat-map kernel so
+the far court is drawn as the smear it is.
+
+This also turns out to be the prerequisite for any real shuttle work: a floor
+homography alone cannot place an object that is two metres in the air.
+
 **Goal.** Put the player on the court: position in metres, distance covered,
 speed, direction changes, time in each court zone, and split-step timing
 relative to the opponent's hit.
@@ -73,6 +89,19 @@ height and location relative to the body, swing path in the image plane.
    detector to refine the racket-head position when the racket is visible.
    Optional, off by default, cached like the pose results.
 
+## Phase 2b: swing detection and stroke description
+
+**Status: done** (`src/mikiri/strokes.py`, `docs/strokes.md`).
+
+Finding *when* the player hit is tractable from pose. Naming *what* the shot
+was is not, so the module reports two tiers and never blurs them: a descriptor
+(contact height, forehand or backhand, court zone) that is always produced and
+always checkable, and a shot name that stays unset until evidence beyond the
+body arrives. Smash, clear and drop share overhead kinematics and differ in
+racket face and post-impact shuttle behaviour; a study with a racket-mounted
+IMU still lost eleven points on that distinction, and on video the shuttle
+trajectory alone beats the whole body pose.
+
 ## Phase 3: shuttle
 
 **Goal.** Shuttle trajectory, hit detection (when the shuttle reverses),
@@ -81,17 +110,27 @@ rally structure.
 
 **How.**
 
-1. *Classical tracker first.* Static camera, small bright fast object:
-   background subtraction, blob detection with size limits, a constant-
-   velocity Kalman filter with gating, and trajectory stitching. Works in
-   good light with few people; degrades with clutter. Cheap on CPU, no
-   download, easy to correct by hand with the existing drag tools (the
-   shuttle becomes a 27th keypoint).
-2. *Learned tracker later.* TrackNet-style models trained on badminton
+1. *Classical tracker first.* Static camera, small fast object: accumulated
+   frame differencing against a median background plate (not MOG2 -- a shuttle
+   never occupies a pixel twice, so a per-pixel mixture model buys ghosting and
+   nothing else), candidate gating sized from the homography, and a three-point
+   constant-acceleration extrapolator rather than a Kalman filter (drag
+   deceleration is `V^2/L`, which leaves a constant-velocity model wrong by up
+   to a metre per frame at smash speeds). Critically, the shuttle is a STREAK,
+   not a blob: gym lighting forces a slow shutter, so gating on roundness
+   silently deletes every smash. Elongation is a feature, not a filter, and its
+   major axis is a free velocity direction.
+2. *Hit-anchored local search is the reliable entry point.* Tracking a whole
+   rally on consumer footage is unreliable, but Mikiri already knows when a hit
+   happened and where the racket head was, so searching a small region for the
+   few frames after a known contact is a far easier problem -- and it recovers
+   exactly the quantity that names a shot: the shuttle's launch direction and
+   speed.
+3. *Learned tracker later.* TrackNet-style models trained on badminton
    broadcast video exist and are much more robust; they need PyTorch and are
    slow on CPU. Add behind the `PoseBackend`-style interface once the
    classical tracker has shown where it fails.
-3. *Hits.* A hit is a sharp reversal of the shuttle's direction close to a
+4. *Hits.* A hit is a sharp reversal of the shuttle's direction close to a
    player's racket-head estimate; the frame becomes the "contact" event
    automatically for both players, which also gives split-step timing for
    free.

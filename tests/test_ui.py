@@ -202,17 +202,52 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         page.uncheck("#swap-lr")
         page.wait_for_function("JL.S.state.swap_lr === false")
 
-        # Court calibration: click four floor points, the court map appears with footwork metrics.
+        # Court calibration, floor points only: click four, the court map appears.
         page.click("#court-btn")
         page.select_option("#court-preset", "half_doubles")
+        page.uncheck("#court-posts")
         page.click("#court-start")
         rect = page.evaluate("JL.jointCanvasPos(15).rect")
-        for fx, fy in ((0.2, 0.95), (0.8, 0.95), (0.7, 0.6), (0.3, 0.6)):
+        floor = ((0.2, 0.95), (0.8, 0.95), (0.7, 0.6), (0.3, 0.6))
+        for fx, fy in floor:
             page.mouse.click(rect["x"] + rect["width"] * fx, rect["y"] + rect["height"] * fy)
             page.wait_for_timeout(150)
         page.wait_for_function("JL.S.state.court && JL.S.state.court.image_points.length === 4")
         expect(page.locator("#court-panel")).to_be_visible()
         expect(page.locator("#footwork-metrics")).to_contain_text("distance", timeout=10000)
+
+        # Escape abandons a pick instead of trapping the user mid-calibration.
+        page.click("#court-btn")
+        page.click("#court-start")
+        page.wait_for_function("JL.S.courtPick !== null")
+        page.mouse.click(rect["x"] + rect["width"] * 0.2, rect["y"] + rect["height"] * 0.95)
+        page.keyboard.press("Escape")
+        page.wait_for_function("JL.S.courtPick === null")
+
+        # With the net-post tops ticked the flow asks for two extra clicks. These
+        # are not real posts, so the camera cannot be recovered - the point of the
+        # check is that the court calibration survives that anyway.
+        page.click("#court-btn")
+        page.select_option("#court-preset", "half_doubles")
+        page.check("#court-posts")
+        page.click("#court-start")
+        page.wait_for_function("JL.S.courtPick && JL.S.courtPick.needed === 6")
+        for fx, fy in floor + ((0.32, 0.55), (0.68, 0.55)):
+            page.mouse.click(rect["x"] + rect["width"] * fx, rect["y"] + rect["height"] * fy)
+            page.wait_for_timeout(150)
+        page.wait_for_function("JL.S.courtPick === null")
+        page.wait_for_function("JL.S.state.court && JL.S.state.court.image_points.length === 4")
+        expect(page.locator("#court-panel")).to_be_visible()
+        expect(page.locator("#footwork-metrics")).to_contain_text("distance", timeout=10000)
+
+        # Detected contacts: the demo clip's swing shows up in the panel with a
+        # speed and a court zone. The exact height class is asserted in
+        # tests/test_strokes.py against ground truth, not here - it sits near a
+        # classification boundary on this clip and would make the UI test brittle.
+        expect(page.locator("#strokes-panel")).to_be_visible()
+        expect(page.locator("#strokes-list")).to_contain_text("bh/s", timeout=10000)
+        expect(page.locator("#strokes-list")).to_contain_text("stroke", timeout=10000)
+        expect(page.locator("#strokes-note")).to_contain_text("shuttle")
         page.locator("#court-panel").scroll_into_view_if_needed()
         page.wait_for_timeout(300)
         page.screenshot(path=str(SCREENSHOTS / "08_court.png"))

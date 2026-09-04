@@ -1204,6 +1204,13 @@ function bindUI() {
     const tag = (document.activeElement && document.activeElement.tagName) || '';
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     if (!$('#modal-root').classList.contains('hidden')) { if (e.key === 'Escape') closeModals(); return; }
+    // Escape abandons a click-on-the-video pick. Without this a half-finished
+    // calibration traps the user: the points are not enough to store, and every
+    // further click adds another one.
+    if (e.key === 'Escape' && (S.courtPick || S.calibPick)) {
+      S.courtPick = null; S.calibPick = null;
+      setStatus('Calibration cancelled'); renderVideo(); renderCourt(); e.preventDefault(); return;
+    }
     const mult = e.shiftKey ? 10 : 1;
     if (e.key === 'ArrowLeft') { step(-mult); e.preventDefault(); }
     else if (e.key === 'ArrowRight') { step(mult); e.preventDefault(); }

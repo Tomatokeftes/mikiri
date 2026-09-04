@@ -121,10 +121,24 @@ Click the four court corners you can see (or the near half, or the near
 baseline plus the short-service line) once per clip and Mikiri maps the
 player's feet onto a top-down court in metres: a court map with the track,
 heat map and current position next to the video, footwork metrics (distance,
-average and peak speed, direction changes, base position, time per zone),
-and `positions.csv` plus `court.png` in the export pack. The camera must be
-static. Details and accuracy notes in [docs/footwork.md](docs/footwork.md);
-the plan for racket and shuttle tracking is in [docs/roadmap.md](docs/roadmap.md).
+average and peak speed, direction changes, base position, time per zone,
+coverage shape), and `positions.csv` plus `court.png` in the export pack. The
+camera must be static.
+
+**Click the two net-post tops as well.** They are verticals of known height
+(1.55 m) standing at court points Mikiri already knows, so two extra clicks pin
+down where the camera is. That matters more than it sounds: an ankle keypoint
+sits about 7.5 cm above the floor, and mapping it as if it were on the floor
+pushes it away from the camera by up to **92 cm at the far baseline from a
+1.6 m tripod**. That error is systematic, not noise, so it never averages out.
+Knowing the camera corrects it, and also yields jump clearance and stroke
+contact height in metres.
+
+Mikiri propagates its own measurement error rather than asserting an accuracy:
+the court map draws 95% error ellipses, and the heat map is blurred by that
+same uncertainty, so the far court is drawn as the smear it really is. Details
+and accuracy notes in [docs/footwork.md](docs/footwork.md); the plan for
+shuttle tracking is in [docs/roadmap.md](docs/roadmap.md).
 
 ![Court map with the footwork track](docs/screenshots/08_court.png)
 
@@ -132,13 +146,45 @@ the plan for racket and shuttle tracking is in [docs/roadmap.md](docs/roadmap.md
 
 The racket head is estimated one racket length beyond the wrist along the forearm and drawn as a white line, with head speed per frame, contact-point height and swing direction in the smash assessment and `racket_*` columns in `angles.csv`. It is an estimate with known limits; read [docs/racket.md](docs/racket.md) before quoting a speed.
 
+### Strokes
+
+Mikiri finds each contact and describes it: contact height (overhead, sidearm,
+underarm), forehand or backhand, and which part of the court it was played
+from. Contacts appear as ticks on the timeline and in a panel that seeks to
+them, and as `strokes.csv` in the export pack.
+
+It stops short of naming the shot. Smash, clear and drop share nearly identical
+overhead kinematics and separate only on racket-face angle and what the shuttle
+does afterwards, neither of which a single 30 fps camera can see. Rather than
+guess, Mikiri reports what it can defend and leaves the shot name unset until
+shuttle evidence supports one. [docs/strokes.md](docs/strokes.md) explains the
+reasoning and the evidence behind it.
+
 ## Filming guidelines
+
+There are two different set-ups here, and they pull in opposite directions.
+Side-on is right for joint angles; raised and behind the court is right for
+footwork. Pick the one that matches the question you are asking.
+
+**For joint angles (jumps, lunges, technique):**
 
 * **Side-on.** Put the camera perpendicular to the direction of the jump so
   the knees, hips and trunk move in the image plane. Filming from behind or
   at an angle makes angles meaningless and confuses left and right.
 * **Camera at hip to chest height**, on a tripod or leaning on something
   steady, 4 to 5 m back.
+
+**For footwork and court position:**
+
+* **As high as you can get.** Depth error falls off inversely with camera
+  height, and a raised camera also stops the near player hiding the far one.
+  A stand or a balcony beats a tripod by a wide margin.
+* **As close as framing allows.** Depth error grows with the *square* of
+  distance while height only helps linearly, so higher-and-closer beats
+  further-back. Back off only as far as it takes to fit the court in.
+* **Get both net posts in frame**, base and top, so the camera can be located.
+* Expect the far court to be less precise than the near court whatever you do.
+  Mikiri shows you how much less.
 * **Headroom above the jump** and the whole body in frame throughout,
   including the feet at the deepest load.
 * **120 fps or more** (240 fps if the phone offers it in good light).
@@ -155,8 +201,13 @@ The racket head is estimated one racket length beyond the wrist along the forear
   camera sensor. Out-of-plane motion (a rotated trunk, a hip that turns in)
   foreshortens segments and changes the apparent angle; the same jump filmed
   from a slightly different spot gives different numbers.
-* There is no depth. Pixel distances only become centimetres through the
-  scale calibration, and only in the plane of the athlete.
+* There is no depth from the image alone. Pixel distances become centimetres
+  through the scale calibration, and only in the plane of the athlete. Court
+  positions are different: the floor is a known plane, so those are metres
+  everywhere, with an error that grows with distance from the camera and is
+  reported rather than assumed.
+* Shot types (smash, clear, drop) are not classified from pose, because they
+  cannot be. See [docs/strokes.md](docs/strokes.md).
 * Left and right come from the pose model and can be mirrored when the
   athlete faces away or turns; use "Swap L/R" and note the camera side.
 * Fast feet blur at 30 to 60 fps; ankle and toe keypoints jitter. The auto
