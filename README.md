@@ -115,6 +115,19 @@ height implied by it, hip rise and loading depth, and explains every column so
 the pack stands on its own. Angle conventions are documented in
 [docs/angles.md](docs/angles.md).
 
+## Court calibration and footwork
+
+Click the four court corners you can see (or the near half, or the near
+baseline plus the short-service line) once per clip and Mikiri maps the
+player's feet onto a top-down court in metres: a court map with the track,
+heat map and current position next to the video, footwork metrics (distance,
+average and peak speed, direction changes, base position, time per zone),
+and `positions.csv` plus `court.png` in the export pack. The camera must be
+static. Details and accuracy notes in [docs/footwork.md](docs/footwork.md);
+the plan for racket and shuttle tracking is in [docs/roadmap.md](docs/roadmap.md).
+
+![Court map with the footwork track](docs/screenshots/08_court.png)
+
 ## Filming guidelines
 
 * **Side-on.** Put the camera perpendicular to the direction of the jump so

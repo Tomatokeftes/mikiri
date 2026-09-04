@@ -144,4 +144,8 @@ canvas#video-canvas, canvas#compare-canvas { display: block; max-width: 100%; ma
 .assessment .st.missing, .assessment .st.unknown { background: rgba(154,160,173,0.2); color: var(--muted); }
 .assessment .cue { color: var(--fg); }
 #movement-desc { margin: 2px 0 6px; }
+.court-row { display: flex; gap: 12px; align-items: flex-start; }
+#court-canvas { width: 220px; flex: 0 0 220px; background: #3c6e3c; border-radius: 4px; display: block; }
+.footwork { font-size: 12px; display: grid; grid-template-columns: auto auto; gap: 2px 10px; align-content: start; }
+.footwork .k { color: var(--muted); }
 kbd { background: var(--bg3); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; font-size: 11px; }

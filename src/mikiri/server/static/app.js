@@ -18,7 +18,7 @@ const S = {
   showSkeleton: true, showLabels: false, edit: false,
   imgs: new Map(), hoverJoint: null, drag: null, lastJoint: 13,
   series: new Set(DEFAULT_SERIES), plots: [],
-  compare: null, calibPick: null, settings: null, suggestions: null,
+  compare: null, calibPick: null, courtPick: null, settings: null, suggestions: null,
   timelineDrag: null, selectFrame: null, selectPeople: [],
 };
 
@@ -210,6 +210,17 @@ function renderVideo() {
     ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2;
     for (const [x, y] of S.calibPick.points) { ctx.beginPath(); ctx.moveTo(x * scale - 8, y * scale); ctx.lineTo(x * scale + 8, y * scale); ctx.moveTo(x * scale, y * scale - 8); ctx.lineTo(x * scale, y * scale + 8); ctx.stroke(); }
     if (S.calibPick.points.length === 2) { const [a, b] = S.calibPick.points; ctx.beginPath(); ctx.moveTo(a[0] * scale, a[1] * scale); ctx.lineTo(b[0] * scale, b[1] * scale); ctx.stroke(); }
+  }
+  // court calibration points (stored, and the ones being clicked)
+  const courtPts = S.courtPick ? S.courtPick.points : (($('#show-court').checked && S.state.court && S.state.court.image_points) ? S.state.court.image_points : []);
+  if (courtPts && courtPts.length) {
+    ctx.strokeStyle = S.courtPick ? '#00e5ff' : '#ffd166'; ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = 2; ctx.font = 'bold 12px sans-serif';
+    courtPts.forEach(([x, y], i) => {
+      const cx = x * scale, cy = y * scale;
+      ctx.beginPath(); ctx.moveTo(cx - 9, cy); ctx.lineTo(cx + 9, cy); ctx.moveTo(cx, cy - 9); ctx.lineTo(cx, cy + 9); ctx.stroke();
+      ctx.fillText(String(i + 1), cx + 6, cy - 6);
+    });
+    if (courtPts.length >= 2) { ctx.setLineDash([4, 4]); ctx.beginPath(); courtPts.forEach(([x, y], i) => (i ? ctx.lineTo(x * scale, y * scale) : ctx.moveTo(x * scale, y * scale))); if (courtPts.length >= 4) ctx.closePath(); ctx.stroke(); ctx.setLineDash([]); }
   }
   // event badge
   const ev = S.state.events.find((x) => x.frame === S.frame);
@@ -581,7 +592,7 @@ function renderOptions() {
 function renderAll() {
   if (!S.state) return;
   renderInfo(); renderTrim(); renderEvents(); renderOptions();
-  renderVideo(); renderTimeline(); renderPlots();
+  renderVideo(); renderTimeline(); renderPlots(); renderCourt();
 }
 
 async function refreshTabs() {
@@ -602,7 +613,7 @@ async function refreshTabs() {
 function seek(f) {
   if (!S.state) return;
   S.frame = clamp(Math.round(f), 0, Math.max(0, nFrames() - 1));
-  renderVideo(); renderTimeline(); renderPlots();
+  renderVideo(); renderTimeline(); renderPlots(); renderCourt();
 }
 function step(d) { seek(S.frame + d); }
 
@@ -672,6 +683,7 @@ function bindVideoCanvas() {
     if (!S.state || ev.button !== 0) return;
     const p = canvasToVideo(ev);
     if (S.calibPick) { S.calibPick.points.push([p.x, p.y]); renderVideo(); if (S.calibPick.points.length === 2) finishCalibPoints(); return; }
+    if (S.courtPick) { S.courtPick.points.push([p.x, p.y]); renderVideo(); setStatus(`Court point ${S.courtPick.points.length} of ${S.courtPick.needed}`); if (S.courtPick.points.length >= S.courtPick.needed) finishCourtPick(); return; }
     if (!S.edit || !S.pose) return;
     const j = nearestJoint(p.x, p.y, p.scale);
     if (j == null) return;
@@ -809,6 +821,86 @@ async function finishCalibPoints() {
   renderVideo();
 }
 
+// court calibration and footwork map
+function openCourtModal() {
+  showModal('#modal-court');
+  const sel = $('#court-preset'); const presets = (S.state.meta.court && S.state.meta.court.presets) || [];
+  if (!sel.options.length) for (const p of presets) { const o = document.createElement('option'); o.value = p.id; o.textContent = p.label; sel.appendChild(o); }
+  if (S.state.court) sel.value = S.state.court.preset;
+  const updateHint = () => { const p = presets.find((x) => x.id === sel.value); $('#court-hint').textContent = p ? p.hint : ''; };
+  sel.onchange = updateHint; updateHint();
+  const c = S.state.court;
+  $('#court-status').textContent = c && c.image_points && c.image_points.length ? `Calibrated with ${c.image_points.length} points (${c.preset}), reprojection error ${c.reprojection_error_m} m.` : 'Not calibrated.';
+}
+function startCourtPick() {
+  const presets = (S.state.meta.court && S.state.meta.court.presets) || [];
+  const p = presets.find((x) => x.id === $('#court-preset').value) || presets[0];
+  S.courtPick = { preset: p.id, needed: p.n_points, points: [] };
+  closeModals(); setStatus(`Court calibration: ${p.hint}`); renderVideo(); renderCourt();
+}
+async function finishCourtPick() {
+  const pick = S.courtPick; S.courtPick = null;
+  try {
+    const st = await api('PUT', `/api/projects/${S.pid}/court`, { preset: pick.preset, image_points: pick.points, frame: S.frame });
+    applyState(st); await loadPose(); renderAll();
+    setStatus(`Court calibrated (reprojection error ${st.court.reprojection_error_m} m)`);
+  } catch (e) { setStatus(e.message, true); renderVideo(); }
+}
+function renderCourt() {
+  const panel = $('#court-panel'); const canvas = $('#court-canvas');
+  if (!S.state) return;
+  const meta = S.state.meta.court; const cal = S.state.court;
+  const has = !!(cal && cal.image_points && cal.image_points.length >= 4);
+  panel.classList.toggle('hidden', !has && !S.courtPick);
+  if (!has && !S.courtPick) return;
+  const margin = 1.0; const W = 220; const Hh = Math.round(W * (meta.length + 2 * margin) / (meta.width + 2 * margin));
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(Hh * dpr)) { canvas.width = Math.round(W * dpr); canvas.height = Math.round(Hh * dpr); canvas.style.height = Hh + 'px'; }
+  const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const scale = W / (meta.width + 2 * margin);
+  const P = (x, y) => [(x + margin) * scale, Hh - (y + margin) * scale];
+  ctx.fillStyle = '#3c6e3c'; ctx.fillRect(0, 0, W, Hh);
+  ctx.fillStyle = '#3ca0c8'; const [cx0, cy0] = P(0, meta.length); ctx.fillRect(cx0, cy0, meta.width * scale, meta.length * scale);
+  ctx.strokeStyle = '#fafafa'; ctx.lineWidth = 1.5;
+  const alley = (meta.width - meta.singles_width) / 2;
+  const line = (x1, y1, x2, y2) => { const a = P(x1, y1), b = P(x2, y2); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); };
+  for (const x of [0, alley, meta.width - alley, meta.width]) line(x, 0, x, meta.length);
+  for (const y of [0, meta.long_service, meta.net_y - meta.short_service, meta.net_y + meta.short_service, meta.length - meta.long_service, meta.length]) line(0, y, meta.width, y);
+  line(meta.width / 2, 0, meta.width / 2, meta.net_y - meta.short_service); line(meta.width / 2, meta.net_y + meta.short_service, meta.width / 2, meta.length);
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 2.5; line(-0.3, meta.net_y, meta.width + 0.3, meta.net_y);
+  const pos = S.pose && S.pose.positions;
+  if (pos) {
+    ctx.fillStyle = 'rgba(230,30,30,0.10)';
+    for (const p of pos) if (p) { const [x, y] = P(p[0], p[1]); ctx.beginPath(); ctx.arc(x, y, 0.35 * scale, 0, Math.PI * 2); ctx.fill(); }
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.beginPath(); let pen = false;
+    for (const p of pos) { if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
+    ctx.stroke();
+    const i = poseIndex(S.frame);
+    if (i >= 0 && pos[i]) { const [x, y] = P(pos[i][0], pos[i][1]); ctx.fillStyle = '#ff3b3b'; ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
+    const fw = S.pose.footwork;
+    if (fw && fw.base_m) { const [x, y] = P(fw.base_m[0], fw.base_m[1]); ctx.strokeStyle = '#ffdc00'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 7, y); ctx.lineTo(x + 7, y); ctx.moveTo(x, y - 7); ctx.lineTo(x, y + 7); ctx.stroke(); }
+  }
+  const fw = S.pose && S.pose.footwork; const el = $('#footwork-metrics');
+  if (fw && fw.distance_m != null) {
+    const zones = fw.zone_seconds ? Object.entries(fw.zone_seconds).map(([k, v]) => `${k} ${v} s`).join(', ') : '';
+    const pi = poseIndex(S.frame);
+    const cur = (pos && pi >= 0 && pos[pi]) ? pos[pi] : null;
+    const sp = S.pose.speed && pi >= 0 ? S.pose.speed[pi] : null;
+    el.innerHTML = [
+      ['now', cur ? `x ${cur[0].toFixed(2)} m, y ${cur[1].toFixed(2)} m${sp != null ? `, ${sp.toFixed(1)} m/s` : ''}` : '-'],
+      ['distance', `${fw.distance_m} m in ${fw.duration_s} s`],
+      ['speed', `avg ${fw.avg_speed_mps} m/s, peak ${fw.peak_speed_mps} m/s`],
+      ['direction changes', String(fw.direction_changes)],
+      ['base', `x ${fw.base_m[0]} m, y ${fw.base_m[1]} m`],
+      ['from base', `mean ${fw.mean_distance_from_base_m} m, max ${fw.max_distance_from_base_m} m`],
+      ['zones', zones],
+      ['measured', `${fw.frames_measured} of ${fw.frames_total} frames`],
+    ].map(([k, v]) => `<span class="k">${k}</span><span>${v}</span>`).join('');
+  } else {
+    el.innerHTML = S.courtPick ? `<span class="k">clicking</span><span>${S.courtPick.points.length} of ${S.courtPick.needed} points</span>` : '<span class="k">footwork</span><span>run tracking to see the track</span>';
+  }
+}
+
 // compare
 async function openCompare() {
   showModal('#modal-compare');
@@ -922,6 +1014,10 @@ function bindUI() {
   $('#compare-start').addEventListener('click', startCompare);
   $('#compare-off').addEventListener('click', () => { S.compare = null; closeModals(); renderAll(); });
   $('#calib-btn').addEventListener('click', () => showModal('#modal-calib'));
+  $('#court-btn').addEventListener('click', openCourtModal);
+  $('#court-start').addEventListener('click', startCourtPick);
+  $('#court-clear').addEventListener('click', async () => { applyState(await api('DELETE', `/api/projects/${S.pid}/court`)); await loadPose(); closeModals(); renderAll(); });
+  $('#show-court').addEventListener('change', renderVideo);
   $('#calib-height-btn').addEventListener('click', calibHeight);
   $('#calib-points-btn').addEventListener('click', calibPointsStart);
   $('#calib-clear-btn').addEventListener('click', async () => { applyState(await api('PUT', `/api/projects/${S.pid}/calibration`, { method: 'clear' })); });

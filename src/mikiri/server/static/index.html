@@ -8,7 +8,7 @@
 </head>
 <body>
 <header id="topbar">
-  <div class="brand">Mikiri <span class="sub">2D side-on video biomechanics</span></div>
+  <div class="brand">Mikiri <span class="sub">badminton movement, footwork and technique from video</span></div>
   <div id="project-tabs" class="tabs"></div>
   <div class="spacer"></div>
   <button id="open-btn" class="btn">Open video</button>
@@ -60,6 +60,7 @@
           <span id="frame-time">0.000 s</span></span>
         <label class="chk"><input type="checkbox" id="show-skeleton" checked> Skeleton</label>
         <label class="chk"><input type="checkbox" id="show-labels"> Labels</label>
+        <label class="chk"><input type="checkbox" id="show-court" checked> Court points</label>
         <label class="chk"><input type="checkbox" id="swap-lr"> Swap L/R</label>
         <label class="chk"><input type="checkbox" id="edit-toggle"> Edit keypoints</label>
         <button id="undo-btn" class="btn icon" title="Ctrl+Z" disabled>Undo</button>
@@ -128,10 +129,19 @@
         <div id="assessment-cues" class="muted small-text"></div>
       </div>
 
+      <div class="panel hidden" id="court-panel">
+        <div class="panel-title">Court <span class="muted small-text" id="court-sub">footwork in court metres</span></div>
+        <div class="court-row">
+          <canvas id="court-canvas"></canvas>
+          <div id="footwork-metrics" class="footwork"></div>
+        </div>
+      </div>
+
       <div class="panel">
         <div class="panel-title">Angles <span class="muted small-text">image-plane, degrees; click a plot to seek</span>
           <span class="spacer"></span>
           <button class="btn small" id="calib-btn">Scale calibration</button>
+          <button class="btn small" id="court-btn">Court calibration</button>
         </div>
         <div id="angle-toggles" class="toggle-row"></div>
         <div id="plots" class="plots"></div>
@@ -248,6 +258,21 @@
       <button class="btn small" id="calib-clear-btn">Clear calibration</button>
     </div>
     <div class="modal-actions"><button class="btn" data-close>Close</button></div>
+  </div>
+
+  <div class="modal hidden" id="modal-court">
+    <div class="modal-title">Court calibration</div>
+    <p class="muted small-text">Maps the floor in the video to a top-down court in metres. Choose which court points you can see, then click them on the video in the order given. Any frame works; the camera must not move during the clip.</p>
+    <div class="col">
+      <label>Points to click <select id="court-preset"></select></label>
+      <div id="court-hint" class="small-text"></div>
+      <div id="court-status" class="small-text"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="court-clear">Clear calibration</button>
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="court-start">Start clicking</button>
+    </div>
   </div>
 
   <div class="modal hidden" id="modal-compare">

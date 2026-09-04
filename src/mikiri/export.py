@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from mikiri import __version__
 from mikiri.angles import ANGLE_NAMES, POSITION_NAMES, SEGMENT_NAMES, AngleTable
+from mikiri.court import CourtTrack, draw_court
 from mikiri.events import flight_time_s
 from mikiri.ffmpeg import FFmpegWriter
 from mikiri.keypoints import KEYPOINT_NAMES, N_KEYPOINTS
@@ -57,6 +58,7 @@ class ExportInputs:
     metrics: dict = field(default_factory=dict)
     px_per_cm: float | None = None
     assessment: dict | None = None
+    track: CourtTrack | None = None
 
 
 def _safe(name: str) -> str:
@@ -353,6 +355,35 @@ def write_summary(
             lines.append("")
             lines.append("Technique cues for this movement: " + " ".join(a["cues"]))
         lines.append("")
+    if inp.track is not None and inp.track.metrics.get("distance_m") is not None:
+        fw = inp.track.metrics
+        cal = inp.project.court
+        lines.append("## Footwork (court calibration)")
+        lines.append("")
+        lines.append(
+            "Positions are the mid-point between the ankles mapped through the court homography "
+            f"(preset {cal.preset if cal else '?'}, reprojection error "
+            f"{cal.reprojection_error_m if cal else '?'} m); the court frame has x across the court "
+            "(0 = left doubles sideline) and y along it (0 = near baseline, 6.70 = net)."
+        )
+        lines.append("")
+        lines.append("| Measure | Value |")
+        lines.append("|---|---|")
+        lines.append(f"| Distance covered | {fw['distance_m']} m in {fw['duration_s']} s |")
+        lines.append(
+            f"| Average / peak speed | {fw['avg_speed_mps']} / {fw['peak_speed_mps']} m/s |"
+        )
+        lines.append(f"| Direction changes (> 90 deg while moving) | {fw['direction_changes']} |")
+        lines.append(f"| Base position (median) | x {fw['base_m'][0]} m, y {fw['base_m'][1]} m |")
+        lines.append(
+            f"| Mean / max distance from base | {fw['mean_distance_from_base_m']} / {fw['max_distance_from_base_m']} m |"
+        )
+        zones = ", ".join(f"{k} {v} s" for k, v in fw.get("zone_seconds", {}).items())
+        lines.append(f"| Time per zone | {zones} |")
+        lines.append(
+            f"| Frames with a measured position | {fw['frames_measured']} of {fw['frames_total']} |"
+        )
+        lines.append("")
     lines.append("## Angle definitions")
     lines.append("")
     lines.append("Joint angles are the included angle at the middle joint (180 = straight):")
@@ -450,6 +481,40 @@ def export_pack(
         files["assessment.json"] = (
             "metrics, reference bands and status against the movement profile"
         )
+    if inp.track is not None:
+        start = inp.project.tracking.start if inp.project.tracking else 0
+        with open(out / "positions.csv", "w", newline="", encoding="utf-8") as fh:
+            w = csv.writer(fh)
+            w.writerow(["frame", "time_s", "x_m", "y_m", "speed_mps", "airborne", "measured"])
+            for i in range(inp.track.positions.shape[0]):
+                x, y = inp.track.positions[i]
+                sp = inp.track.speed[i]
+                w.writerow(
+                    [
+                        start + i,
+                        f"{(start + i) / inp.info.fps:.4f}",
+                        _fmt(float(x), 3),
+                        _fmt(float(y), 3),
+                        _fmt(float(sp), 2),
+                        "1" if inp.track.airborne[i] else "0",
+                        "1" if inp.track.valid[i] else "0",
+                    ]
+                )
+        files["positions.csv"] = (
+            "court position of the player per frame (metres), speed, airborne and measured flags"
+        )
+        base = inp.track.metrics.get("base_m")
+        cv2.imwrite(
+            str(out / "court.png"),
+            draw_court(
+                inp.track.positions,
+                None,
+                size=900,
+                base=None if base is None else (base[0], base[1]),
+                label=f"{p.name}: footwork track",
+            ),
+        )
+        files["court.png"] = "top-down court map with the footwork track and heat map"
 
     # Keyframes.
     longest = options.overlay_longest

@@ -302,6 +302,24 @@ the lunge uses leg compression (vertical hip-to-lowest-foot distance) with
 "Split-step timing" needs an "opponent contact" event marked by hand, since
 the opponent is usually not tracked.
 
+## Court calibration and footwork (roadmap phase 1)
+
+Footwork needs metres, not pixels, so the first generalisation step is a
+floor homography: the user clicks four court points with known coordinates
+(presets for the doubles/singles corners, the near half, and the near
+baseline plus short-service line, because the far court is often out of
+frame on phone footage) and `cv2.findHomography` maps the floor plane to a
+BWF court frame. Only floor points map correctly, which is why the player's
+position is the ankle mid-point and frames between takeoff and landing are
+interpolated instead of measured. Positions are smoothed over 0.2 s and
+speed is capped at 12 m/s to keep a mis-tracked ankle from producing a
+sprint. The court map is drawn twice on purpose: in JavaScript for the live
+view (synced with the scrubber) and in OpenCV for `court.png` in the pack.
+Zone times use the near half's rear/mid/front bands (2.5 m, short-service
+line) and the far half as one zone, since a single tracked player rarely
+crosses the net. The homography is stored in the project as clicked points,
+not as a matrix, so it survives edits and stays inspectable.
+
 ## Export videos repeat frames for slow motion
 
 Slow motion is done by writing every frame `slowmo` times at the source frame

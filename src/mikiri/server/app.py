@@ -121,6 +121,15 @@ class InterpolateBody(BaseModel):
     end: int
 
 
+class CourtBody(BaseModel):
+    """Court calibration from clicked image points."""
+
+    preset: str = "doubles_corners"
+    image_points: list[list[float]]
+    court_points: list[list[float]] | None = None
+    frame: int | None = None
+
+
 class SaveBody(BaseModel):
     """Save location (optional)."""
 
@@ -502,6 +511,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             s.set_calibration(body.method, body.reference_cm, body.points, body.frame)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        return s.state()
+
+    @app.put("/api/projects/{pid}/court")
+    def set_court(pid: str, body: CourtBody) -> dict:
+        s = session(pid)
+        try:
+            s.set_court(body.preset, body.image_points, body.court_points, body.frame)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return s.state()
+
+    @app.delete("/api/projects/{pid}/court")
+    def clear_court(pid: str) -> dict:
+        s = session(pid)
+        s.clear_court()
         return s.state()
 
     @app.get("/api/projects/{pid}/detections")

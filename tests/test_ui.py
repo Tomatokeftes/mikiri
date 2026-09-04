@@ -202,6 +202,21 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         page.uncheck("#swap-lr")
         page.wait_for_function("JL.S.state.swap_lr === false")
 
+        # Court calibration: click four floor points, the court map appears with footwork metrics.
+        page.click("#court-btn")
+        page.select_option("#court-preset", "half_doubles")
+        page.click("#court-start")
+        rect = page.evaluate("JL.jointCanvasPos(15).rect")
+        for fx, fy in ((0.2, 0.95), (0.8, 0.95), (0.7, 0.6), (0.3, 0.6)):
+            page.mouse.click(rect["x"] + rect["width"] * fx, rect["y"] + rect["height"] * fy)
+            page.wait_for_timeout(150)
+        page.wait_for_function("JL.S.state.court && JL.S.state.court.image_points.length === 4")
+        expect(page.locator("#court-panel")).to_be_visible()
+        expect(page.locator("#footwork-metrics")).to_contain_text("distance", timeout=10000)
+        page.locator("#court-panel").scroll_into_view_if_needed()
+        page.wait_for_timeout(300)
+        page.screenshot(path=str(SCREENSHOTS / "08_court.png"))
+
         # Export without videos into a temp folder.
         out = tmp_path / "ui_pack"
         page.click("#export-btn")

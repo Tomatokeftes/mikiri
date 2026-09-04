@@ -20,6 +20,8 @@ move" needs court coordinates, not pixels.
 
 ## Phase 1: court calibration and footwork
 
+**Status: done** (court calibration modal, court map, footwork metrics, `positions.csv` and `court.png`; see `docs/footwork.md`). Phase 1b, tracking the opponent as a second person, is still open.
+
 **Goal.** Put the player on the court: position in metres, distance covered,
 speed, direction changes, time in each court zone, and split-step timing
 relative to the opponent's hit.

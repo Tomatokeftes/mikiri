@@ -18,6 +18,7 @@ from typing import Literal
 import numpy as np
 from pydantic import BaseModel, Field
 
+from mikiri.court import CourtCalibration
 from mikiri.keypoints import N_KEYPOINTS
 from mikiri.video import VideoInfo
 
@@ -148,6 +149,7 @@ class Project(BaseModel):
     movement: str = "jump_smash"
     racket_hand: Literal["right", "left"] = "right"
     lead_leg: Literal["auto", "left", "right"] = "auto"
+    court: CourtCalibration | None = None
     conf_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
     smoothing: SmoothingSettings = Field(default_factory=SmoothingSettings)
     events: list[EventMarker] = Field(default_factory=list)

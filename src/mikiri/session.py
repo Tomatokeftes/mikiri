@@ -15,6 +15,20 @@ from pathlib import Path
 import numpy as np
 
 from mikiri.angles import ANGLE_NAMES, POSITION_NAMES, SEGMENT_NAMES, AngleTable, compute_angles
+from mikiri.court import (
+    COURT_LENGTH,
+    DOUBLES_WIDTH,
+    LONG_SERVICE_FROM_BASELINE,
+    NET_Y,
+    PRESETS,
+    SHORT_SERVICE_FROM_NET,
+    SINGLES_WIDTH,
+    CourtCalibration,
+    CourtTrack,
+    build_track,
+    compute_homography,
+    preset_points,
+)
 from mikiri.events import EventSuggestion, flight_time_s
 from mikiri.export import ExportInputs, ExportOptions, export_pack
 from mikiri.jobs import Job
@@ -340,6 +354,83 @@ class ProjectSession:
         for s in out:
             s.frame += self.pose_start
         return out
+
+    # -- court and footwork ----------------------------------------------
+
+    def homography(self) -> np.ndarray | None:
+        """Image-to-court homography from the stored calibration, or ``None``."""
+        cal = self.project.court
+        if cal is None or not cal.is_valid():
+            return None
+        try:
+            H, _ = compute_homography(cal.image_points, cal.court_points)
+        except ValueError:
+            return None
+        return H
+
+    def set_court(
+        self,
+        preset: str,
+        image_points: list[list[float]],
+        court_points: list[list[float]] | None = None,
+        frame: int | None = None,
+    ) -> CourtCalibration:
+        """Store a court calibration from clicked image points (raises ``ValueError``)."""
+        if court_points is None:
+            if preset not in PRESETS:
+                raise ValueError(f"unknown court preset {preset!r}")
+            court_points = preset_points(preset)
+        pts = [[float(x), float(y)] for x, y in image_points]
+        if len(pts) != len(court_points) or len(pts) < 4:
+            raise ValueError(f"expected {len(court_points)} clicked points, got {len(pts)}")
+        _, err = compute_homography(pts, court_points)
+        with self.lock:
+            self.project.court = CourtCalibration(
+                image_points=pts,
+                court_points=[[float(x), float(y)] for x, y in court_points],
+                preset=preset,
+                frame=frame,
+                reprojection_error_m=round(float(err), 4),
+            )
+            return self.project.court
+
+    def clear_court(self) -> None:
+        """Remove the court calibration."""
+        with self.lock:
+            self.project.court = None
+
+    def flights(self) -> list[tuple[int, int]]:
+        """``(takeoff, landing)`` relative frame pairs from the marked events."""
+        start = self.pose_start
+        t = next((e.frame - start for e in self.project.events if e.name == "takeoff"), None)
+        land = next((e.frame - start for e in self.project.events if e.name == "landing"), None)
+        if t is None or land is None or land <= t:
+            return []
+        return [(t, land)]
+
+    def court_track(self) -> CourtTrack | None:
+        """Footwork track in court metres, ``None`` without pose or calibration."""
+        H = self.homography()
+        eff = self.effective_keypoints()
+        if H is None or eff is None:
+            return None
+        return build_track(eff[0], H, self.info.fps, self.project.conf_threshold, self.flights())
+
+    @staticmethod
+    def court_meta() -> dict:
+        """Court dimensions and presets for the UI."""
+        return {
+            "length": COURT_LENGTH,
+            "width": DOUBLES_WIDTH,
+            "singles_width": SINGLES_WIDTH,
+            "net_y": NET_Y,
+            "short_service": SHORT_SERVICE_FROM_NET,
+            "long_service": LONG_SERVICE_FROM_BASELINE,
+            "presets": [
+                {"id": pid, "label": p["label"], "hint": p["hint"], "n_points": len(p["points"])}
+                for pid, p in PRESETS.items()
+            ],
+        }
 
     def px_per_cm(self) -> float | None:
         """Scale from the calibration, if any."""
@@ -679,9 +770,12 @@ class ProjectSession:
             "racket_hand": p.racket_hand,
             "lead_leg": p.lead_leg,
             "assessment": self.assessment() if self.raw_keypoints() is not None else None,
+            "court": None if p.court is None else p.court.model_dump(),
+            "footwork": (track.metrics if (track := self.court_track()) is not None else None),
             "last_export": self.last_export,
             "meta": {
                 "preset_events": preset_events(self.profile),
+                "court": self.court_meta(),
                 "movements": [
                     {
                         "id": prof.id,
@@ -725,6 +819,19 @@ class ProjectSession:
             "suggestions": [s.to_dict() for s in self.suggestions()],
             "metrics": self.metrics(),
             "assessment": self.assessment(),
+            "positions": None
+            if (track := self.court_track()) is None
+            else [
+                None
+                if not np.isfinite(pt).all()
+                else [round(float(pt[0]), 3), round(float(pt[1]), 3)]
+                for pt in track.positions
+            ],
+            "speed": None
+            if track is None
+            else [None if not np.isfinite(v) else round(float(v), 2) for v in track.speed],
+            "airborne": None if track is None else track.airborne.tolist(),
+            "footwork": None if track is None else track.metrics,
         }
 
     def save(self, path: str | Path | None = None) -> Path:
@@ -758,6 +865,7 @@ class ProjectSession:
             metrics=self.metrics(),
             px_per_cm=self.px_per_cm(),
             assessment=self.assessment(),
+            track=self.court_track(),
         )
 
         def progress(frac: float, msg: str) -> None:
