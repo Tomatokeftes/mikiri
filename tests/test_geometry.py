@@ -279,3 +279,68 @@ def test_error_ellipse_scales_with_nsigma():
     m2, n2, _ = error_ellipse(cov, nsigma=2.0)
     assert m1[0] == pytest.approx(0.2) and n1[0] == pytest.approx(0.1)
     assert m2[0] == pytest.approx(0.4) and n2[0] == pytest.approx(0.2)
+
+
+# --- does the correction actually help? -----------------------------------------
+
+
+def test_bias_correction_recovers_the_true_path_better_than_not_correcting():
+    """End to end: a known walk, seen by a real camera, with and without the fix."""
+    from mikiri.court import build_track
+    from mikiri.geometry import CameraGeometry
+    from mikiri.keypoints import KP, N_KEYPOINTS
+
+    cam = Camera(ground=(3.05, -4.0), height=2.2)  # a low tripod, where it hurts most
+    H = cam.homography()
+
+    # The player walks from the net back to the baseline down the centre line.
+    n = 60
+    truth = np.stack([np.full(n, 3.05), np.linspace(12.0, 1.0, n)], axis=1)
+
+    # Ankles sit ANKLE_HEIGHT above the floor at those positions.
+    kp = np.zeros((n, N_KEYPOINTS, 3))
+    kp[:, :, 2] = 0.9
+    for i, (x, y) in enumerate(truth):
+        for side, dx in (("left", -0.12), ("right", 0.12)):
+            px = cam.project(np.array([[x + dx, y, ANKLE_HEIGHT]]))[0]
+            kp[i, KP[f"{side}_ankle"], :2] = px
+            kp[i, KP[f"{side}_heel"], :2] = px
+        head = cam.project(np.array([[x, y, 1.75]]))[0]
+        kp[i, KP["head"], :2] = head
+        kp[i, KP["nose"], :2] = head
+
+    naive = build_track(kp, H, 30.0)
+    fixed = build_track(kp, H, 30.0, camera=cam.truth())
+
+    def rms(track):
+        ok = np.isfinite(track.positions).all(axis=1)
+        return float(np.sqrt(np.mean(np.sum((track.positions[ok] - truth[ok]) ** 2, axis=1))))
+
+    naive_err, fixed_err = rms(naive), rms(fixed)
+    assert naive_err > 0.25, naive_err  # the uncorrected error is real and large
+    assert fixed_err < 0.05, fixed_err  # and the correction essentially removes it
+    assert fixed_err < naive_err / 5
+
+
+def test_bias_correction_does_not_distort_distance_covered():
+    """The correction is a rescaling about the camera, so path length changes too."""
+    from mikiri.court import build_track
+    from mikiri.keypoints import KP, N_KEYPOINTS
+
+    cam = Camera(ground=(3.05, -4.0), height=2.2)
+    H = cam.homography()
+    n = 40
+    truth = np.stack([np.full(n, 3.05), np.linspace(11.0, 2.0, n)], axis=1)
+    kp = np.zeros((n, N_KEYPOINTS, 3))
+    kp[:, :, 2] = 0.9
+    for i, (x, y) in enumerate(truth):
+        px = cam.project(np.array([[x, y, ANKLE_HEIGHT]]))[0]
+        kp[i, KP["left_ankle"], :2] = px
+        kp[i, KP["right_ankle"], :2] = px
+        kp[i, KP["head"], :2] = cam.project(np.array([[x, y, 1.75]]))[0]
+        kp[i, KP["nose"], :2] = kp[i, KP["head"], :2]
+
+    true_distance = float(np.hypot(*(truth[-1] - truth[0])))
+    fixed = build_track(kp, H, 30.0, camera=cam.truth())
+    got = fixed.metrics["distance_m"]
+    assert abs(got - true_distance) < 0.25, (got, true_distance)
