@@ -505,12 +505,17 @@ class ProjectSession:
             "coverage": "95%",
         }
 
-    def coaching(self) -> list[dict] | None:
+    def coaching(self, limit: int | None = None) -> list[dict] | None:
         """Ranked coaching advice for this clip, or ``None`` without a court.
 
         Advice needs court metres to say anything about position, so it appears
-        only once the court is calibrated. Cues are capped rather than dumped:
-        a wall of feedback is worse than three things to work on.
+        only once the court is calibrated.
+
+        Args:
+            limit: How many cues to keep. The panel passes ``None`` and gets the
+                capped headline set, because a wall of feedback is worse than
+                three things to work on; the export pack asks for everything,
+                because that is where the complete record belongs.
         """
         track = self.court_track()
         if track is None or not track.metrics:
@@ -521,6 +526,8 @@ class ProjectSession:
             stroke_summary(strokes) if strokes is not None else None,
             level=self.project.coach_level,
         )
+        if limit is not None and limit <= 0:
+            return [a.to_dict() for a in advice]
         return [a.to_dict() for a in top_cues(advice)]
 
     def strokes(self) -> StrokeSeries | None:
@@ -1097,6 +1104,7 @@ class ProjectSession:
             track=self.court_track(),
             racket=self.racket(),
             strokes=self.strokes(),
+            coaching=self.coaching(limit=0),
         )
 
         def progress(frac: float, msg: str) -> None:

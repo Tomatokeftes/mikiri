@@ -257,3 +257,26 @@ def test_draw_court_accepts_uncertainty_without_crashing(tracked_session):
     grid = court_uncertainty_grid(H, tracked_session.project.court)
     img = draw_court(track.positions, current=0, cov=track.cov, uncertainty=grid, heat=True)
     assert img.ndim == 3 and img.shape[2] == 3 and img.dtype == np.uint8
+
+
+def test_export_pack_carries_the_full_advice_not_just_the_headline(tracked_session, tmp_path):
+    """The panel shows three cues; the pack is the complete record."""
+    cam = _synth_camera()
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    tracked_session.set_court("doubles_corners", cam.floor(corners).tolist(), None, 0)
+    panel = tracked_session.coaching()
+    full = tracked_session.coaching(limit=0)
+    assert panel is not None and full is not None
+    assert len(panel) <= 3
+    assert len(full) >= len(panel)
+
+    out = tmp_path / "pack"
+    result = tracked_session.export(
+        ExportOptions(include_videos=False, make_zip=False, out_dir=str(out))
+    )
+    names = {Path(f).name for f in result["files"]}
+    assert {"coaching.json", "strokes.csv", "positions.csv"} <= names
+    written = json.loads((out / "coaching.json").read_text(encoding="utf-8"))
+    assert len(written) == len(full)
+    for a in written:
+        assert a["evidence"] and 0.0 <= a["confidence"] <= 1.0
