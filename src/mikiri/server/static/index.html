@@ -138,6 +138,26 @@
         </div>
       </div>
 
+      <div class="panel hidden" id="strokes-panel">
+        <div class="panel-title">Strokes <span class="muted small-text" id="strokes-sub">detected contacts; click one to seek</span></div>
+        <div id="strokes-summary" class="footwork"></div>
+        <ul id="strokes-list" class="events-list"></ul>
+        <p class="muted small-text" id="strokes-note"></p>
+      </div>
+
+      <div class="panel hidden" id="coaching-panel">
+        <div class="panel-title">Coaching <span class="muted small-text">what the numbers suggest working on</span>
+          <span class="spacer"></span>
+          <label class="small-text">Level <select id="coach-level">
+            <option value="beginner">beginner</option>
+            <option value="club" selected>club</option>
+            <option value="national">national</option>
+            <option value="elite">elite</option>
+          </select></label>
+        </div>
+        <div id="coaching-list"></div>
+      </div>
+
       <div class="panel">
         <div class="panel-title">Angles <span class="muted small-text">image-plane, degrees; click a plot to seek</span>
           <span class="spacer"></span>

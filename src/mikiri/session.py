@@ -62,6 +62,8 @@ from mikiri.project import (
 from mikiri.racket import RacketSeries, racket_series
 from mikiri.settings import Settings
 from mikiri.smoothing import apply_corrections, interpolate_joint, smooth_keypoints
+from mikiri.strokes import StrokeSeries, detect_strokes
+from mikiri.strokes import summarise as stroke_summary
 from mikiri.video import FrameCache, VideoInfo, VideoReader, fit_size, probe_video
 
 #: Distance from the ankle keypoint to the floor plus the head keypoint offset,
@@ -484,6 +486,28 @@ class ProjectSession:
             "coverage": "95%",
         }
 
+    def strokes(self) -> StrokeSeries | None:
+        """Detected contacts with their descriptors, or ``None`` before tracking.
+
+        Shot names are not attached here: they need evidence beyond the body,
+        which :mod:`mikiri.shots` supplies when a shuttle launch was recovered.
+        """
+        eff = self.effective_keypoints()
+        if eff is None:
+            return None
+        calib = self.project.court
+        camera = calib.camera if (calib is not None and calib.has_camera()) else None
+        return detect_strokes(
+            eff[0],
+            self.info.fps,
+            self.racket(),
+            self.project.racket_hand,
+            self.project.conf_threshold,
+            track=self.court_track(),
+            homography=self.homography(),
+            camera=camera,
+        )
+
     def racket(self) -> RacketSeries | None:
         """Racket-head estimate for the effective keypoints, or ``None``."""
         eff = self.effective_keypoints()
@@ -855,6 +879,7 @@ class ProjectSession:
             "court_uncertainty": self.court_uncertainty(),
             "court_camera_error": self.court_camera_error,
             "footwork": (track.metrics if (track := self.court_track()) is not None else None),
+            "strokes": (stroke_summary(sv) if (sv := self.strokes()) is not None else None),
             "last_export": self.last_export,
             "meta": {
                 "preset_events": preset_events(self.profile),
@@ -927,6 +952,7 @@ class ProjectSession:
             if track is None or track.height_m is None
             else [None if not np.isfinite(v) else round(float(v), 3) for v in track.height_m],
             "racket": None if (racket := self.racket()) is None else racket.to_dict(),
+            "strokes": None if (sv := self.strokes()) is None else sv.to_dict(),
         }
 
     def save(self, path: str | Path | None = None) -> Path:
@@ -962,6 +988,7 @@ class ProjectSession:
             assessment=self.assessment(),
             track=self.court_track(),
             racket=self.racket(),
+            strokes=self.strokes(),
         )
 
         def progress(frac: float, msg: str) -> None:

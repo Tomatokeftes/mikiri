@@ -150,3 +150,14 @@ canvas#video-canvas, canvas#compare-canvas { display: block; max-width: 100%; ma
 .footwork { font-size: 12px; display: grid; grid-template-columns: auto auto; gap: 2px 10px; align-content: start; }
 .footwork .k { color: var(--muted); }
 kbd { background: var(--bg3); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; font-size: 11px; }
+
+/* Coaching advice cards */
+.advice { border-left: 3px solid #4a5568; padding: 6px 10px; margin: 6px 0; background: #22262f; border-radius: 0 4px 4px 0; }
+.advice.ok { border-left-color: #3fc380; }
+.advice.warn { border-left-color: #ffb454; }
+.advice.info { border-left-color: #4f8cff; }
+.advice.muted { border-left-color: #4a5568; opacity: 0.75; }
+.advice-title { font-weight: 600; margin-bottom: 2px; }
+.advice-detail { font-size: 13px; margin-bottom: 3px; }
+#strokes-list li { padding: 2px 4px; border-radius: 3px; }
+#strokes-list li:hover { background: #2a2e38; }

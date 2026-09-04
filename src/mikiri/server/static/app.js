@@ -312,6 +312,11 @@ function renderTimeline() {
   if (S.pose) { ctx.fillStyle = 'rgba(63,195,128,0.35)'; ctx.fillRect(g.x(S.pose.start), y1 - 5, g.x(S.pose.end) - g.x(S.pose.start), 5); }
   // lost frames
   if (S.pose && S.pose.meta) { ctx.fillStyle = 'rgba(255,92,92,0.7)'; for (const m of S.pose.meta) if (m.lost) ctx.fillRect(g.x(m.frame) - 1, y1 - 5, 2, 5); }
+  // detected contacts, as short ticks so they never crowd the event labels
+  if (S.pose && S.pose.strokes && S.pose.strokes.strokes.length) {
+    ctx.fillStyle = 'rgba(179,136,255,0.9)';
+    for (const st of S.pose.strokes.strokes) ctx.fillRect(g.x(st.frame + S.pose.start) - 1, y0, 2, 8);
+  }
   // handles
   for (const f of [S.state.trim_start, S.state.trim_end]) { ctx.fillStyle = COLORS.accent; ctx.fillRect(g.x(f) - 3, y0 - 4, 6, y1 - y0 + 8); }
   // events (labels use up to three rows so close events stay readable)
@@ -623,6 +628,7 @@ function renderAll() {
   if (!S.state) return;
   renderInfo(); renderTrim(); renderEvents(); renderOptions();
   renderVideo(); renderTimeline(); renderPlots(); renderCourt();
+  renderStrokes(); renderCoaching();
 }
 
 async function refreshTabs() {
@@ -903,6 +909,58 @@ async function finishCourtPick() {
       : `Court calibrated (reprojection error ${st.court.reprojection_error_m} m)${st.court_camera_error ? ` -- net posts not usable: ${st.court_camera_error}` : ''}`);
   } catch (e) { setStatus(e.message, true); renderVideo(); }
 }
+function renderStrokes() {
+  const panel = $('#strokes-panel');
+  const sv = S.pose && S.pose.strokes;
+  const has = !!(sv && sv.strokes && sv.strokes.length);
+  panel.classList.toggle('hidden', !has);
+  if (!has) return;
+  const sum = (S.state && S.state.strokes) || {};
+  const kv = (k, v) => `<span class="k">${k}</span><span>${v}</span>`;
+  const dist = (obj) => Object.entries(obj || {}).map(([k, v]) => `${k} ${v}`).join(', ');
+  const rows = [kv('contacts', String(sum.n_strokes ?? sv.strokes.length))];
+  if (sum.by_height) rows.push(kv('contact height', dist(sum.by_height)));
+  if (sum.by_side) rows.push(kv('side', dist(sum.by_side)));
+  if (sum.by_zone) rows.push(kv('from', dist(sum.by_zone)));
+  if (sum.n_rallies) rows.push(kv('rallies', `${sum.n_rallies}, mean ${sum.mean_rally_s ?? '-'} s`));
+  if (sum.peak_racket_speed_bh) rows.push(kv('racket speed', `peak ${sum.peak_racket_speed_bh}, mean ${sum.mean_racket_speed_bh} body heights/s`));
+  if (sum.max_contact_height_m) rows.push(kv('contact height', `mean ${sum.mean_contact_height_m} m, max ${sum.max_contact_height_m} m`));
+  $('#strokes-summary').innerHTML = rows.join('');
+
+  const named = sv.strokes.filter((x) => x.shot).length;
+  $('#strokes-note').textContent = named
+    ? `${named} of ${sv.strokes.length} contacts have a shot name; the rest are described but not named.`
+    : 'Shot names (smash, clear, drop) need the shuttle. Without it these are honest descriptions, not shot types.';
+
+  const cur = S.pose ? S.frame - S.pose.start : -1;
+  $('#strokes-list').innerHTML = sv.strokes.map((st) => {
+    const t = ((st.frame + S.pose.start) / (S.state.fps || 30)).toFixed(2);
+    const conf = st.shot ? ` <span class="muted">${Math.round(st.shot_confidence * 100)}%</span>` : '';
+    const here = Math.abs(st.frame - cur) <= 2 ? ' style="outline:1px solid var(--accent,#4f8cff)"' : '';
+    return `<li data-frame="${st.frame + S.pose.start}"${here}><span class="mono">${t}s</span> <b>${st.label}</b>${conf}`
+      + `<span class="muted small-text"> ${st.racket_speed_bh} bh/s${st.contact_height_m != null ? `, ${st.contact_height_m} m high` : ''}</span></li>`;
+  }).join('');
+  for (const li of $('#strokes-list').querySelectorAll('li')) {
+    li.style.cursor = 'pointer';
+    li.addEventListener('click', () => seek(Number(li.dataset.frame)));
+  }
+}
+
+function renderCoaching() {
+  const panel = $('#coaching-panel');
+  const advice = S.state && S.state.coaching;
+  const has = !!(advice && advice.length);
+  panel.classList.toggle('hidden', !has);
+  if (!has) return;
+  const badge = { good: 'ok', info: 'info', 'work-on': 'warn', unknown: 'muted' };
+  $('#coaching-list').innerHTML = advice.map((a) => `
+    <div class="advice ${badge[a.severity] || 'info'}">
+      <div class="advice-title">${a.title}</div>
+      <div class="advice-detail">${a.detail}</div>
+      <div class="muted small-text">${a.evidence}${a.drill ? ` &middot; try: ${a.drill}` : ''}</div>
+    </div>`).join('');
+}
+
 function renderCourt() {
   const panel = $('#court-panel'); const canvas = $('#court-canvas');
   if (!S.state) return;

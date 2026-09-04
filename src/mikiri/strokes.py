@@ -45,10 +45,15 @@ from mikiri.smoothing import fill_gaps, savgol
 #: Weights of the tennis swing-detection signal (wrist speed dominates, with
 #: elbow and shoulder displacement damping single-joint keypoint noise).
 SIGNAL_WEIGHTS = (0.5, 0.3, 0.2)
-#: Shortest believable gap between two contacts, seconds. Fast net exchanges and
-#: flat drives run about a third of a second apart; below this it is one swing
-#: detected twice.
-MIN_STROKE_GAP_S = 0.30
+#: Shortest believable gap between two contacts by THE SAME player, seconds.
+#: The figure that circulates in the literature is 0.5 s, but that is the gap
+#: between alternating hits by the two players. Mikiri follows one player, so
+#: the relevant interval is between that player's own successive contacts,
+#: which is longer still -- nobody strikes the shuttle twice in under half a
+#: second. Set below the alternating-hit figure only to leave room for a fast
+#: net exchange in doubles. Its real job is to stop a follow-through being
+#: counted as a second stroke.
+MIN_STROKE_GAP_S = 0.45
 #: A swing peak must reach this many body heights per second of wrist speed.
 #: Recreational strokes are slower than elite ones, so it is deliberately low
 #: and the prominence test below does most of the rejecting.

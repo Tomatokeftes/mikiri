@@ -343,3 +343,29 @@ def test_series_payload_is_json_ready():
     payload = detect_strokes(kp, FPS, _series(kp)).to_dict()
     json.dumps(payload)
     assert payload["counts"]["shot"] == {"unnamed": 1}
+
+
+# --- against the demo clip's ground truth ---------------------------------------
+
+
+def test_demo_jump_smash_is_detected_as_one_overhead_stroke(tracked_session):
+    """The synthetic clip contains exactly one hit, at a known frame."""
+    from mikiri.demo import TRUTH_EVENTS
+
+    series = tracked_session.strokes()
+    assert series is not None
+    assert len(series.strokes) == 1, [s.descriptor() for s in series.strokes]
+    stroke = series.strokes[0]
+    # Within a sixth of a second of the true contact.
+    assert abs(stroke.frame - TRUTH_EVENTS["contact"]) <= 5
+    assert stroke.height_class == "overhead"
+    assert stroke.shot is None  # no shuttle, so no shot name
+
+
+def test_demo_follow_through_is_not_a_second_stroke(tracked_session):
+    """The landing swing follows the contact by 0.3 s and must not double-count."""
+    series = tracked_session.strokes()
+    frames = [s.frame for s in series.strokes]
+    assert len(frames) == len(set(frames))
+    for a, b in zip(frames, frames[1:]):
+        assert (b - a) / tracked_session.info.fps >= MIN_STROKE_GAP_S

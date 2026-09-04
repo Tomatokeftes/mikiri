@@ -41,6 +41,7 @@ def test_export_pack_contents(tracked_session: ProjectSession, tmp_path: Path):
         "overlay.mp4",
         "stick.mp4",
         "project.mikiri.json",
+        "strokes.csv",
     }
     assert expected <= {Path(f).name for f in result["files"]}
     assert (out / "keyframes" / "sheet.png").exists()

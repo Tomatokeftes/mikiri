@@ -28,6 +28,7 @@ from mikiri.keypoints import KEYPOINT_NAMES, N_KEYPOINTS
 from mikiri.project import Project
 from mikiri.racket import RacketSeries
 from mikiri.render import contact_sheet, draw_skeleton, put_label, stick_figure
+from mikiri.strokes import StrokeSeries
 from mikiri.video import FrameCache, VideoInfo, VideoReader, downscale, fit_size
 
 ProgressFn = Callable[[float, str], None]
@@ -61,6 +62,8 @@ class ExportInputs:
     assessment: dict | None = None
     track: CourtTrack | None = None
     racket: RacketSeries | None = None
+    strokes: StrokeSeries | None = None
+    coaching: list | None = None
 
 
 def _safe(name: str) -> str:
@@ -534,6 +537,57 @@ def export_pack(
             ),
         )
         files["court.png"] = "top-down court map with the footwork track and heat map"
+
+    if inp.strokes is not None and inp.strokes.strokes:
+        start = inp.project.tracking.start if inp.project.tracking else 0
+        with open(out / "strokes.csv", "w", newline="", encoding="utf-8") as fh:
+            w = csv.writer(fh)
+            w.writerow(
+                [
+                    "frame",
+                    "time_s",
+                    "descriptor",
+                    "height_class",
+                    "side",
+                    "zone",
+                    "racket_speed_bh",
+                    "contact_height_m",
+                    "x_m",
+                    "y_m",
+                    "airborne",
+                    "shot",
+                    "shot_confidence",
+                    "evidence",
+                ]
+            )
+            for st in inp.strokes.strokes:
+                pos = st.court_position_m or [None, None]
+                w.writerow(
+                    [
+                        start + st.frame,
+                        f"{(start + st.frame) / inp.info.fps:.4f}",
+                        st.descriptor(),
+                        st.height_class,
+                        st.side,
+                        st.zone,
+                        _fmt(st.racket_speed_bh, 2),
+                        _fmt(st.contact_height_m, 2),
+                        _fmt(pos[0], 2),
+                        _fmt(pos[1], 2),
+                        "1" if st.airborne else "0",
+                        st.shot or "",
+                        _fmt(st.shot_confidence, 2),
+                        st.evidence,
+                    ]
+                )
+        files["strokes.csv"] = (
+            "detected contacts: descriptor, contact height, court position, and a shot "
+            "name only where evidence beyond the body supported one"
+        )
+
+    if inp.coaching:
+        (out / "coaching.json").write_text(json.dumps(inp.coaching, indent=2), encoding="utf-8")
+        files["coaching.json"] = "advice generated from the footwork and stroke numbers"
 
     # Keyframes.
     longest = options.overlay_longest
