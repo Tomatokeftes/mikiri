@@ -21,7 +21,7 @@ stroke's own descriptor. The discriminators are the coach's own:
 * contact near net height, roughly **flat**, fast    -> drive
 * contact **below** net height near the net, gently up and slow -> net shot
 * contact low, launched **up**, with pace to travel  -> lift
-* first stroke of a rally, underarm, gentle          -> serve
+* first stroke of a real rally, underarm, gently up  -> serve
 
 Every threshold below is a coaching heuristic chosen to sit clearly between the
 shot types on club footage. None of them is a literature value, and they are
@@ -72,6 +72,12 @@ LIFT_MIN_SPEED_BH = 4.0
 #: Pace a serve must stay under. Both low and flick serves are gentle compared
 #: with a rally stroke; a flick serve sits near the top of this band.
 SERVE_MAX_SPEED_BH = 6.0
+#: Contacts a rally must contain before its first one can be called a serve. A
+#: lone contact in a clip cannot be shown to have started anything, and naming
+#: it a serve would be this module inventing a rally out of silence. It is also
+#: the guard that stops a single net shot -- underarm and gentle, exactly like a
+#: serve -- from being mislabelled whenever it is the only stroke on screen.
+SERVE_MIN_RALLY_STROKES = 2
 #: Launch confidence below which no shot is named at all. Below this the
 #: direction is as likely to come from a mis-associated blob as from a shuttle.
 MIN_LAUNCH_CONFIDENCE = 0.35
@@ -149,7 +155,14 @@ def _classify(
     where = f"launched {abs(elev):.0f} deg {'up' if elev >= 0 else 'down'} at {speed:.1f} bh/s"
     above, how = _above_net(stroke, net_height_m)
 
-    if is_rally_start and stroke.height_class == "underarm" and speed <= SERVE_MAX_SPEED_BH:
+    # A serve is played from below and must clear the net, so it always rises;
+    # a downward underarm contact is a net kill or a dig, never a serve.
+    if (
+        is_rally_start
+        and stroke.height_class == "underarm"
+        and elev >= 0.0
+        and speed <= SERVE_MAX_SPEED_BH
+    ):
         margin = _margin(speed, SERVE_MAX_SPEED_BH, SERVE_MAX_SPEED_BH)
         return (
             "serve",
@@ -211,10 +224,14 @@ def _classify(
         return "lift", _confidence(launch, stroke, margin), f"{how} below the net, {where}"
     if 0.0 <= elev < LIFT_MIN_UP_DEG and speed <= NET_MAX_SPEED_BH and stroke.zone != "rear":
         margin = _margin(speed, NET_MAX_SPEED_BH, NET_MAX_SPEED_BH)
+        # A net shot is defined by being played at the net, so an unknown court
+        # position removes half the evidence and half the confidence with it.
+        known_zone = stroke.zone != "unknown"
+        placed = f"in the {stroke.zone}court" if known_zone else "at an unknown court position"
         return (
             "net",
-            _confidence(launch, stroke, margin),
-            f"{how} below the net in the {stroke.zone}court, {where}",
+            round(_confidence(launch, stroke, margin) * (1.0 if known_zone else 0.5), 3),
+            f"{how} below the net {placed}, {where}",
         )
     return (
         None,
@@ -222,6 +239,20 @@ def _classify(
         f"{how} below the net, {where}: too flat or too slow for a lift and too quick or too "
         "deep for a net shot",
     )
+
+
+def _serve_candidates(strokes: list[Stroke], fps: float, max_gap_s: float) -> set[int]:
+    """Frames that could be a serve: the first contact of a rally worth the name.
+
+    A rally of one stroke is not a rally, only a contact in isolation, so its
+    first stroke is not offered as a serve candidate.
+    """
+    out: set[int] = set()
+    for first, last in rally_segments(strokes, fps, max_gap_s):
+        in_rally = [s for s in strokes if first <= s.frame <= last]
+        if len(in_rally) >= SERVE_MIN_RALLY_STROKES:
+            out.add(int(first))
+    return out
 
 
 def name_shots(
@@ -259,7 +290,7 @@ def name_shots(
     if not strokes:
         return series
     keys = {int(k): v for k, v in (launches or {}).items() if v is not None}
-    starts = {int(a) for a, _ in rally_segments(strokes, series.fps, max_rally_gap_s)}
+    starts = _serve_candidates(strokes, series.fps, max_rally_gap_s)
     tol = max(0, int(frame_tolerance))
 
     for stroke in strokes:

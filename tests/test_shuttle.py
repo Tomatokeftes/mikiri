@@ -1,0 +1,738 @@
+"""Classical shuttle tracking, hit-anchored launch measurement and drag correction.
+
+Every scene here is synthesised in memory: a textured static hall, two large
+slow player blobs and a small fast shuttle on a known parabola-with-drag. The
+reader is a two-method stand-in for :class:`mikiri.video.VideoReader`, so
+nothing in this file touches disk or depends on the demo clip.
+"""
+
+from __future__ import annotations
+
+import math
+
+import cv2
+import numpy as np
+import pytest
+
+from mikiri.court import compute_homography
+from mikiri.geometry import CameraGeometry
+from mikiri.shuttle import (
+    DIFF_THRESHOLD,
+    DRAG_LENGTH_M,
+    MIN_LAUNCH_POINTS,
+    Candidate,
+    Launch,
+    ShuttleTrack,
+    _predict,
+    background_plate,
+    court_mask,
+    detect_candidates,
+    difference_map,
+    expected_shuttle_px,
+    fit_drag,
+    initial_speed,
+    launch_after_hit,
+    track_shuttle,
+)
+
+H, W = 360, 640
+FPS = 30.0
+BODY_HEIGHT_PX = 200.0
+
+#: Where the two player blobs are on frame ``i``: a pale one drifting right and
+#: a dark one drifting left, both far larger than a shuttle and far slower.
+PALE = (200.0, 3.0, 250, 26)
+DARK = (480.0, -2.0, 200, 22)
+
+
+class FakeReader:
+    """Random-access stand-in for :class:`mikiri.video.VideoReader`."""
+
+    def __init__(self, frames: list[np.ndarray]) -> None:
+        self.frames = frames
+        self.reads = 0
+
+    def read(self, idx: int):
+        self.reads += 1
+        if idx < 0 or idx >= len(self.frames):
+            return None
+        return self.frames[idx]
+
+    def iter_all(self):
+        yield from enumerate(self.frames)
+
+
+def _hall(seed: int = 7) -> np.ndarray:
+    """A textured, static, thoroughly non-uniform background."""
+    rng = np.random.default_rng(seed)
+    bg = rng.integers(40, 90, size=(H, W)).astype(np.uint8)
+    bg = cv2.GaussianBlur(bg, (0, 0), 3.0)
+    for y in range(0, H, 40):
+        cv2.line(bg, (0, y), (W, y), 110, 1)
+    for x in range(0, W, 55):
+        cv2.line(bg, (x, 0), (x, H), 100, 1)
+    return cv2.cvtColor(bg, cv2.COLOR_GRAY2BGR)
+
+
+def _arc(n: int, x0: float = 120.0, y0: float = 300.0, vx: float = 18.0, vy: float = -14.0):
+    """A parabola with drag: gravity down, speed bled off every frame."""
+    pts = []
+    x, y = float(x0), float(y0)
+    for _ in range(n):
+        pts.append((x, y))
+        x += vx
+        y += vy
+        vy += 1.1
+        vx *= 0.99
+    return np.array(pts, dtype=float)
+
+
+def _players(frame: np.ndarray, i: int) -> None:
+    """Draw the two player blobs on frame ``i``."""
+    for x0, dx, shade, radius in (PALE, DARK):
+        cv2.circle(
+            frame, (int(x0 + dx * i), 250 if shade == 250 else 200), radius, (shade,) * 3, -1
+        )
+
+
+def _clip(
+    n: int = 30,
+    path: np.ndarray | None = None,
+    hidden: tuple[int, ...] = (),
+    streak: float = 0.0,
+    players: bool = True,
+    shuttle: bool = True,
+) -> tuple[list[np.ndarray], np.ndarray]:
+    """A clip of ``n`` frames and the ground-truth shuttle path."""
+    bg = _hall()
+    path = _arc(n) if path is None else path
+    frames = []
+    for i in range(n):
+        frame = bg.copy()
+        if players:
+            _players(frame, i)
+        if shuttle and i not in hidden:
+            p = path[i]
+            if streak > 0 and i > 0:
+                step = (p - path[i - 1]) * streak
+                a, b = p - step * 0.5, p + step * 0.5
+                cv2.line(frame, (int(a[0]), int(a[1])), (int(b[0]), int(b[1])), (250,) * 3, 5)
+            else:
+                cv2.circle(frame, (int(p[0]), int(p[1])), 3, (250,) * 3, -1)
+        frames.append(frame)
+    return frames, path
+
+
+def _launch_clip(
+    angle_deg: float,
+    speed_px: float = 70.0,
+    n: int = 14,
+    hit: int = 4,
+    start: tuple[float, float] | None = None,
+    shutter: float = 0.65,
+):
+    """A player, a contact at ``hit`` and a shuttle leaving at a known angle.
+
+    With no explicit ``start`` the contact is placed so the whole flight is
+    centred in the frame, which keeps a steeply rising launch from leaving the
+    top of the picture before there is anything to measure.
+    """
+    bg = _hall()
+    if start is None:
+        reach = 0.5 * speed_px * (1.0 - 0.94**8) / 0.06
+        start = (
+            W / 2.0 - reach * math.cos(math.radians(angle_deg)),
+            H / 2.0 + reach * math.sin(math.radians(angle_deg)),
+        )
+    head = np.array(start, dtype=float)
+    frames: list[np.ndarray] = []
+    truth: dict[int, np.ndarray] = {}
+    p = head.copy()
+    v = np.array([math.cos(math.radians(angle_deg)), -math.sin(math.radians(angle_deg))]) * speed_px
+    for i in range(n):
+        frame = bg.copy()
+        cv2.circle(frame, (int(head[0]) - 30, int(head[1]) + 110), 30, (190,) * 3, -1)
+        if i > hit:
+            p = p + v
+            v = v * 0.94
+            v[1] += 1.2
+            truth[i] = p.copy()
+            a, b = p - v * shutter * 0.5, p + v * shutter * 0.5
+            cv2.line(frame, (int(a[0]), int(a[1])), (int(b[0]), int(b[1])), (250,) * 3, 5)
+        frames.append(frame)
+    return frames, head, truth
+
+
+#: An image-to-court homography with real perspective: a camera behind the near
+#: baseline, so the far court is compressed into the top of the frame.
+PERSPECTIVE_H, _ERR = compute_homography(
+    [[100, 340], [540, 340], [400, 120], [240, 120]],
+    [[0.0, 0.0], [6.1, 0.0], [6.1, 13.4], [0.0, 13.4]],
+)
+#: A deliberately affine homography: one pixel is worth one centimetre
+#: everywhere, which is the planar case a metric speed is entitled to assume.
+AFFINE_H = np.array([[0.01, 0.0, -1.0], [0.0, 0.01, -0.5], [0.0, 0.0, 1.0]])
+
+
+# --------------------------------------------------------------------------
+# Background plate
+# --------------------------------------------------------------------------
+
+
+def test_background_plate_is_the_static_scene():
+    frames, path = _clip(30)
+    plate = background_plate(FakeReader(frames), 0, 29)
+    assert plate.shape == (H, W)
+    assert plate.dtype == np.uint8
+    hall = cv2.cvtColor(_hall(), cv2.COLOR_BGR2GRAY)
+    # The moving objects are somewhere else in most samples, so they never form
+    # a majority at any pixel and the median is the empty hall.
+    assert np.median(np.abs(plate.astype(float) - hall.astype(float))) < 2.0
+    # Specifically: where the shuttle passed, the plate holds background.
+    x, y = path[15]
+    assert abs(float(plate[int(y), int(x)]) - float(hall[int(y), int(x)])) < 12.0
+
+
+def test_background_plate_survives_brightness_flicker():
+    frames, _ = _clip(30)
+    flickered = [
+        np.clip(f.astype(np.float32) * (1.2 if i % 2 else 1.0), 0, 255).astype(np.uint8)
+        for i, f in enumerate(frames)
+    ]
+    plate = background_plate(FakeReader(flickered), 0, 29)
+    hall = cv2.cvtColor(_hall(), cv2.COLOR_BGR2GRAY)
+    assert np.median(np.abs(plate.astype(float) - hall.astype(float))) < 6.0
+
+
+@pytest.mark.parametrize(
+    "reader, start, end",
+    [
+        (FakeReader([]), 0, 10),
+        (FakeReader([_hall()]), 5, 2),
+        (FakeReader([_hall()]), -10, -5),
+    ],
+)
+def test_background_plate_degenerate_ranges_return_empty(reader, start, end):
+    plate = background_plate(reader, start, end)
+    assert plate.size == 0
+    assert plate.dtype == np.uint8
+
+
+def test_background_plate_ignores_frames_of_the_wrong_shape():
+    frames, _ = _clip(10)
+    frames[3] = np.zeros((10, 10, 3), np.uint8)
+    plate = background_plate(FakeReader(frames), 0, 9, samples=10)
+    assert plate.shape == (H, W)
+
+
+# --------------------------------------------------------------------------
+# Differencing
+# --------------------------------------------------------------------------
+
+
+def test_difference_map_suppresses_the_trailing_ghost():
+    bg = _hall()
+    prev, now = bg.copy(), bg.copy()
+    cv2.circle(prev, (200, 200), 3, (250,) * 3, -1)
+    cv2.circle(now, (260, 200), 3, (250,) * 3, -1)
+    plate = cv2.cvtColor(bg, cv2.COLOR_BGR2GRAY)
+    diff = difference_map(now, prev, plate)
+    assert diff[200, 260] > DIFF_THRESHOLD  # where the shuttle is now
+    assert diff[200, 200] <= DIFF_THRESHOLD  # where it was one frame ago
+
+
+def test_difference_map_needs_at_least_one_reference():
+    assert difference_map(_hall(), None, None).max() == 0
+
+
+@pytest.mark.parametrize(
+    "frame, prev, plate",
+    [
+        (np.zeros((0, 0, 3), np.uint8), None, None),
+        (np.full((H, W, 3), np.nan), _hall(), None),
+        (_hall(), np.full((H, W, 3), np.inf), None),
+        (_hall(), np.zeros((5, 5, 3), np.uint8), None),
+    ],
+)
+def test_difference_map_never_raises_on_rubbish(frame, prev, plate):
+    out = difference_map(frame, prev, plate)
+    assert out.dtype == np.uint8
+    assert np.isfinite(out).all()
+
+
+# --------------------------------------------------------------------------
+# Candidate detection
+# --------------------------------------------------------------------------
+
+
+def test_detect_candidates_finds_the_shuttle_and_not_the_players():
+    frames, path = _clip(30)
+    plate = background_plate(FakeReader(frames), 0, 29)
+    cands = detect_candidates(frames[10], frames[9], plate, expected_px=7.0)
+    assert cands, "the shuttle should be found"
+    truth = path[10]
+    assert min(math.hypot(c.centre[0] - truth[0], c.centre[1] - truth[1]) for c in cands) < 3.0
+    # No candidate sits on either player's body.
+    for x0, dx, _shade, radius in (PALE, DARK):
+        cx = x0 + dx * 10
+        cy = 250.0 if _shade == 250 else 200.0
+        for c in cands:
+            assert math.hypot(c.centre[0] - cx, c.centre[1] - cy) > radius * 0.6
+
+
+def test_streaked_shuttle_is_still_detected():
+    """Regression for the roundness trap: a smash is a streak, not a disc."""
+    frames, _head, truth = _launch_clip(-35.0, speed_px=80.0)
+    plate = background_plate(FakeReader(frames), 0, len(frames) - 1)
+    cands = detect_candidates(frames[7], frames[6], plate, expected_px=7.0)
+    assert cands, "a motion-blurred shuttle must survive detection"
+    best = cands[0]
+    assert best.elongation > 4.0, "the test scene must actually draw a streak"
+    p = truth[7]
+    assert math.hypot(best.centre[0] - p[0], best.centre[1] - p[1]) < 4.0
+    # The streak's long axis is a free estimate of the travel direction, folded
+    # onto [0, 180): a launch at -35 degrees lies along the 145-degree axis.
+    assert abs(best.axis_deg - 145.0) < 12.0
+
+
+def test_detect_candidates_rejects_a_blob_the_size_of_a_player():
+    bg = _hall()
+    prev, now = bg.copy(), bg.copy()
+    cv2.circle(prev, (300, 200), 40, (250,) * 3, -1)
+    cv2.circle(now, (360, 200), 40, (250,) * 3, -1)
+    plate = cv2.cvtColor(bg, cv2.COLOR_BGR2GRAY)
+    assert detect_candidates(now, prev, plate, expected_px=7.0) == []
+
+
+def test_detect_candidates_honours_the_player_box_cap():
+    bg = _hall()
+    prev, now = bg.copy(), bg.copy()
+    cv2.circle(prev, (300, 200), 9, (250,) * 3, -1)
+    cv2.circle(now, (360, 200), 9, (250,) * 3, -1)
+    plate = cv2.cvtColor(bg, cv2.COLOR_BGR2GRAY)
+    assert detect_candidates(now, prev, plate, expected_px=14.0)
+    assert detect_candidates(now, prev, plate, expected_px=14.0, max_blob_px=4.0) == []
+
+
+def test_detect_candidates_respects_a_mask():
+    frames, path = _clip(30)
+    plate = background_plate(FakeReader(frames), 0, 29)
+    mask = np.zeros((H, W), np.uint8)
+    mask[:, :100] = 255  # the shuttle at frame 10 is well to the right of this
+    assert detect_candidates(frames[10], frames[9], plate, expected_px=7.0, mask=mask) == []
+    assert path[10][0] > 150
+
+
+def test_detect_candidates_flags_trail_blobs_as_stale():
+    bg = _hall()
+    prev, now = bg.copy(), bg.copy()
+    cv2.circle(prev, (200, 200), 3, (250,) * 3, -1)
+    cv2.circle(now, (260, 200), 3, (250,) * 3, -1)
+    plate = cv2.cvtColor(bg, cv2.COLOR_BGR2GRAY)
+    trail = difference_map(prev, bg, plate)  # the previous frame's own evidence
+    cands = detect_candidates(now, prev, plate, expected_px=7.0, accumulated=trail)
+    by_x = {round(c.centre[0]): c for c in cands}
+    assert any(abs(x - 260) < 4 for x in by_x), "this frame's shuttle must be fresh"
+    fresh = [c for c in cands if not c.stale]
+    stale = [c for c in cands if c.stale]
+    assert fresh and all(abs(c.centre[0] - 260) < 6 for c in fresh)
+    assert stale and all(abs(c.centre[0] - 200) < 6 for c in stale)
+    assert max(c.score for c in stale) < max(c.score for c in fresh)
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        np.zeros((H, W, 3), np.uint8),
+        np.zeros((0, 0, 3), np.uint8),
+        np.full((H, W, 3), np.nan),
+    ],
+)
+def test_detect_candidates_never_raises_on_degenerate_frames(frame):
+    assert detect_candidates(frame, np.zeros((H, W, 3), np.uint8), None) == []
+
+
+def test_candidate_to_dict_is_json_friendly():
+    c = Candidate(centre=(1.234, 5.678), area=12.0, elongation=3.0, axis_deg=45.0, score=0.5)
+    d = c.to_dict()
+    assert d["centre"] == [1.2, 5.7]
+    assert d["stale"] is False
+
+
+# --------------------------------------------------------------------------
+# Whole-range tracking
+# --------------------------------------------------------------------------
+
+
+def _errors(track: ShuttleTrack, path: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    return np.hypot(track.xy[mask, 0] - path[mask, 0], track.xy[mask, 1] - path[mask, 1])
+
+
+def test_track_shuttle_recovers_the_known_path():
+    frames, path = _clip(30)
+    track = track_shuttle(FakeReader(frames), 0, 29, FPS)
+    assert track.xy.shape == (30, 2)
+    assert track.detected.sum() >= 20
+    err = _errors(track, path, track.detected)
+    assert np.median(err) < 3.0
+    assert err.max() < 8.0
+
+
+def test_track_shuttle_does_not_lock_onto_the_players():
+    frames, _path = _clip(30)
+    track = track_shuttle(FakeReader(frames), 0, 29, FPS)
+    # Only detections are checked: a coasted position may legitimately pass
+    # behind a player, which is precisely why the shuttle was lost there.
+    assert track.detected.any()
+    for i in np.flatnonzero(track.detected):
+        for x0, dx, shade, radius in (PALE, DARK):
+            cx = x0 + dx * int(i)
+            cy = 250.0 if shade == 250 else 200.0
+            assert math.hypot(track.xy[i, 0] - cx, track.xy[i, 1] - cy) > radius
+
+
+def test_track_shuttle_survives_total_occlusion():
+    hidden = (12, 13, 14)
+    frames, path = _clip(30, hidden=hidden)
+    track = track_shuttle(FakeReader(frames), 0, 29, FPS)
+    for i in hidden:
+        assert not track.detected[i], "a hidden shuttle must never count as detected"
+    assert track.detected[:10].sum() >= 5, "the flight before the gap is tracked"
+    assert track.detected[18:].sum() >= 5, "and it is picked up again after it"
+    filled = np.flatnonzero(track.interpolated)
+    assert set(hidden).issubset(set(filled.tolist()))
+    err = _errors(track, path, track.interpolated)
+    assert err.max() < 15.0, "coasted positions stay near the truth"
+
+
+def test_track_shuttle_survives_mains_flicker():
+    frames, path = _clip(30)
+    flickered = [
+        np.clip(f.astype(np.float32) * (1.18 if i % 2 else 1.0), 0, 255).astype(np.uint8)
+        for i, f in enumerate(frames)
+    ]
+    track = track_shuttle(FakeReader(flickered), 0, 29, FPS)
+    assert track.detected.sum() >= 18
+    assert np.median(_errors(track, path, track.detected)) < 3.0
+
+
+def test_track_shuttle_detected_and_interpolated_are_disjoint():
+    frames, _ = _clip(30, hidden=(12, 13))
+    track = track_shuttle(FakeReader(frames), 0, 29, FPS)
+    assert not (track.detected & track.interpolated).any()
+    assert np.isfinite(track.score[track.detected]).all()
+    assert np.isnan(track.score[~track.detected]).all()
+    assert np.isfinite(track.xy[track.detected]).all()
+
+
+def test_track_shuttle_accepts_a_homography_and_player_boxes():
+    frames, path = _clip(30)
+    boxes = {i: [[170 + 3 * i, 220, 230 + 3 * i, 280]] for i in range(30)}
+    track = track_shuttle(FakeReader(frames), 0, 29, FPS, homography=AFFINE_H, player_boxes=boxes)
+    assert track.detected.sum() >= 15
+    assert np.median(_errors(track, path, track.detected)) < 3.0
+
+
+def test_track_shuttle_masks_to_the_court():
+    # Under this homography the court quad covers only part of the frame; a
+    # bright mover far outside it must be ignored.
+    frames, _ = _clip(20, players=False, shuttle=False)
+    moving = []
+    for i, f in enumerate(frames):
+        g = f.copy()
+        cv2.circle(g, (20, 20 + 12 * i), 3, (250,) * 3, -1)
+        moving.append(g)
+    mask = court_mask((H, W), PERSPECTIVE_H)
+    assert mask is not None and mask[20, 20] == 0
+    track = track_shuttle(FakeReader(moving), 0, 19, FPS, homography=PERSPECTIVE_H)
+    assert track.detected.sum() == 0
+
+
+@pytest.mark.parametrize(
+    "frames, start, end",
+    [
+        ([], 0, -1),
+        ([], 0, 5),
+        ([np.zeros((H, W, 3), np.uint8)] * 10, 0, 9),
+        ([_hall()] * 10, 0, 9),
+    ],
+)
+def test_track_shuttle_degenerate_inputs_never_raise(frames, start, end):
+    track = track_shuttle(FakeReader(frames), start, end, FPS)
+    assert track.detected.sum() == 0
+    assert not np.isfinite(track.xy).any()
+    assert track.xy.shape[0] == track.detected.shape[0] == max(0, end - start + 1)
+
+
+def test_track_shuttle_tolerates_a_reader_that_runs_out():
+    frames, _ = _clip(15)
+    track = track_shuttle(FakeReader(frames), 0, 40, FPS)
+    assert track.xy.shape == (41, 2)
+    assert not track.detected[15:].any()
+
+
+def test_shuttle_track_to_dict_is_json_friendly():
+    frames, _ = _clip(20, hidden=(9, 10))
+    track = track_shuttle(FakeReader(frames), 0, 19, FPS)
+    d = track.to_dict()
+    assert len(d["xy"]) == 20
+    assert d["n_detected"] == int(track.detected.sum())
+    assert all(v is None or isinstance(v, list) for v in d["xy"])
+    assert all(v is None or isinstance(v, float) for v in d["score"])
+
+
+# --------------------------------------------------------------------------
+# Hit-anchored launch measurement
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("angle", [-55.0, -35.0, -5.0, 5.0, 40.0, 70.0])
+def test_launch_after_hit_recovers_the_direction(angle):
+    frames, head, _truth = _launch_clip(angle)
+    launch = launch_after_hit(FakeReader(frames), 4, head, FPS, BODY_HEIGHT_PX)
+    assert launch is not None
+    assert abs(launch.direction_deg - angle) < 8.0
+    assert launch.rising is (angle > 0)
+    assert launch.n_points >= MIN_LAUNCH_POINTS
+    assert 0.0 < launch.confidence <= 1.0
+    assert launch.note
+    assert launch.speed_px_s > 0
+    assert launch.speed_bh == pytest.approx(launch.speed_px_s / BODY_HEIGHT_PX)
+
+
+def test_launch_after_hit_returns_none_when_nothing_is_there():
+    frames, head, _ = _launch_clip(-35.0)
+    still = [frames[0].copy() for _ in frames]
+    assert launch_after_hit(FakeReader(still), 4, head, FPS, BODY_HEIGHT_PX) is None
+
+
+def test_launch_after_hit_ignores_the_racket_itself():
+    """A blob sitting on the racket head is the arm, not a launched shuttle."""
+    bg = _hall()
+    frames = []
+    for i in range(12):
+        f = bg.copy()
+        cv2.circle(f, (260 + (i % 2), 150), 4, (250,) * 3, -1)  # jittering, going nowhere
+        frames.append(f)
+    assert launch_after_hit(FakeReader(frames), 4, (260.0, 150.0), FPS, BODY_HEIGHT_PX) is None
+
+
+@pytest.mark.parametrize(
+    "hit, head, fps, bh, n_frames",
+    [
+        (-1, (260.0, 150.0), FPS, BODY_HEIGHT_PX, 8),
+        (4, (np.nan, np.nan), FPS, BODY_HEIGHT_PX, 8),
+        (4, (260.0,), FPS, BODY_HEIGHT_PX, 8),
+        (4, (260.0, 150.0), 0.0, BODY_HEIGHT_PX, 8),
+        (4, (260.0, 150.0), FPS, 0.0, 8),
+        (4, (260.0, 150.0), FPS, float("nan"), 8),
+        (4, (260.0, 150.0), FPS, BODY_HEIGHT_PX, 1),
+        (9999, (260.0, 150.0), FPS, BODY_HEIGHT_PX, 8),
+    ],
+)
+def test_launch_after_hit_degenerate_inputs_return_none(hit, head, fps, bh, n_frames):
+    frames, _head, _ = _launch_clip(-35.0)
+    assert launch_after_hit(FakeReader(frames), hit, head, fps, bh, n_frames=n_frames) is None
+
+
+def test_launch_without_a_homography_reports_no_metric_speed():
+    frames, head, _ = _launch_clip(-20.0)
+    launch = launch_after_hit(FakeReader(frames), 4, head, FPS, BODY_HEIGHT_PX)
+    assert launch is not None
+    assert launch.speed_mps is None
+    assert launch.speed_uncertainty is None
+    assert "no homography" in launch.note
+
+
+def test_launch_reports_metric_speed_for_a_planar_flight():
+    frames, head, _ = _launch_clip(-5.0, speed_px=55.0, start=(150.0, 300.0))
+    launch = launch_after_hit(FakeReader(frames), 4, head, FPS, BODY_HEIGHT_PX, homography=AFFINE_H)
+    assert launch is not None
+    assert launch.speed_mps is not None
+    # One pixel is one centimetre, so the metric speed must track the pixel one,
+    # and drag correction can only push it upwards.
+    assert launch.speed_mps > launch.speed_px_s / 100.0
+    assert launch.speed_mps < 2.0 * launch.speed_px_s / 100.0
+    assert 0.0 < launch.speed_uncertainty < 1.0
+    assert "not a speed at impact" in launch.note
+    assert "over-states" in launch.note  # no contact height was supplied
+
+
+def test_launch_refuses_metric_speed_when_the_flight_leaves_the_plane():
+    frames, head, _ = _launch_clip(60.0, speed_px=45.0, start=(300.0, 330.0))
+    launch = launch_after_hit(
+        FakeReader(frames),
+        4,
+        head,
+        FPS,
+        BODY_HEIGHT_PX,
+        homography=PERSPECTIVE_H,
+        expected_px=7.0,
+    )
+    assert launch is not None
+    assert launch.direction_deg > 40.0, "the direction is still recovered"
+    assert launch.speed_mps is None, "but the metric speed must be refused"
+    assert launch.speed_uncertainty is None
+    assert "refused" in launch.note and "scale" in launch.note
+
+
+def test_launch_metric_speed_tightens_with_a_known_contact_height():
+    frames, head, _ = _launch_clip(-5.0, speed_px=55.0, start=(150.0, 300.0))
+    camera = CameraGeometry(ground_point=[3.05, -4.0], height_m=4.0)
+    plain = launch_after_hit(FakeReader(frames), 4, head, FPS, BODY_HEIGHT_PX, homography=AFFINE_H)
+    corrected = launch_after_hit(
+        FakeReader(frames),
+        4,
+        head,
+        FPS,
+        BODY_HEIGHT_PX,
+        homography=AFFINE_H,
+        camera=camera,
+        contact_height_m=2.0,
+    )
+    assert plain is not None and corrected is not None
+    assert corrected.speed_uncertainty < plain.speed_uncertainty
+    # Half the camera height above the floor halves the true horizontal travel.
+    assert corrected.speed_mps < plain.speed_mps
+    assert "over-states" not in corrected.note
+
+
+def test_launch_direction_uses_the_opening_of_the_flight():
+    """Gravity bends the path, so a late-window direction would read too low."""
+    frames, head, truth = _launch_clip(0.0, speed_px=60.0, n=18)
+    launch = launch_after_hit(FakeReader(frames), 4, head, FPS, BODY_HEIGHT_PX, n_frames=12)
+    assert launch is not None
+    keys = sorted(truth)
+    late = truth[keys[-1]] - truth[keys[0]]
+    late_deg = math.degrees(math.atan2(-late[1], late[0]))
+    assert abs(launch.direction_deg) < abs(late_deg), "the launch is flatter than the whole arc"
+
+
+def test_launch_to_dict_and_elevation_folding():
+    launch = Launch(
+        frame=10,
+        direction_deg=150.0,
+        rising=True,
+        speed_px_s=1000.0,
+        speed_bh=5.0,
+        speed_mps=None,
+        speed_uncertainty=None,
+        n_points=4,
+        confidence=0.6,
+        note="synthetic",
+    )
+    # 150 degrees is up-and-to-the-left: 30 degrees above the horizon.
+    assert launch.elevation_deg() == pytest.approx(30.0)
+    d = launch.to_dict()
+    assert d["elevation_deg"] == 30.0
+    assert d["speed_mps"] is None
+    assert d["note"] == "synthetic"
+
+
+# --------------------------------------------------------------------------
+# Drag physics
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("v0, expected_shortfall", [(30.0, 0.10), (100.0, 0.25)])
+def test_initial_speed_undoes_the_known_finite_difference_shortfall(v0, expected_shortfall):
+    """Analytic check: r(t) = L ln(1 + V0 t / L) inverts exactly."""
+    dt = 1.0 / 30.0
+    distance = DRAG_LENGTH_M * math.log1p(v0 * dt / DRAG_LENGTH_M)
+    raw = distance / dt
+    assert raw < v0
+    assert (v0 - raw) / v0 == pytest.approx(expected_shortfall, abs=0.02)
+    assert initial_speed(distance, dt) == pytest.approx(v0, rel=1e-9)
+
+
+def test_initial_speed_is_above_the_raw_finite_difference():
+    for d in (0.2, 0.9, 2.5):
+        assert initial_speed(d, 1 / 30.0) > d * 30.0
+
+
+@pytest.mark.parametrize(
+    "distance, dt, length",
+    [
+        (1.0, 0.0, 4.5),
+        (1.0, -1.0, 4.5),
+        (-1.0, 0.1, 4.5),
+        (1.0, 0.1, 0.0),
+        (float("nan"), 0.1, 4.5),
+    ],
+)
+def test_initial_speed_refuses_impossible_input(distance, dt, length):
+    assert math.isnan(initial_speed(distance, dt, length))
+
+
+def test_fit_drag_recovers_known_parameters():
+    v0, length = 45.0, DRAG_LENGTH_M
+    t = np.arange(8) / 30.0
+    r = length * np.log1p(v0 * t / length)
+    fit = fit_drag(r, t)
+    assert fit is not None
+    assert fit[0] == pytest.approx(v0, rel=0.02)
+    assert fit[1] == pytest.approx(length, rel=0.05)
+    assert fit[2] < 1e-6
+
+
+@pytest.mark.parametrize(
+    "r, t",
+    [
+        (np.array([0.0, 1.0]), np.array([0.0, 0.03])),  # too few points
+        (np.zeros(6), np.arange(6) / 30.0),  # no distance covered
+        (np.arange(6.0), np.zeros(6)),  # no time elapsed
+        (np.full(6, np.nan), np.arange(6) / 30.0),  # all invalid
+    ],
+)
+def test_fit_drag_returns_none_rather_than_a_fantasy(r, t):
+    assert fit_drag(r, t) is None
+
+
+def test_fit_drag_rejects_an_unphysical_drag_length():
+    # A straight line has no drag in it at all, so the fit runs to the bound.
+    t = np.arange(8) / 30.0
+    assert fit_drag(30.0 * t, t) is None
+
+
+# --------------------------------------------------------------------------
+# Small pieces
+# --------------------------------------------------------------------------
+
+
+def test_predict_is_the_three_point_constant_acceleration_form():
+    pts = [(0.0, 0.0), (10.0, 0.0), (30.0, 0.0)]
+    a = np.array([30.0 - 2 * 10.0 + 0.0, 0.0])
+    v = np.array([30.0 - 10.0, 0.0]) + a
+    pred, vel = _predict(pts)
+    assert pred == pytest.approx(np.array([30.0, 0.0]) + v + a / 2.0)
+    assert vel == pytest.approx(v)
+
+
+def test_predict_falls_back_gracefully():
+    assert _predict([(1.0, 2.0), (3.0, 4.0)])[0] == pytest.approx(np.array([5.0, 6.0]))
+    assert _predict([(1.0, 2.0)])[0] == pytest.approx(np.array([1.0, 2.0]))
+    assert not np.isfinite(_predict([])[0]).any()
+
+
+def test_expected_shuttle_px_from_a_homography_and_its_fallbacks():
+    from mikiri.shuttle import DEFAULT_SHUTTLE_PX, MAX_SHUTTLE_PX, MIN_SHUTTLE_PX
+
+    # One pixel is one centimetre, so a 6.5 cm shuttle is 6.5 px.
+    assert expected_shuttle_px(AFFINE_H, (H, W)) == pytest.approx(6.5, abs=0.1)
+    assert expected_shuttle_px(None, (H, W)) == DEFAULT_SHUTTLE_PX
+    assert expected_shuttle_px(np.eye(2), (H, W)) == DEFAULT_SHUTTLE_PX
+    assert expected_shuttle_px(np.full((3, 3), np.nan), (H, W)) == DEFAULT_SHUTTLE_PX
+    assert expected_shuttle_px(AFFINE_H, (5,)) == DEFAULT_SHUTTLE_PX
+    tight = expected_shuttle_px(AFFINE_H * np.array([[10.0], [10.0], [1.0]]), (H, W))
+    assert MIN_SHUTTLE_PX <= tight <= MAX_SHUTTLE_PX
+
+
+def test_court_mask_covers_the_court_and_refuses_nonsense():
+    mask = court_mask((H, W), PERSPECTIVE_H)
+    assert mask is not None
+    assert mask[335, 320] == 255, "inside the near court"
+    assert mask[20, 20] == 0, "far outside it"
+    assert court_mask((H, W), None) is None
+    assert court_mask((H, W), np.full((3, 3), np.nan)) is None
+    assert court_mask((H, W), np.zeros((3, 3))) is None
+    assert court_mask((5,), PERSPECTIVE_H) is None

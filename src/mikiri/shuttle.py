@@ -11,11 +11,17 @@ and the frame before it, and the per-pixel *minimum* of the two differences is
 kept. That conjunction is the point: differing from the previous frame means
 "moving now", differing from the plate means "not part of the room", and
 demanding both removes the trailing ghost that plain frame differencing leaves
-behind the shuttle. The recent difference maps are accumulated by a faded
-per-pixel maximum so a shuttle that stalls at the top of a clear does not
-vanish for the two frames it hangs there. A per-pixel mixture model (MOG2) is
-*not* used: a shuttle never occupies the same pixel twice, so a background
-model learns nothing about it and only adds cost and ghosting.
+behind the shuttle. The recent difference maps are then accumulated into a
+faded per-pixel maximum. Be precise about what that buys: when the shuttle is
+slow or stalling at the top of a clear, consecutive traces overlap, merge into
+one blob that still carries this frame's own motion, and so survive a size gate
+that each faint trace alone would have failed. When the shuttle is fast the
+traces are disjoint and the accumulation contributes only trail -- blobs with
+no motion in the current frame at all. Those are flagged ``stale`` and the
+tracker refuses to build on them; :func:`_extend` records why letting them
+supply positions is actively harmful. A per-pixel mixture model (MOG2) is *not*
+used: a shuttle never occupies the same pixel twice, so a background model
+learns nothing about it and only adds cost and ghosting.
 
 **Candidates are not gated on roundness.** Gym light forces a 1/50 to 1/120 s
 shutter, so a 30 m/s shuttle smears 80 or more pixels: during exactly the fast
@@ -36,7 +42,9 @@ Kalman and particle filters on this problem and replaced both with a three-point
 extrapolator for that reason. The association radius grows with the current
 speed, because a fixed one cannot work: measured mean frame-to-frame
 displacement at 720p/30 fps is 11.8 px with a standard deviation of 12.2 px, so
-the tail is as large as the body.
+the tail is as large as the body. It grows with the *median* of the recent
+steps rather than with the extrapolator's own velocity, which is the difference
+between recovering from one bad association and being destroyed by it.
 
 **The reliable entry point is** :func:`launch_after_hit`. Tracking a whole
 rally on this footage is not dependable. But the app already knows when a hit
@@ -120,10 +128,9 @@ MAX_BLOB_PLAYER_FRACTION = 0.25
 #: Difference magnitude that counts as full contrast when scoring a blob.
 CONTRAST_REFERENCE = 60.0
 #: Score multiplier for a blob that exists only in the accumulated trail and
-#: has no motion evidence in the current frame. Such a blob is where the
-#: shuttle *was*, so it is worth keeping -- it is what carries a stalled
-#: shuttle through the frames it hangs motionless -- but it must never win
-#: against fresh evidence, and it is barred from starting a tracklet.
+#: has no motion evidence at all in the current frame. Such a blob is where the
+#: shuttle *was*, never where it is, so it is reported for diagnostics and
+#: scored down, and the tracker refuses to build on it.
 STALE_SCORE_PENALTY = 0.5
 #: Most candidates kept per frame, best-scoring first. Bounds the association
 #: cost on a noisy clip without discarding anything a real shuttle would need.
@@ -310,17 +317,27 @@ class Launch:
     points: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
 
     def elevation_deg(self) -> float:
-        """Signed angle above the horizon, in ``[-90, 90]``, ignoring left/right."""
-        return float(
-            math.degrees(math.asin(max(-1.0, min(1.0, math.sin(math.radians(self.direction_deg))))))
-        )
+        """Signed angle above the horizon, in ``[-90, 90]``, ignoring left/right.
+
+        ``nan`` when the direction is not finite. The guard is not decoration:
+        ``min(1.0, nan)`` is ``1.0`` in Python, so folding an unchecked ``nan``
+        through ``asin`` would report a confident 90 degrees straight up.
+        """
+        if not math.isfinite(self.direction_deg):
+            return float("nan")
+        folded = max(-1.0, min(1.0, math.sin(math.radians(self.direction_deg))))
+        return float(math.degrees(math.asin(folded)))
 
     def to_dict(self) -> dict:
         """JSON-friendly view (rounded)."""
         return {
             "frame": int(self.frame),
-            "direction_deg": round(float(self.direction_deg), 1),
-            "elevation_deg": round(self.elevation_deg(), 1),
+            "direction_deg": None
+            if not math.isfinite(self.direction_deg)
+            else round(float(self.direction_deg), 1),
+            "elevation_deg": None
+            if not math.isfinite(self.elevation_deg())
+            else round(self.elevation_deg(), 1),
             "rising": bool(self.rising),
             "speed_px_s": round(float(self.speed_px_s), 1),
             "speed_bh": round(float(self.speed_bh), 2),
@@ -448,6 +465,23 @@ def background_plate(reader, start: int, end: int, samples: int = PLATE_SAMPLES)
     return np.clip(np.median(stack, axis=0), 0.0, 255.0).astype(np.uint8)
 
 
+def _usable_homography(homography) -> np.ndarray | None:
+    """A finite, invertible 3x3 homography, or ``None``.
+
+    Callers map court metres back into the image, which needs the inverse; a
+    singular matrix would otherwise raise out of ``numpy.linalg`` in the middle
+    of a frame loop.
+    """
+    if homography is None:
+        return None
+    hom = np.asarray(homography, dtype=float)
+    if hom.shape != (3, 3) or not np.isfinite(hom).all():
+        return None
+    if abs(float(np.linalg.det(hom))) < 1e-12:
+        return None
+    return hom
+
+
 def expected_shuttle_px(homography: np.ndarray | None, shape: tuple[int, ...]) -> float:
     """Expected shuttle footprint in pixels, from the floor scale at the court centre.
 
@@ -472,12 +506,10 @@ def expected_shuttle_px(homography: np.ndarray | None, shape: tuple[int, ...]) -
         A footprint in pixels, clamped to a sane range;
         :data:`DEFAULT_SHUTTLE_PX` when it cannot be derived.
     """
-    if homography is None or len(shape) < 2:
+    hom = _usable_homography(homography)
+    if hom is None or len(shape) < 2:
         return DEFAULT_SHUTTLE_PX
     h_img, w_img = int(shape[0]), int(shape[1])
-    hom = np.asarray(homography, dtype=float)
-    if hom.shape != (3, 3) or not np.isfinite(hom).all():
-        return DEFAULT_SHUTTLE_PX
     centre = court_to_image(hom, np.array([[DOUBLES_WIDTH / 2.0, COURT_LENGTH / 2.0]]))
     if not np.isfinite(centre).all() or np.abs(centre).max() > 20.0 * max(h_img, w_img):
         centre = np.array([[w_img / 2.0, h_img / 2.0]], dtype=float)
@@ -515,10 +547,8 @@ def court_mask(
         built -- which happens when the court quad folds through the horizon,
         and in that case masking nothing is the safe answer.
     """
-    if homography is None or len(shape) < 2:
-        return None
-    hom = np.asarray(homography, dtype=float)
-    if hom.shape != (3, 3) or not np.isfinite(hom).all():
+    hom = _usable_homography(homography)
+    if hom is None or len(shape) < 2:
         return None
     m = float(margin_m)
     corners = np.array(
@@ -699,6 +729,26 @@ def _predict(points: list[tuple[float, float]]) -> tuple[np.ndarray, np.ndarray]
     return np.full(2, np.nan), np.zeros(2)
 
 
+def _gate_radius(points: list[tuple[float, float]], max_radius: float) -> float:
+    """Velocity-adaptive search radius, sized from the recent *median* step.
+
+    A fixed radius cannot work -- measured frame-to-frame displacement at
+    720p/30 fps is 11.8 px with a standard deviation of 12.2 px -- so the
+    radius grows with speed. It grows with the median of the last few steps
+    rather than with the three-point predictor's own velocity, and that
+    distinction is what keeps one bad association from being fatal: the
+    predictor's velocity term contains an acceleration estimate that explodes
+    after a single wrong step, and a radius built on it would then open wide
+    enough to swallow half the frame and lock onto a player.
+    """
+    p = np.asarray(points[-4:], dtype=float)
+    if p.shape[0] < 2:
+        return min(GATE_BASE_PX, max_radius)
+    steps = np.hypot(*np.diff(p, axis=0).T)
+    speed = float(np.median(steps)) if steps.size else 0.0
+    return float(min(GATE_BASE_PX + GATE_VELOCITY_FACTOR * speed, max_radius))
+
+
 @dataclass
 class _Tracklet:
     """A run of consecutive frames the same object was followed through."""
@@ -747,12 +797,18 @@ def _extend(
 ) -> _Tracklet:
     """Grow a seeded pair forward with the constant-acceleration gate.
 
-    A matched *stale* candidate contributes its position but is never recorded
-    as a detection: it is where the shuttle was several frames ago, not a
-    measurement of where it is now, and calling it one would quietly corrupt
-    every speed computed downstream. It also still costs a frame of the coast
-    budget, so a tracklet can ride the accumulated trail through a stall but
-    cannot follow it indefinitely.
+    Stale candidates -- blobs made only of the accumulated trail -- are ignored
+    outright, and the reason is worth recording because it is not obvious. The
+    trail sits immediately *behind* the shuttle, at a distance of one step,
+    while the search radius is deliberately larger than one step. Every frame,
+    therefore, the tracklet's own previous footprint is inside its own gate. Let
+    it match once and the velocity estimate reverses; from there the tracklet
+    walks backwards down its own trail, frame by frame, producing a beautifully
+    smooth track of somewhere the shuttle has already been. Coasting on the
+    prediction instead costs nothing: where the trail would actually have
+    helped -- a shuttle hanging motionless at the top of a clear -- the
+    predicted velocity is near zero anyway, so the prediction lands in the same
+    place.
     """
     frames = [first, first + 1]
     points = [cands[first][a].centre, cands[first + 1][b].centre]
@@ -762,12 +818,12 @@ def _extend(
     miss = 0
     t = first + 2
     while t < len(cands) and miss <= MAX_COAST_FRAMES:
-        pred, vel = _predict(points)
-        radius = min(GATE_BASE_PX + GATE_VELOCITY_FACTOR * float(np.hypot(*vel)), max_radius)
+        pred, _vel = _predict(points)
+        radius = _gate_radius(points, max_radius)
         best_idx = -1
         best_s = -1.0
         for j, c in enumerate(cands[t]):
-            if j in claimed[t]:
+            if j in claimed[t] or c.stale:
                 continue
             d = math.hypot(c.centre[0] - pred[0], c.centre[1] - pred[1])
             if d > radius:
@@ -780,14 +836,9 @@ def _extend(
             hit = cands[t][best_idx]
             points.append(hit.centre)
             claims.append((t, best_idx))
-            if hit.stale:
-                scores.append(float("nan"))
-                detected.append(False)
-                miss += 1
-            else:
-                scores.append(hit.score)
-                detected.append(True)
-                miss = 0
+            scores.append(hit.score)
+            detected.append(True)
+            miss = 0
         else:
             points.append((float(pred[0]), float(pred[1])))
             scores.append(float("nan"))
@@ -1176,8 +1227,8 @@ def fit_drag(
 
 def _floor_scale(homography: np.ndarray, point: np.ndarray) -> np.ndarray | None:
     """Local ``d(court metres) / d(pixel)`` Jacobian at one image point."""
-    hom = np.asarray(homography, dtype=float)
-    if hom.shape != (3, 3) or not np.isfinite(hom).all():
+    hom = _usable_homography(homography)
+    if hom is None:
         return None
     jac = position_jacobian(hom, np.asarray(point, dtype=float).reshape(1, 2))
     if not np.isfinite(jac).all():
@@ -1285,8 +1336,8 @@ def launch_after_hit(
         if frame is None:
             break
         if len(points) >= 2:
-            centre, vel = _predict(points)
-            radius = min(GATE_BASE_PX + GATE_VELOCITY_FACTOR * float(np.hypot(*vel)), max_step)
+            centre, _vel = _predict(points)
+            radius = _gate_radius(points, max_step)
         elif len(points) == 1:
             centre, radius = np.asarray(points[0], dtype=float), max_step
         else:
