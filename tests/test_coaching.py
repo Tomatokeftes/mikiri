@@ -389,6 +389,32 @@ def test_positional_advice_quotes_its_uncertainty():
     assert "+/- 5 m" in advice["distance_per_rally"].evidence
 
 
+def test_real_speed_cv_is_preferred_over_the_stand_in():
+    fw = elite_footwork()
+    fw["speed_cv"] = 0.83
+    values = metric_values(fw, elite_strokes())
+    assert values["speed_cv"] == pytest.approx(0.83)
+    item = by_id(coach(fw, elite_strokes(), "elite", overrides={}))["speed_variability"]
+    assert item.severity == "info"
+    assert "0.83" in item.detail
+    assert "stands in" not in item.evidence
+    assert "no published threshold" in item.evidence
+    # Without it, the peak-to-mean ratio stands in and says so.
+    fallback = by_id(coach(elite_footwork(), elite_strokes(), "elite", overrides={}))
+    assert "stand" in fallback["speed_variability"].evidence
+
+
+def test_session_summary_uses_the_trust_it_was_coached_with():
+    fw, st = elite_footwork(), elite_strokes()
+    flags = {"frame_coverage": 0.10, "has_camera": False}
+    summary = session_summary(coach(fw, st, "elite", trust=flags), fw, st, trust=flags)
+    assert summary["trust"]["positional_ok"] is False
+    assert summary["trust"]["frame_coverage"] == pytest.approx(0.10)
+    assert "measurement" in summary["headline"].lower()
+    # Without the flags the footwork dict alone would have looked healthy.
+    assert session_summary(coach(fw, st, "elite"), fw, st)["trust"]["positional_ok"] is True
+
+
 def test_balance_percentages_are_shares_not_ratios():
     advice = by_id(coach(developing_footwork(), developing_strokes(), "club", overrides={}))
     # left 150 s against right 90 s is a 62/38 split, not "25% more".

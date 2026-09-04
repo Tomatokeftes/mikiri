@@ -161,3 +161,10 @@ kbd { background: var(--bg3); border: 1px solid var(--border); border-radius: 3p
 .advice-detail { font-size: 13px; margin-bottom: 3px; }
 #strokes-list li { padding: 2px 4px; border-radius: 3px; }
 #strokes-list li:hover { background: #2a2e38; }
+
+/* Camera-view badge: which metrics this viewpoint can actually support */
+.view-badge { font-size: 12px; padding: 4px 10px; border-radius: 4px; margin: 4px 0; }
+.view-badge:empty { display: none; }
+.view-badge.ok { background: #22331f; color: #9fd98a; }
+.view-badge.warn { background: #33291f; color: #ffcf8a; }
+.view-badge.muted { background: #262a33; color: #98a2b3; }

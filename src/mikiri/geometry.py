@@ -481,3 +481,127 @@ def offplane_bias(court_points: np.ndarray, z: float, camera: CameraGeometry) ->
     g = np.asarray(camera.ground_point, dtype=float)
     lam = _lam(z, camera.height_m)
     return lam * np.hypot(b[:, 0] - g[0], b[:, 1] - g[1])
+
+
+#: The three ways a camera can look at a court, as far as 2-D analysis cares.
+VIEW_SIDE_ON = "side-on"
+VIEW_REAR = "rear"
+VIEW_OBLIQUE = "oblique"
+VIEW_CLASSES = (VIEW_SIDE_ON, VIEW_REAR, VIEW_OBLIQUE)
+
+#: Half-width of the cone, in degrees, within which a view counts as square-on
+#: to one of the court axes. Outside both cones the view is oblique and the
+#: image-plane angles are foreshortened by an amount nothing can recover.
+VIEW_CONE_DEG = 30.0
+
+#: Which view each family of measurements needs, and why. Anything absent from
+#: this table is view-robust: it comes from the homography and the recovered
+#: camera rather than from angles measured in the image, so it survives any
+#: viewpoint. That is the whole argument for leaning on the court geometry.
+VIEW_REQUIREMENTS: dict[str, dict] = {
+    "trunk_lean": {
+        "view": VIEW_SIDE_ON,
+        "why": "Lean toward or away from the net is a rotation in the plane the camera must face.",
+    },
+    "knee_angle": {
+        "view": VIEW_SIDE_ON,
+        "why": "The knee bends in the plane of travel; from behind, the shank is foreshortened.",
+    },
+    "hip_height": {
+        "view": VIEW_SIDE_ON,
+        "why": "Measured as a fraction of body height in the image, which needs an unforeshortened body.",
+    },
+    "contact_offset": {
+        "view": VIEW_SIDE_ON,
+        "why": "How far in front of the body the shuttle was struck is a depth measurement from behind.",
+    },
+    "stance_width": {
+        "view": VIEW_REAR,
+        "why": "Feet apart across the body is a depth measurement from the side.",
+    },
+    "landing_width": {
+        "view": VIEW_REAR,
+        "why": "Landing base is measured across the body, which a side view cannot see.",
+    },
+    "knee_over_foot": {
+        "view": VIEW_REAR,
+        "why": "Alignment of the knee over the foot is a frontal-plane observation.",
+    },
+}
+
+
+def view_class(camera: CameraGeometry) -> dict:
+    """Which way the camera looks at the court, and what that permits.
+
+    The court has two axes and 2-D angles only survive when the camera faces
+    one of them squarely. Since the camera's position is known in court metres,
+    this is arithmetic rather than guesswork.
+
+    Azimuth is measured from the court's long axis: 0 degrees is directly
+    behind a baseline, 90 degrees is square to the side. Elevation is the angle
+    down from horizontal to the middle of the court, which is what governs how
+    fast the far-court depth error grows.
+
+    Args:
+        camera: Recovered camera geometry.
+
+    Returns:
+        A dict with ``view`` (one of :data:`VIEW_CLASSES`), ``azimuth_deg``,
+        ``elevation_deg``, a one-line ``description``, and ``available`` /
+        ``hidden`` lists naming the metric families this view does and does not
+        support. ``hidden`` entries carry the reason and the fix.
+    """
+    from mikiri.court import CENTRE_X, NET_Y
+
+    g = np.asarray(camera.ground_point, dtype=float)
+    d = g - np.array([CENTRE_X, NET_Y])
+    # 0 when the camera sits along the court's length, 90 when out to the side.
+    azimuth = math.degrees(math.atan2(abs(float(d[0])), abs(float(d[1]))))
+    horizontal = float(np.hypot(d[0], d[1]))
+    elevation = math.degrees(math.atan2(camera.height_m, max(horizontal, 1e-6)))
+
+    if azimuth <= VIEW_CONE_DEG:
+        view = VIEW_REAR
+        description = (
+            "Behind the court: good for footwork and court position, poor for joint angles."
+        )
+    elif azimuth >= 90.0 - VIEW_CONE_DEG:
+        view = VIEW_SIDE_ON
+        description = "Side-on: good for joint angles, poor for position along the court."
+    else:
+        view = VIEW_OBLIQUE
+        description = (
+            "Oblique: square to neither court axis, so image-plane angles are "
+            "foreshortened by an amount nothing can undo."
+        )
+
+    available, hidden = [], []
+    for name, spec in VIEW_REQUIREMENTS.items():
+        if spec["view"] == view:
+            available.append(name)
+        else:
+            hidden.append(
+                {
+                    "metric": name,
+                    "needs": spec["view"],
+                    "why": spec["why"],
+                    "fix": _view_fix(spec["view"]),
+                }
+            )
+    return {
+        "view": view,
+        "azimuth_deg": round(azimuth, 1),
+        "elevation_deg": round(elevation, 1),
+        "description": description,
+        "available": available,
+        "hidden": hidden,
+    }
+
+
+def _view_fix(view: str) -> str:
+    """Where to put the camera to unlock a view's measurements."""
+    if view == VIEW_SIDE_ON:
+        return "Film from the side of the court, level with the player, perpendicular to the net."
+    if view == VIEW_REAR:
+        return "Film from behind the baseline on the centre line, as high as you can get."
+    return "Move the camera square to one of the court's two axes."

@@ -628,7 +628,7 @@ function renderAll() {
   if (!S.state) return;
   renderInfo(); renderTrim(); renderEvents(); renderOptions();
   renderVideo(); renderTimeline(); renderPlots(); renderCourt();
-  renderStrokes(); renderCoaching();
+  renderStrokes(); renderCoaching(); renderCameraView();
 }
 
 async function refreshTabs() {
@@ -909,6 +909,24 @@ async function finishCourtPick() {
       : `Court calibrated (reprojection error ${st.court.reprojection_error_m} m)${st.court_camera_error ? ` -- net posts not usable: ${st.court_camera_error}` : ''}`);
   } catch (e) { setStatus(e.message, true); renderVideo(); }
 }
+function renderCameraView() {
+  const el = $('#camera-view');
+  if (!el) return;
+  const v = S.state && S.state.camera_view;
+  if (!v) {
+    const cal = S.state && S.state.court;
+    el.className = 'view-badge muted';
+    el.textContent = cal ? 'Camera position unknown -- click the net-post tops to unlock view-gated metrics' : '';
+    el.title = '';
+    return;
+  }
+  const n = v.available.length, total = n + v.hidden.length;
+  el.className = 'view-badge ' + (v.view === 'oblique' ? 'warn' : 'ok');
+  el.textContent = `${v.view} view, ${v.elevation_deg} deg above the court -- ${n} of ${total} view-dependent metrics available`;
+  const NL = String.fromCharCode(10);
+  el.title = v.description + NL + NL + v.hidden.map((h) => `${h.metric}: ${h.why} ${h.fix}`).join(NL);
+}
+
 function renderStrokes() {
   const panel = $('#strokes-panel');
   const sv = S.pose && S.pose.strokes;
@@ -948,6 +966,7 @@ function renderStrokes() {
 
 function renderCoaching() {
   const panel = $('#coaching-panel');
+  if (S.state && S.state.coach_level) $('#coach-level').value = S.state.coach_level;
   const advice = S.state && S.state.coaching;
   const has = !!(advice && advice.length);
   panel.classList.toggle('hidden', !has);
@@ -1193,6 +1212,7 @@ function bindUI() {
   $('#camera-side').addEventListener('change', async (e) => applyState(await api('PUT', `/api/projects/${S.pid}/options`, { camera_side: e.target.value })));
   const optionThenPose = (key) => async (e) => { applyState(await api('PUT', `/api/projects/${S.pid}/options`, { [key]: e.target.value })); await loadPose(); S.suggestions = S.pose ? S.pose.suggestions : null; renderAll(); };
   $('#movement').addEventListener('change', optionThenPose('movement'));
+  $('#coach-level').addEventListener('change', optionThenPose('coach_level'));
   $('#racket-hand').addEventListener('change', optionThenPose('racket_hand'));
   $('#lead-leg').addEventListener('change', optionThenPose('lead_leg'));
   $('#conf-threshold').addEventListener('change', async (e) => { applyState(await api('PUT', `/api/projects/${S.pid}/options`, { conf_threshold: +e.target.value })); await loadPose(); renderAll(); });

@@ -191,7 +191,11 @@ def _classify(
                 _margin(elev, DRIVE_MAX_ABS_DEG, DRIVE_MAX_ABS_DEG),
                 _margin(speed, DRIVE_MIN_SPEED_BH, DRIVE_MIN_SPEED_BH),
             )
-            return "drive", _confidence(launch, stroke, margin), f"{how} at or above the net, {where}"
+            return (
+                "drive",
+                _confidence(launch, stroke, margin),
+                f"{how} at or above the net, {where}",
+            )
         return (
             None,
             0.0,
@@ -201,7 +205,8 @@ def _classify(
 
     if elev >= LIFT_MIN_UP_DEG and speed >= LIFT_MIN_SPEED_BH:
         margin = min(
-            _margin(elev, LIFT_MIN_UP_DEG, 30.0), _margin(speed, LIFT_MIN_SPEED_BH, LIFT_MIN_SPEED_BH)
+            _margin(elev, LIFT_MIN_UP_DEG, 30.0),
+            _margin(speed, LIFT_MIN_SPEED_BH, LIFT_MIN_SPEED_BH),
         )
         return "lift", _confidence(launch, stroke, margin), f"{how} below the net, {where}"
     if 0.0 <= elev < LIFT_MIN_UP_DEG and speed <= NET_MAX_SPEED_BH and stroke.zone != "rear":

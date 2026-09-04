@@ -147,6 +147,7 @@ class Project(BaseModel):
     swap_lr: bool = False
     camera_side: Literal["left", "right", "unknown"] = "unknown"
     movement: str = "jump_smash"
+    coach_level: Literal["beginner", "club", "national", "elite"] = "club"
     racket_hand: Literal["right", "left"] = "right"
     lead_leg: Literal["auto", "left", "right"] = "auto"
     court: CourtCalibration | None = None

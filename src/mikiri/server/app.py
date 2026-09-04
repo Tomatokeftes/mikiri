@@ -66,6 +66,7 @@ class OptionsBody(BaseModel):
     movement: str | None = None
     racket_hand: str | None = None
     lead_leg: str | None = None
+    coach_level: str | None = None
 
 
 class CalibrationBody(BaseModel):

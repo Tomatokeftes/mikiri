@@ -15,6 +15,8 @@ from pathlib import Path
 import numpy as np
 
 from mikiri.angles import ANGLE_NAMES, POSITION_NAMES, SEGMENT_NAMES, AngleTable, compute_angles
+from mikiri.coaching import coach as coach_advice
+from mikiri.coaching import top_cues
 from mikiri.court import (
     COURT_LENGTH,
     DOUBLES_WIDTH,
@@ -464,6 +466,19 @@ class ProjectSession:
             calibration=calib,
         )
 
+    def camera_view(self) -> dict | None:
+        """How the camera looks at the court, and which metrics that supports.
+
+        ``None`` until the net posts have been clicked, because without them
+        the camera's position is unknown and the question cannot be answered.
+        """
+        calib = self.project.court
+        if calib is None or not calib.has_camera():
+            return None
+        from mikiri.geometry import view_class
+
+        return view_class(calib.camera)
+
     def court_uncertainty(self) -> dict | None:
         """Error ellipses across the court for display, or ``None`` without calibration.
 
@@ -485,6 +500,24 @@ class ProjectSession:
             "angle_deg": [round(float(np.degrees(v)), 1) for v in angle[ok]],
             "coverage": "95%",
         }
+
+    def coaching(self) -> list[dict] | None:
+        """Ranked coaching advice for this clip, or ``None`` without a court.
+
+        Advice needs court metres to say anything about position, so it appears
+        only once the court is calibrated. Cues are capped rather than dumped:
+        a wall of feedback is worse than three things to work on.
+        """
+        track = self.court_track()
+        if track is None or not track.metrics:
+            return None
+        strokes = self.strokes()
+        advice = coach_advice(
+            track.metrics,
+            stroke_summary(strokes) if strokes is not None else None,
+            level=self.project.coach_level,
+        )
+        return [a.to_dict() for a in top_cues(advice)]
 
     def strokes(self) -> StrokeSeries | None:
         """Detected contacts with their descriptors, or ``None`` before tracking.
@@ -598,9 +631,14 @@ class ProjectSession:
         movement: str | None = None,
         racket_hand: str | None = None,
         lead_leg: str | None = None,
+        coach_level: str | None = None,
     ) -> None:
         """Change display/analysis options."""
+        from mikiri.coaching import LEVELS
+
         with self.lock:
+            if coach_level in LEVELS:
+                self.project.coach_level = coach_level  # type: ignore[assignment]
             if swap_lr is not None:
                 self.project.swap_lr = bool(swap_lr)
             if movement in PROFILES:
@@ -877,9 +915,12 @@ class ProjectSession:
             "assessment": self.assessment() if self.raw_keypoints() is not None else None,
             "court": None if p.court is None else p.court.model_dump(),
             "court_uncertainty": self.court_uncertainty(),
+            "camera_view": self.camera_view(),
             "court_camera_error": self.court_camera_error,
             "footwork": (track.metrics if (track := self.court_track()) is not None else None),
             "strokes": (stroke_summary(sv) if (sv := self.strokes()) is not None else None),
+            "coaching": self.coaching(),
+            "coach_level": p.coach_level,
             "last_export": self.last_export,
             "meta": {
                 "preset_events": preset_events(self.profile),

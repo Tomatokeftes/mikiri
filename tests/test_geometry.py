@@ -392,3 +392,66 @@ def test_distance_uncertainty_is_a_sane_fraction_of_a_real_path():
     m = footwork_metrics(track)
     assert m["distance_m"] > 20.0
     assert m["distance_uncertainty_m"] < 0.25 * m["distance_m"]
+
+
+# --- which view the camera has, and what it therefore supports -------------------
+
+
+@pytest.mark.parametrize(
+    "ground,height,expect",
+    [
+        ((3.05, -5.0), 3.0, "rear"),  # behind the baseline
+        ((3.05, -12.0), 6.0, "rear"),  # further back, still rear
+        ((-6.0, 6.7), 2.5, "side-on"),  # level with the net, out to the side
+        ((12.0, 6.7), 3.0, "side-on"),  # the other side
+        ((-4.0, -2.0), 3.0, "oblique"),  # a corner
+        ((-5.0, 0.0), 3.0, "oblique"),
+    ],
+)
+def test_view_class_matches_where_the_camera_is(ground, height, expect):
+    from mikiri.geometry import view_class
+
+    got = view_class(CameraGeometry(ground_point=list(ground), height_m=height))
+    assert got["view"] == expect, got
+
+
+def test_view_gates_the_metrics_that_need_the_other_axis():
+    """A side-on camera must not offer stance width, and vice versa."""
+    from mikiri.geometry import view_class
+
+    side = view_class(CameraGeometry(ground_point=[-6.0, 6.7], height_m=2.5))
+    rear = view_class(CameraGeometry(ground_point=[3.05, -5.0], height_m=3.0))
+
+    assert "trunk_lean" in side["available"] and "stance_width" not in side["available"]
+    assert "stance_width" in rear["available"] and "trunk_lean" not in rear["available"]
+    # Everything hidden carries a reason and a fix, never a bare absence.
+    for payload in (side, rear):
+        assert payload["hidden"]
+        for h in payload["hidden"]:
+            assert h["why"] and h["fix"] and h["needs"]
+
+
+def test_oblique_view_offers_no_image_plane_angles_at_all():
+    from mikiri.geometry import view_class
+
+    got = view_class(CameraGeometry(ground_point=[-4.0, -2.0], height_m=3.0))
+    assert got["available"] == []
+    assert len(got["hidden"]) == 7
+    assert "foreshortened" in got["description"]
+
+
+def test_elevation_rises_with_camera_height():
+    from mikiri.geometry import view_class
+
+    low = view_class(CameraGeometry(ground_point=[3.05, -5.0], height_m=1.6))
+    high = view_class(CameraGeometry(ground_point=[3.05, -5.0], height_m=8.0))
+    assert high["elevation_deg"] > low["elevation_deg"]
+    assert 0.0 < low["elevation_deg"] < 90.0
+
+
+def test_view_payload_is_json_ready():
+    import json
+
+    from mikiri.geometry import view_class
+
+    json.dumps(view_class(CameraGeometry(ground_point=[3.05, -5.0], height_m=3.0)))

@@ -147,6 +147,27 @@ MAX_RADIUS_FRACTION = 0.25
 MAX_COAST_FRAMES = 3
 #: Detections a tracklet needs before it is believed at all.
 MIN_TRACKLET_POINTS = 3
+#: Slowest a believed tracklet may travel, as multiples of the expected shuttle
+#: footprint per frame. A shuttle in play covers at least its own width between
+#: frames; at 30 fps and a seven-pixel footprint that is about 2 m/s, slower
+#: than a shuttle that has already landed. The blobs this rejects are almost
+#: always fragments of a player's own moving edge, which survive the erosion,
+#: are exactly shuttle-sized, and drift along at the player's pace in a
+#: beautifully consistent line -- the single most convincing false positive
+#: this detector produces.
+MIN_TRACKLET_STEP_FACTOR = 1.0
+#: Least straight a believed tracklet may be: net displacement divided by the
+#: distance actually covered. A shuttle between two racket contacts flies a
+#: smooth convex arc and never doubles back on itself in the image, so its
+#: tracklets sit near 1.0; a chain that hops between two parts of the same
+#: player sits near 0. The honest exception is a very high lift seen side-on,
+#: which really does come back down its own path -- a tracklet spanning that
+#: apex is dropped, and the flight is picked up again as two shorter ones.
+MIN_PATH_EFFICIENCY = 0.5
+#: Ceiling on how many seed pairs the tracklet builder will consider, best
+#: evidence first. Bounds the cost on a clip whose every frame is full of
+#: motion; a clip that needs more than this was never going to track anyway.
+MAX_SEEDS = 4000
 #: Longest gap, in frames, across which two tracklets may be linked.
 MAX_LINK_GAP_FRAMES = 8
 #: Slack allowed when checking that a linked tracklet starts where the previous
@@ -290,7 +311,9 @@ class Launch:
 
     def elevation_deg(self) -> float:
         """Signed angle above the horizon, in ``[-90, 90]``, ignoring left/right."""
-        return float(math.degrees(math.asin(max(-1.0, min(1.0, math.sin(math.radians(self.direction_deg)))))))
+        return float(
+            math.degrees(math.asin(max(-1.0, min(1.0, math.sin(math.radians(self.direction_deg))))))
+        )
 
     def to_dict(self) -> dict:
         """JSON-friendly view (rounded)."""
@@ -673,6 +696,25 @@ class _Tracklet:
         mean = float(np.mean([s for s, d in zip(self.scores, self.detected) if d]))
         return n + mean
 
+    def mean_step_px(self) -> float:
+        """Mean distance travelled between consecutive frames, in pixels."""
+        p = np.asarray(self.points, dtype=float)
+        if p.shape[0] < 2:
+            return 0.0
+        steps = np.diff(p, axis=0)
+        return float(np.mean(np.hypot(steps[:, 0], steps[:, 1])))
+
+    def path_efficiency(self) -> float:
+        """Net displacement over distance covered, in ``[0, 1]``."""
+        p = np.asarray(self.points, dtype=float)
+        if p.shape[0] < 2:
+            return 0.0
+        steps = np.diff(p, axis=0)
+        path = float(np.hypot(steps[:, 0], steps[:, 1]).sum())
+        if path <= 1e-9:
+            return 0.0
+        return float(np.hypot(*(p[-1] - p[0])) / path)
+
 
 def _extend(
     cands: list[list[Candidate]],
@@ -682,7 +724,15 @@ def _extend(
     b: int,
     max_radius: float,
 ) -> _Tracklet:
-    """Grow a seeded pair forward with the constant-acceleration gate."""
+    """Grow a seeded pair forward with the constant-acceleration gate.
+
+    A matched *stale* candidate contributes its position but is never recorded
+    as a detection: it is where the shuttle was several frames ago, not a
+    measurement of where it is now, and calling it one would quietly corrupt
+    every speed computed downstream. It also still costs a frame of the coast
+    budget, so a tracklet can ride the accumulated trail through a stall but
+    cannot follow it indefinitely.
+    """
     frames = [first, first + 1]
     points = [cands[first][a].centre, cands[first + 1][b].centre]
     scores = [cands[first][a].score, cands[first + 1][b].score]
@@ -706,11 +756,17 @@ def _extend(
                 best_s, best_idx = s, j
         frames.append(t)
         if best_idx >= 0:
-            points.append(cands[t][best_idx].centre)
-            scores.append(cands[t][best_idx].score)
-            detected.append(True)
+            hit = cands[t][best_idx]
+            points.append(hit.centre)
             claims.append((t, best_idx))
-            miss = 0
+            if hit.stale:
+                scores.append(float("nan"))
+                detected.append(False)
+                miss += 1
+            else:
+                scores.append(hit.score)
+                detected.append(True)
+                miss = 0
         else:
             points.append((float(pred[0]), float(pred[1])))
             scores.append(float("nan"))
@@ -725,39 +781,105 @@ def _extend(
     return _Tracklet(frames, points, scores, detected, claims)
 
 
-def _build_tracklets(cands: list[list[Candidate]], width: int) -> list[_Tracklet]:
-    """Greedy tracklet construction over per-frame candidate lists.
+def _build_tracklets(
+    cands: list[list[Candidate]], width: int, expected_px: float = DEFAULT_SHUTTLE_PX
+) -> list[_Tracklet]:
+    """Build tracklets from the strongest evidence first.
 
-    Only fresh candidates may seed a tracklet. A stale one is where the shuttle
-    was a few frames ago, and since the whole trail travels at the shuttle's own
-    velocity, a trail seed would build a perfectly self-consistent tracklet that
-    lags the truth -- the one way accumulated differencing can quietly ruin a
-    track. Stale candidates remain available to *extend* a tracklet, which is
-    what carries a stalled shuttle through its hang time.
+    Seeds are tried in descending order of the two candidates' own scores
+    rather than in frame order, and that ordering matters far more than it
+    looks. A frame-ordered pass lets an early seed on a weak blob claim
+    candidates the real shuttle needs several frames later, and the real track
+    is then starved into fragments while the weak one grows fat. Working
+    best-evidence-first lets the shuttle claim its own chain before anything
+    else gets a turn.
+
+    Only fresh candidates may seed. A stale one is where the shuttle *was* a
+    few frames ago, and since the whole accumulated trail travels at the
+    shuttle's own velocity, a trail seed builds a perfectly self-consistent
+    tracklet that lags the truth -- the one way accumulated differencing can
+    quietly ruin a track. Stale candidates stay available to *extend* a
+    tracklet, which is what carries a stalled shuttle through its hang time.
+
+    Args:
+        cands: Per-frame candidate lists.
+        width: Frame width in pixels, which sets the association radii.
+        expected_px: Expected shuttle footprint, which sets the speed floor.
+
+    Returns:
+        Accepted tracklets, in the order they were built.
     """
     n = len(cands)
     claimed: list[set[int]] = [set() for _ in range(n)]
     seed_radius = max(GATE_BASE_PX, SEED_RADIUS_FRACTION * width)
     max_radius = max(GATE_BASE_PX, MAX_RADIUS_FRACTION * width)
-    out: list[_Tracklet] = []
+    min_step = MIN_TRACKLET_STEP_FACTOR * max(float(expected_px), MIN_SHUTTLE_PX)
+
+    seeds: list[tuple[float, int, int, int]] = []
     for i in range(n - 1):
         for a, ca in enumerate(cands[i]):
-            if a in claimed[i] or ca.stale:
+            if ca.stale:
                 continue
-            best: _Tracklet | None = None
             for b, cb in enumerate(cands[i + 1]):
-                if b in claimed[i + 1] or cb.stale:
+                if cb.stale:
                     continue
-                if math.hypot(cb.centre[0] - ca.centre[0], cb.centre[1] - ca.centre[1]) > seed_radius:
+                step = math.hypot(cb.centre[0] - ca.centre[0], cb.centre[1] - ca.centre[1])
+                if step > seed_radius:
                     continue
-                tl = _extend(cands, claimed, i, a, b, max_radius)
-                if best is None or tl.quality() > best.quality():
-                    best = tl
-            if best is not None and sum(best.detected) >= MIN_TRACKLET_POINTS:
-                for f, idx in best.claims:
-                    claimed[f].add(idx)
-                out.append(best)
+                seeds.append((ca.score + cb.score, i, a, b))
+    seeds.sort(key=lambda s: s[0], reverse=True)
+
+    out: list[_Tracklet] = []
+    for _, i, a, b in seeds[:MAX_SEEDS]:
+        if a in claimed[i] or b in claimed[i + 1]:
+            continue
+        tl = _extend(cands, claimed, i, a, b, max_radius)
+        if sum(tl.detected) < MIN_TRACKLET_POINTS or tl.mean_step_px() < min_step:
+            continue
+        if tl.path_efficiency() < MIN_PATH_EFFICIENCY:
+            continue
+        for f, idx in tl.claims:
+            claimed[f].add(idx)
+        out.append(tl)
     return out
+
+
+def _free_run(tl: _Tracklet, taken: np.ndarray) -> _Tracklet | None:
+    """Longest stretch of a tracklet whose frames are all still unclaimed.
+
+    Trimming rather than rejecting matters at the seams: a strong tracklet
+    routinely overlaps a weaker one by a frame or two, and throwing the weaker
+    one away whole would leave a hole where it had perfectly good detections.
+    """
+    best: tuple[int, int] | None = None
+    start: int | None = None
+    for k, f in enumerate(tl.frames):
+        if taken[f]:
+            start = None
+            continue
+        if start is None:
+            start = k
+        if best is None or (k - start) > (best[1] - best[0]):
+            best = (start, k)
+    if best is None:
+        return None
+    a, b = best
+    while b >= a and not tl.detected[b]:
+        b -= 1
+    while a <= b and not tl.detected[a]:
+        a += 1
+    if b < a:
+        return None
+    sub = _Tracklet(
+        frames=tl.frames[a : b + 1],
+        points=tl.points[a : b + 1],
+        scores=tl.scores[a : b + 1],
+        detected=tl.detected[a : b + 1],
+        claims=[],
+    )
+    if sum(sub.detected) < MIN_TRACKLET_POINTS:
+        return None
+    return sub
 
 
 def _select(tracklets: list[_Tracklet], n: int) -> list[_Tracklet]:
@@ -765,11 +887,12 @@ def _select(tracklets: list[_Tracklet], n: int) -> list[_Tracklet]:
     taken = np.zeros(n, dtype=bool)
     chosen: list[_Tracklet] = []
     for tl in sorted(tracklets, key=lambda t: t.quality(), reverse=True):
-        if any(taken[f] for f in tl.frames):
+        sub = _free_run(tl, taken)
+        if sub is None:
             continue
-        for f in tl.frames:
+        for f in sub.frames:
             taken[f] = True
-        chosen.append(tl)
+        chosen.append(sub)
     chosen.sort(key=lambda t: t.frames[0])
     return chosen
 
@@ -893,7 +1016,7 @@ def track_shuttle(
 
     if width == 0:
         return empty
-    chosen = _select(_build_tracklets(cands, width), n)
+    chosen = _select(_build_tracklets(cands, width, size_px or DEFAULT_SHUTTLE_PX), n)
     if not chosen:
         return empty
 
@@ -945,9 +1068,7 @@ def _player_blob_cap(player_boxes: dict[int, list] | None, frame: int) -> float 
     return float(MAX_BLOB_PLAYER_FRACTION * min(diagonals))
 
 
-def initial_speed(
-    distance_m: float, dt_s: float, drag_length_m: float = DRAG_LENGTH_M
-) -> float:
+def initial_speed(distance_m: float, dt_s: float, drag_length_m: float = DRAG_LENGTH_M) -> float:
     """Speed at the start of a span, corrected for quadratic drag.
 
     Under ``dV/dt = -V^2 / L`` the distance covered in time ``t`` is
@@ -1150,7 +1271,9 @@ def launch_after_hit(
         else:
             centre, radius = anchor, max_step * k
         disc = np.zeros(shape[:2], dtype=np.uint8)
-        cv2.circle(disc, (int(round(centre[0])), int(round(centre[1]))), int(round(radius)), 255, -1)
+        cv2.circle(
+            disc, (int(round(centre[0])), int(round(centre[1]))), int(round(radius)), 255, -1
+        )
         if mask_court is not None:
             disc = cv2.bitwise_and(disc, mask_court)
         found = None
@@ -1166,7 +1289,10 @@ def launch_after_hit(
             d = math.hypot(c.centre[0] - centre[0], c.centre[1] - centre[1])
             if d > radius:
                 continue
-            if not points and math.hypot(c.centre[0] - anchor[0], c.centre[1] - anchor[1]) < min_step * k:
+            if (
+                not points
+                and math.hypot(c.centre[0] - anchor[0], c.centre[1] - anchor[1]) < min_step * k
+            ):
                 continue  # still on the racket or the hand, not a launched shuttle
             s = SCORE_BLOB_WEIGHT * c.score + SCORE_DISTANCE_WEIGHT * max(
                 0.0, 1.0 - d / max(radius, 1e-6)

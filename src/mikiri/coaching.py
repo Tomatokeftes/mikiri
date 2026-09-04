@@ -72,11 +72,14 @@ __all__ = [
     "BANDS",
     "LEVELS",
     "METRICS",
+    "NEUTRAL_TITLES",
     "REFUSED",
     "Advice",
     "Band",
+    "MetricDef",
     "Trust",
     "assess_trust",
+    "band_file",
     "bands_for",
     "coach",
     "compare_sessions",
@@ -1839,7 +1842,12 @@ def top_cues(advice: list[Advice], n: int = MAX_CUES) -> list[Advice]:
     return ranked[: max(0, int(n))]
 
 
-def session_summary(advice: list[Advice], footwork: dict, strokes: dict | None = None) -> dict:
+def session_summary(
+    advice: list[Advice],
+    footwork: dict,
+    strokes: dict | None = None,
+    trust: dict | None = None,
+) -> dict:
     """One session as a JSON-friendly record: counts, cues, values and quality.
 
     The ``values`` block is what :func:`compare_sessions` reads, so summaries
@@ -1849,6 +1857,9 @@ def session_summary(advice: list[Advice], footwork: dict, strokes: dict | None =
         advice: Output of :func:`coach` for this session.
         footwork: The footwork metrics the advice was built from.
         strokes: The stroke summary, when there was one.
+        trust: The same measurement-quality flags passed to :func:`coach`. Pass
+            them here too, or the recorded quality will disagree with the
+            quality the advice was actually built under.
 
     Returns:
         A dict with ``counts``, ``headline``, ``top_cues``, ``advice``,
@@ -1859,7 +1870,7 @@ def session_summary(advice: list[Advice], footwork: dict, strokes: dict | None =
     for a in items:
         counts[a.severity] = counts.get(a.severity, 0) + 1
     cues = top_cues(items)
-    quality = assess_trust(footwork)
+    quality = assess_trust(footwork, trust)
     fw = footwork if isinstance(footwork, dict) else {}
     st = strokes if isinstance(strokes, dict) else {}
     if not quality.positional_ok():
