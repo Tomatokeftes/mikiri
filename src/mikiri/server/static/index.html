@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikiri</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">Mikiri <span class="sub">2D side-on video biomechanics</span></div>
+  <div id="project-tabs" class="tabs"></div>
+  <div class="spacer"></div>
+  <button id="open-btn" class="btn">Open video</button>
+  <button id="open-project-btn" class="btn">Open project</button>
+  <button id="save-btn" class="btn" disabled>Save</button>
+  <button id="export-btn" class="btn" disabled>Export pack</button>
+  <button id="compare-btn" class="btn" disabled>Compare</button>
+  <button id="settings-btn" class="btn">Settings</button>
+</header>
+
+<main id="main" class="no-project">
+  <section id="welcome">
+    <h1>Load a clip to begin</h1>
+    <p>Film side-on, 4 to 5 m back, camera at hip to chest height, 120 fps or more.
+       Mikiri measures angles in the image plane: it is a single-camera 2D tool.</p>
+    <div class="welcome-actions">
+      <button class="btn primary" id="welcome-open">Open video</button>
+      <button class="btn" id="welcome-open-project">Open project</button>
+    </div>
+    <div class="open-inline">
+      <input id="open-path-input" type="text" placeholder="...or paste a path to a video / .mikiri.json and press Enter">
+      <button class="btn" id="open-path-btn">Open path</button>
+      <label class="btn file-btn">Upload<input id="upload-input" type="file" accept="video/*,.mp4,.mov,.m4v,.avi,.mkv"></label>
+    </div>
+  </section>
+
+  <section id="workspace">
+    <div id="video-column">
+      <div id="video-info" class="info-row"></div>
+      <div id="video-wrap" class="video-wrap">
+        <canvas id="video-canvas"></canvas>
+        <div id="video-overlay-msg" class="overlay-msg hidden"></div>
+      </div>
+      <div id="compare-wrap" class="video-wrap hidden">
+        <canvas id="compare-canvas"></canvas>
+        <div class="compare-label" id="compare-label"></div>
+      </div>
+      <div class="controls">
+        <button id="play-btn" class="btn icon" title="Space">Play</button>
+        <button id="prev-frame" class="btn icon" title="Left arrow">-1</button>
+        <button id="next-frame" class="btn icon" title="Right arrow">+1</button>
+        <label>Speed
+          <select id="speed">
+            <option value="0.1">0.1x</option><option value="0.25">0.25x</option>
+            <option value="0.5">0.5x</option><option value="1" selected>1x</option>
+          </select>
+        </label>
+        <span class="frame-readout">Frame <b id="frame-number">0</b> / <span id="frame-total">0</span>
+          <span id="frame-time">0.000 s</span></span>
+        <label class="chk"><input type="checkbox" id="show-skeleton" checked> Skeleton</label>
+        <label class="chk"><input type="checkbox" id="show-labels"> Labels</label>
+        <label class="chk"><input type="checkbox" id="swap-lr"> Swap L/R</label>
+        <label class="chk"><input type="checkbox" id="edit-toggle"> Edit keypoints</label>
+        <button id="undo-btn" class="btn icon" title="Ctrl+Z" disabled>Undo</button>
+        <button id="redo-btn" class="btn icon" title="Ctrl+Y" disabled>Redo</button>
+      </div>
+      <div id="timeline" class="timeline">
+        <canvas id="timeline-canvas"></canvas>
+      </div>
+      <div class="trim-row">
+        <button class="btn small" id="set-in">Set in (I)</button>
+        <input id="trim-in" type="number" min="0" value="0">
+        <button class="btn small" id="set-out">Set out (O)</button>
+        <input id="trim-out" type="number" min="0" value="0">
+        <span id="trim-summary" class="muted"></span>
+        <span class="spacer"></span>
+        <button class="btn primary" id="run-btn">Run tracking</button>
+      </div>
+      <div id="edit-panel" class="panel hidden">
+        <div class="panel-title">Keypoint correction</div>
+        <p class="muted small-text">Drag a joint to fix it. Right-click a magenta (corrected) joint to remove the correction. Corrected points stay fixed when smoothing is on.</p>
+        <div class="row">
+          <label>Joint <select id="interp-joint"></select></label>
+          <label>From <input id="interp-start" type="number" min="0"></label>
+          <label>To <input id="interp-end" type="number" min="0"></label>
+          <button class="btn small" id="interp-btn">Interpolate between</button>
+          <button class="btn small" id="clear-corrections-btn">Clear all corrections</button>
+        </div>
+        <div class="row">
+          <label>Smoothing
+            <select id="smooth-method">
+              <option value="none">off</option>
+              <option value="savgol">Savitzky-Golay</option>
+              <option value="butterworth">Butterworth</option>
+            </select>
+          </label>
+          <label id="smooth-savgol-opts">window <input id="smooth-window" type="number" min="3" max="201" step="2" value="7"> order <input id="smooth-poly" type="number" min="1" max="5" value="2"></label>
+          <label id="smooth-butter-opts" class="hidden">cutoff Hz <input id="smooth-cutoff" type="number" min="0.5" max="100" step="0.5" value="6"> order <input id="smooth-order" type="number" min="1" max="8" value="4"></label>
+          <button class="btn small" id="smooth-apply">Apply</button>
+        </div>
+        <div id="corrections-summary" class="muted small-text"></div>
+      </div>
+    </div>
+
+    <div id="side-column">
+      <div class="panel">
+        <div class="panel-title">Events <span class="muted small-text">(mark on the current frame)</span>
+          <span class="spacer"></span>
+          <label class="small-text">Movement <select id="movement"></select></label>
+        </div>
+        <div id="movement-desc" class="muted small-text"></div>
+        <div id="event-presets" class="preset-row"></div>
+        <div class="row">
+          <input id="custom-event-name" type="text" placeholder="custom event name">
+          <button class="btn small" id="custom-event-btn">Add</button>
+          <span class="spacer"></span>
+          <button class="btn small" id="suggest-btn">Auto-detect takeoff / landing</button>
+        </div>
+        <div id="suggestions" class="suggestions hidden"></div>
+        <ul id="events-list" class="events-list"></ul>
+        <div id="metrics" class="metrics"></div>
+      </div>
+
+      <div class="panel" id="assessment-panel">
+        <div class="panel-title">Assessment <span class="muted small-text" id="assessment-sub">against the movement's reference bands</span></div>
+        <table id="assessment-table" class="assessment"></table>
+        <div id="assessment-cues" class="muted small-text"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">Angles <span class="muted small-text">image-plane, degrees; click a plot to seek</span>
+          <span class="spacer"></span>
+          <button class="btn small" id="calib-btn">Scale calibration</button>
+        </div>
+        <div id="angle-toggles" class="toggle-row"></div>
+        <div id="plots" class="plots"></div>
+        <div id="current-values" class="current-values"></div>
+      </div>
+      <div class="panel options">
+        <div class="panel-title">Project options</div>
+        <div class="row">
+          <label>Camera sees the athlete's
+            <select id="camera-side"><option value="unknown">unknown</option><option value="left">left side</option><option value="right">right side</option></select>
+          </label>
+          <label>Confidence threshold <input id="conf-threshold" type="number" min="0" max="1" step="0.05" value="0.3"></label>
+          <label>Racket hand <select id="racket-hand"><option value="right">right</option><option value="left">left</option></select></label>
+          <label>Lunge lead leg <select id="lead-leg"><option value="auto">auto</option><option value="left">left</option><option value="right">right</option></select></label>
+        </div>
+        <div class="row"><label class="grow">Notes <input id="notes" type="text" placeholder="notes go into summary.md"></label></div>
+        <div id="tracking-info" class="muted small-text"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer id="statusbar"><span id="status">Ready</span></footer>
+
+<!-- modals -->
+<div id="modal-root" class="hidden">
+  <div class="modal-backdrop"></div>
+
+  <div class="modal hidden" id="modal-open">
+    <div class="modal-title">Open <span id="open-kind-label">video</span></div>
+    <div class="row">
+      <button class="btn small" id="native-dialog-btn">System file dialog</button>
+      <span class="muted small-text">or browse below</span>
+    </div>
+    <div class="row"><input id="browse-path" type="text" class="grow"><button class="btn small" id="browse-go">Go</button></div>
+    <div id="browse-drives" class="row"></div>
+    <ul id="browse-list" class="browse-list"></ul>
+    <div class="modal-actions"><button class="btn" data-close>Cancel</button></div>
+  </div>
+
+  <div class="modal hidden" id="modal-run">
+    <div class="modal-title">Run tracking</div>
+    <p class="muted small-text" id="run-hint">Click the athlete to track. Default: the largest person.</p>
+    <div class="select-wrap"><canvas id="select-canvas"></canvas></div>
+    <div id="run-model-status" class="muted small-text"></div>
+    <div id="job-box" class="hidden">
+      <div class="progress"><div id="job-progress" class="progress-bar"></div></div>
+      <div id="job-message" class="small-text"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="run-cancel-job" class="hidden">Cancel job</button>
+      <button class="btn" data-close id="run-close">Close</button>
+      <button class="btn primary" id="run-largest">Track largest person</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="modal-export">
+    <div class="modal-title">Export pack</div>
+    <div class="col">
+      <label class="chk"><input type="checkbox" id="exp-videos" checked> Include overlay.mp4 and stick.mp4 (large)</label>
+      <label>Slow-motion factor <input id="exp-slowmo" type="number" min="1" max="16" value="1"></label>
+      <label>Contact sheet every N frames <input id="exp-every" type="number" min="1" max="1000" value="5"></label>
+      <label class="chk"><input type="checkbox" id="exp-zip" checked> Also write a .zip</label>
+      <label>Output folder <input id="exp-out" type="text" class="grow" placeholder="default: Mikiri exports folder"> <button class="btn small" id="exp-browse">Browse</button></label>
+    </div>
+    <div id="export-job" class="hidden">
+      <div class="progress"><div id="export-progress" class="progress-bar"></div></div>
+      <div id="export-message" class="small-text"></div>
+    </div>
+    <div id="export-result" class="small-text"></div>
+    <div class="modal-actions">
+      <button class="btn" data-close>Close</button>
+      <button class="btn primary" id="export-run">Export</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="modal-settings">
+    <div class="modal-title">Settings</div>
+    <div class="col" id="settings-form">
+      <label>Pose backend
+        <select id="set-backend"><option value="rtmlib">rtmlib (RTMPose, recommended)</option><option value="mediapipe">MediaPipe PoseLandmarker</option><option value="synthetic">synthetic (demo ground truth, tests only)</option></select>
+      </label>
+      <label>RTMPose mode <select id="set-rtmlib-mode"><option value="lightweight">lightweight (fastest)</option><option value="balanced">balanced</option><option value="performance">performance (slowest, most accurate)</option></select></label>
+      <label>MediaPipe model <select id="set-mp-model"><option value="lite">lite</option><option value="full">full</option><option value="heavy">heavy</option></select></label>
+      <label>Local YOLOX .onnx (optional) <input id="set-det-path" type="text" class="grow"></label>
+      <label>Local RTMPose .onnx (optional) <input id="set-pose-path" type="text" class="grow"></label>
+      <label>Local MediaPipe .task (optional) <input id="set-mp-path" type="text" class="grow"></label>
+      <label>Models folder <input id="set-models-dir" type="text" class="grow"></label>
+      <label class="chk"><input type="checkbox" id="set-allow-download"> Allow model download on first run (only network use of the app)</label>
+      <label>Processing downscale, longest side px <input id="set-downscale" type="number" min="256" max="4096" step="64"></label>
+      <label>Run person detector every N frames <input id="set-det-every" type="number" min="1" max="60"></label>
+      <label>Detector score threshold <input id="set-det-thr" type="number" min="0.05" max="0.95" step="0.05"></label>
+      <label>Default keypoint confidence threshold <input id="set-conf" type="number" min="0" max="1" step="0.05"></label>
+      <label>Cached frame size, longest side px <input id="set-frame-longest" type="number" min="256" max="4096" step="64"></label>
+      <label>ONNX Runtime threads (0 = auto) <input id="set-ort-threads" type="number" min="0" max="128"></label>
+    </div>
+    <div id="model-status" class="small-text"></div>
+    <div class="modal-actions">
+      <button class="btn" data-close>Close</button>
+      <button class="btn primary" id="settings-save">Save settings</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="modal-calib">
+    <div class="modal-title">Scale calibration</div>
+    <p class="muted small-text">Converts pixels to centimetres for hip height, loading depth and jump height.</p>
+    <div class="col">
+      <label>Athlete height (cm) <input id="calib-height" type="number" min="100" max="250" step="0.5" value="175"></label>
+      <button class="btn small" id="calib-height-btn">Use height on current frame</button>
+      <div class="muted small-text">or</div>
+      <label>Known distance (cm) <input id="calib-dist" type="number" min="1" step="0.5" value="100"></label>
+      <button class="btn small" id="calib-points-btn">Click two points on the video</button>
+      <div id="calib-status" class="small-text"></div>
+      <button class="btn small" id="calib-clear-btn">Clear calibration</button>
+    </div>
+    <div class="modal-actions"><button class="btn" data-close>Close</button></div>
+  </div>
+
+  <div class="modal hidden" id="modal-compare">
+    <div class="modal-title">Compare with another project</div>
+    <div class="col">
+      <label>Project <select id="compare-project"></select></label>
+      <label>Align on event <select id="compare-event"></select></label>
+      <p class="muted small-text">Open the second clip first (Open video / Open project). Scrubbers are synchronised so the chosen event happens at the same time in both.</p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="compare-off">Turn off</button>
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="compare-start">Compare</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

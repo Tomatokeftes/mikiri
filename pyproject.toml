@@ -1,0 +1,101 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mikiri"
+version = "0.1.0"
+description = "Local video biomechanics app for badminton: pose tracking, joint angles, events and export packs."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Mikiri" }]
+keywords = ["badminton", "biomechanics", "pose-estimation", "video-analysis"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering",
+]
+# Pinned to the versions verified to install together on Windows 11 with
+# CPython 3.11.15 (see DECISIONS.md). Loosen at your own risk.
+dependencies = [
+  "numpy==2.4.6",
+  "scipy==1.17.1",
+  "opencv-contrib-python==5.0.0.93",
+  "onnxruntime==1.29.0",
+  "rtmlib==0.0.16",
+  "mediapipe==0.10.35",
+  "fastapi==0.141.1",
+  "uvicorn[standard]==0.52.4",
+  "pydantic==2.13.5",
+  "python-multipart==0.0.32",
+  "imageio-ffmpeg==0.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1",
+  "pytest-timeout==2.4.0",
+  "httpx==0.28.1",
+  "playwright==1.62.0",
+  "ruff==0.16.5",
+]
+
+[project.scripts]
+mikiri = "mikiri.cli:main"
+
+[project.urls]
+Documentation = "README.md"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"mikiri.server" = ["static/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["demo", "docs", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "N", "D1"]
+ignore = [
+  "D100", # module docstrings are present where they help; tests are exempt
+  "D104",
+  "D105",
+  "D107",
+  "N802",
+  "N803",
+  "N806", # numpy style short upper-case locals (P, L1) are fine in maths code
+  "B905",
+  "B008",
+  "E501", # line length handled by the formatter
+  "UP007",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/mikiri/movements.py" = ["D103"]  # metric functions are documented by their MetricDef
+"tests/*" = ["D", "B011"]
+"scripts/*" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 900
+markers = [
+  "slow: runs the real pose model on the demo clip (minutes on CPU)",
+  "ui: drives the web UI with Playwright",
+]
+addopts = "-ra"
+filterwarnings = ["ignore::DeprecationWarning"]

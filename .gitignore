@@ -1,0 +1,21 @@
+!demo/*.mikiri.json
+# Footage and generated media stay out of the repository
+*.egg-info/
+*.mikiri.json
+*.pyc
+*.tmp
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+build/
+demo/*.MOV
+demo/*.MP4
+demo/*.mov
+demo/*.mp4
+demo/demo.tmp.mp4
+demo/demo_truth.json
+dist/
+exports/
+tests/_out/
+*.jumplab.json

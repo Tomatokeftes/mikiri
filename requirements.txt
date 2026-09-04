@@ -1,0 +1,22 @@
+# Runtime dependencies, pinned to versions verified to install together on
+# Windows 11 / CPython 3.11.15 (September 2026). `pip install -e .` installs the
+# same set from pyproject.toml; this file exists for people who prefer
+# `pip install -r requirements.txt`.
+numpy==2.4.6
+scipy==1.17.1
+opencv-contrib-python==5.0.0.93
+onnxruntime==1.29.0
+rtmlib==0.0.16
+mediapipe==0.10.35
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.5
+python-multipart==0.0.32
+imageio-ffmpeg==0.6.0
+
+# Development / test extras (also available as `pip install -e .[dev]`)
+pytest==9.1.1
+pytest-timeout==2.4.0
+httpx==0.28.1
+playwright==1.62.0
+ruff==0.16.5
