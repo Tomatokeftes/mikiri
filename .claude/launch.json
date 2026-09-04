@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mikiri",
+      "runtimeExecutable": "C:/Users/P70078823/Desktop/Badminton App/.venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "mikiri", "--no-browser", "--port", "8791"],
+      "port": 8791
+    }
+  ]
+}

@@ -517,13 +517,27 @@ def footwork_metrics(track: CourtTrack, base: tuple[float, float] | None = None)
                     1,
                 ),
             }
-            # Path length is a sum of independent steps, so its error grows as
-            # the square root of the step count rather than linearly. Built from
-            # the one-sigma axis, then widened once to stay a 95% figure.
+            # Path length accumulates step errors in quadrature, but the steps
+            # are not independent: positions are smoothed over a window first,
+            # so successive errors are strongly correlated and largely cancel in
+            # the difference. Counting every frame as an independent sample
+            # inflates this figure by roughly the square root of the window --
+            # on a four-second clip it turned a believable metre into 2.65 m.
+            # Divide by the same window build_track smooths with.
+            #
+            # Still an upper bound: the calibration part of the covariance is a
+            # systematic warp shared by every frame, so it acts on the path as a
+            # scale error rather than accumulating. Erring high is the safe
+            # direction for a figure whose job is to say how much to trust the
+            # number beside it.
             n_steps = max(int(ok.sum()) - 1, 1)
+            window = max(5, int(round(0.2 * track.fps)) | 1)
+            independent = max(1.0, n_steps / window)
             fin = np.isfinite(sigma_major)
             step_sigma = float(np.nanmedian(sigma_major[fin])) * math.sqrt(2.0)
-            out["distance_uncertainty_m"] = round(NSIGMA_95 * step_sigma * math.sqrt(n_steps), 2)
+            out["distance_uncertainty_m"] = round(
+                NSIGMA_95 * step_sigma * math.sqrt(independent), 2
+            )
 
         # Where the player lived, as a shape rather than a picture. The
         # literature's elite signature is a centroid near the court centre and

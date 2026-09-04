@@ -135,8 +135,19 @@ DISTANCE_PER_RALLY_PHASES: dict[str, tuple[float, float, float]] = {
     "high_school": (22.7, 17.3, 20.0),
 }
 
-#: Sustained mean movement speed reported for elite players, m/s.
+#: Sustained mean movement speed reported for elite players, m/s. The published
+#: figure is in-rally movement. Mikiri's ``avg_speed_mps`` is distance over the
+#: whole measured clip, so on an untrimmed session it measures something else.
 ELITE_SPEED_MPS: tuple[float, float] = (2.2, 2.6)
+
+#: Above this share of the clip spent between rallies, whole-clip speed and
+#: per-rally distance stop being comparable to the published in-rally figures:
+#: rest dilutes the first and inflates the second. Past it both are reported
+#: without a verdict rather than compared to a band they do not belong to.
+REST_SHARE_LIMIT = 0.25
+#: Below this share of rest the clip looks trimmed to rallies, so there is no
+#: rest interval left to compute a work density from.
+TRIMMED_CLIP_REST_SHARE = 0.10
 
 #: Published shot-origin split as (back court, net court) fractions. Two
 #: sources: 36.6/60.3 and 39.5/47.8 percent. Mikiri's zones are a three-way
@@ -189,6 +200,23 @@ POSITIONAL_IDS = frozenset(
         "stroke_origin_split",
     }
 )
+
+#: Titles used when a point cannot be judged. A withheld verdict must not leave
+#: a verdict-shaped title behind: "Coverage is evenly shaped" above a body that
+#: says the measurement cannot support that claim is the quiet kind of wrong.
+NEUTRAL_TITLES: dict[str, str] = {
+    "coverage_centre": "Where your coverage was centred",
+    "coverage_spread": "The shape of the area you covered",
+    "recovery_to_base": "How far from base you played",
+    "distance_per_rally": "Ground covered per rally",
+    "movement_speed": "Movement speed",
+    "speed_variability": "How sharply you change pace",
+    "left_right_balance": "Left and right court time",
+    "front_back_balance": "Front and rear court time",
+    "zone_occupancy": "Where your court time went",
+    "stroke_origin_split": "Where your shots were played from",
+    "contact_height_mix": "How high you met the shuttle",
+}
 
 #: Quantities Mikiri deliberately does not produce, and the reason for each.
 #: Shown in the summary so a missing familiar number reads as a decision.
@@ -435,6 +463,17 @@ METRICS: dict[str, MetricDef] = {
             advice_id="rally_profile",
         ),
         MetricDef(
+            "rest_share",
+            "Share of the clip spent between rallies",
+            "",
+            "measured time minus rally time, over measured time",
+            "clip composition, not performance: it says which other numbers are "
+            "comparable to published in-rally figures",
+            better="none",
+            min_change=0.1,
+            advice_id="rally_profile",
+        ),
+        MetricDef(
             "frame_coverage",
             "Frames measured",
             "",
@@ -542,7 +581,10 @@ def ensure_band_file(path: Path | None = None) -> Path:
                 "Delete a metric, or a whole level, to keep the shipped default."
             ),
             "_sources": {mid: m.source for mid, m in METRICS.items()},
-            **{level: {mid: b.to_dict() for mid, b in bands.items()} for level, bands in BANDS.items()},
+            **{
+                level: {mid: b.to_dict() for mid, b in bands.items()}
+                for level, bands in BANDS.items()
+            },
         }
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -767,7 +809,9 @@ def assess_trust(footwork: dict | None, trust: dict | None = None) -> Trust:
             "figures are not stated as verdicts"
         )
     elif coverage < MIN_FRAME_COVERAGE:
-        reasons.append(f"{coverage:.0%} of frames measured, below the {MIN_FRAME_COVERAGE:.0%} mark")
+        reasons.append(
+            f"{coverage:.0%} of frames measured, below the {MIN_FRAME_COVERAGE:.0%} mark"
+        )
     if far is not None and far > FAR_HALF_HARD:
         reasons.append(
             f"{far:.0%} of the measured time is in the far half, where the position "
@@ -912,11 +956,14 @@ def metric_values(footwork: dict | None, strokes: dict | None = None) -> dict[st
     if rally_s is not None:
         out["mean_rally_s"] = rally_s
         duration = _number(fw.get("duration_s"))
-        if duration is not None and rallies is not None and rallies >= 1:
-            play = rally_s * rallies
-            rest = duration - play
-            if rest > 0:
-                out["work_density"] = play / rest
+        if duration is not None and duration > 0 and rallies is not None and rallies >= 1:
+            play = min(rally_s * rallies, duration)
+            rest_share = (duration - play) / duration
+            out["rest_share"] = rest_share
+            # A clip trimmed to its rallies has no rest interval left, so the
+            # ratio would be an artefact of the trim rather than a workload.
+            if rest_share >= TRIMMED_CLIP_REST_SHARE:
+                out["work_density"] = play / (duration - play)
     return out
 
 
@@ -962,6 +1009,24 @@ class _Ctx:
         if err is None:
             return "position uncertainty not available for this clip"
         return f"95 % position error along the court {err:.2f} m (median)"
+
+    def rest_dilutes(self) -> bool:
+        """Whether the clip holds enough rest to spoil a comparison with in-rally figures."""
+        rest = self.values.get("rest_share")
+        return rest is not None and rest > REST_SHARE_LIMIT
+
+    def rest_note(self) -> str:
+        """What the clip's rest share does to a whole-clip figure."""
+        rest = self.values.get("rest_share")
+        if rest is None:
+            return (
+                "how much of this clip is rest is unknown, so it may not be comparable "
+                "to an in-rally published figure"
+            )
+        return (
+            f"{rest:.0%} of the clip is between rallies (limit {REST_SHARE_LIMIT:.0%} before "
+            "whole-clip figures stop being comparable to in-rally published ones)"
+        )
 
     def distance_note(self) -> str:
         """The path-length uncertainty, when court.py propagated one."""
@@ -1042,7 +1107,11 @@ def _coverage_centre(ctx: _Ctx) -> Advice | None:
         detail=detail,
         severity=severity,
         evidence=" | ".join(
-            [ctx.evidence("coverage_offset_net_m"), ctx.evidence("coverage_offset_across_m"), *extra]
+            [
+                ctx.evidence("coverage_offset_net_m"),
+                ctx.evidence("coverage_offset_across_m"),
+                *extra,
+            ]
         ),
         confidence=0.75,
         drill=None
@@ -1144,6 +1213,25 @@ def _distance_per_rally(ctx: _Ctx) -> Advice | None:
     if value is None:
         return None
     severity = _severity(status)
+    if ctx.rest_dilutes():
+        # Distance walked between rallies lands in the total, so dividing by the
+        # rally count on an untrimmed clip inflates the figure by an unknown
+        # amount. Report it, do not judge it.
+        return Advice(
+            id="distance_per_rally",
+            title="Ground covered per rally, for reference only",
+            detail=(
+                f"About {value:.0f} m of travel per rally, but this clip includes the "
+                "time between rallies, so walking about is counted in. Trim the clip to "
+                "the rallies before comparing it with anyone else's figure."
+            ),
+            severity=INFO,
+            evidence=" | ".join(
+                [ctx.evidence("distance_per_rally_m"), ctx.rest_note(), ctx.distance_note()]
+            ),
+            confidence=0.4,
+            drill=None,
+        )
     if severity == GOOD:
         title = "Rally workload looks normal"
         detail = (
@@ -1193,6 +1281,30 @@ def _movement_speed(ctx: _Ctx) -> Advice | None:
     if value is None:
         return None
     severity = _severity(status)
+    if ctx.rest_dilutes():
+        # The published band is in-rally movement. Standing between rallies pulls
+        # a whole-clip mean below it for reasons that have nothing to do with
+        # how fast the player moves, so no verdict is given.
+        return Advice(
+            id="movement_speed",
+            title="Movement speed, for reference only",
+            detail=(
+                f"{value:.1f} m/s averaged over the whole clip, standing between rallies "
+                "included. That is not the same quantity as the published in-rally speed, "
+                "so it is shown without a verdict. Trim the clip to the rallies to compare."
+            ),
+            severity=INFO,
+            evidence=" | ".join(
+                [
+                    ctx.evidence("avg_speed_mps"),
+                    ctx.rest_note(),
+                    f"published elite in-rally band {ELITE_SPEED_MPS[0]:g}-"
+                    f"{ELITE_SPEED_MPS[1]:g} m/s",
+                ]
+            ),
+            confidence=0.4,
+            drill=None,
+        )
     if severity == GOOD:
         title = "Movement speed holds up"
         detail = (
@@ -1216,7 +1328,7 @@ def _movement_speed(ctx: _Ctx) -> Advice | None:
                 ctx.evidence("avg_speed_mps"),
                 "measured over the whole clip including pauses, so it reads lower than "
                 "the published in-rally figure unless the clip is rally-only",
-                f"published elite band {ELITE_SPEED_MPS[0]:g}-{ELITE_SPEED_MPS[1]:g} m/s",
+                ctx.rest_note(),
                 ctx.distance_note(),
             ]
         ),
@@ -1246,8 +1358,8 @@ def _speed_variability(ctx: _Ctx) -> Advice | None:
         )
         evidence = ctx.evidence(
             "speed_peak_to_mean",
-            "the speed series was not available, so this stands in for the speed CV; "
-            "it is a related but different number and has no published band",
+            "the per-frame speed series was not in the metrics dict, so the CV itself "
+            "could not be formed and this ratio stands in for it",
         )
     return Advice(
         id="speed_variability",
@@ -1273,15 +1385,18 @@ def _left_right_balance(ctx: _Ctx) -> Advice | None:
     left = _number(ctx.zone_seconds.get("left"), 0.0) or 0.0
     right = _number(ctx.zone_seconds.get("right"), 0.0) or 0.0
     heavy = "left" if left > right else "right"
+    total = left + right
+    heavy_share = (max(left, right) / total) if total > 0 else 0.0
     if severity == GOOD:
         title = "Both sides get equal time"
         detail = "Neither side of the court is soaking up your rally time."
     else:
         title = f"Too much time on the {heavy}"
         detail = (
-            f"You spent {value:.0%} more of your time on the {heavy} side than the other. "
-            "That side is either where the shuttle keeps going or where you recover to; "
-            "either way, place your recovery so both sidelines are the same trip."
+            f"Your court time split {heavy_share:.0%} to the {heavy} against "
+            f"{1 - heavy_share:.0%} to the other side. That side is either where the "
+            "shuttle keeps going or where you recover to; either way, place your recovery "
+            "so both sidelines are the same trip."
         )
     return Advice(
         id="left_right_balance",
@@ -1311,22 +1426,24 @@ def _front_back_balance(ctx: _Ctx) -> Advice | None:
     front = _number(ctx.zone_seconds.get("front"), 0.0) or 0.0
     rear = _number(ctx.zone_seconds.get("rear"), 0.0) or 0.0
     heavy = "front" if front > rear else "rear"
+    total = front + rear
+    heavy_share = (max(front, rear) / total) if total > 0 else 0.0
     if severity == GOOD:
         title = "Front and rear are shared out"
         detail = "You are spending comparable time at the net and at the back."
     elif heavy == "front":
         title = "Living too close to the net"
         detail = (
-            f"The front of your half took {value:.0%} more of your time than the rear, "
-            "so anything lifted over you is a scramble. Let the recovery carry you back "
-            "far enough that a clear stays in front of you."
+            f"Of the time you spent at one end or the other, {heavy_share:.0%} was at the "
+            "net, so anything lifted over you is a scramble. Let the recovery carry you "
+            "back far enough that a clear stays in front of you."
         )
     else:
         title = "Anchored at the back"
         detail = (
-            f"The rear of your half took {value:.0%} more of your time than the front, "
-            "so a tight net shot is a long way away. Move in as soon as the shuttle "
-            "goes up, not after it drops."
+            f"Of the time you spent at one end or the other, {heavy_share:.0%} was at the "
+            "back, so a tight net shot is a long way away. Start forward as soon as the "
+            "shuttle goes up, not after it drops."
         )
     return Advice(
         id="front_back_balance",
@@ -1353,9 +1470,7 @@ def _zone_occupancy(ctx: _Ctx) -> Advice | None:
     if value is None:
         return None
     severity = _severity(status)
-    depth = {
-        k: _number(ctx.zone_seconds.get(k), 0.0) or 0.0 for k in ("rear", "mid", "front")
-    }
+    depth = {k: _number(ctx.zone_seconds.get(k), 0.0) or 0.0 for k in ("rear", "mid", "front")}
     busiest = max(depth, key=lambda k: depth[k])
     if severity == GOOD:
         title = "Court time is well spread"
@@ -1363,9 +1478,9 @@ def _zone_occupancy(ctx: _Ctx) -> Advice | None:
     else:
         title = f"Stuck in the {busiest} court"
         detail = (
-            f"{value:.0%} of your measured time was spent in the {busiest} third of your "
-            "half. Make the recovery after every shot end somewhere that leaves all "
-            "three thirds reachable."
+            f"{value:.0%} of your time in your own half was spent in the {busiest} third. "
+            "Make the recovery after every shot end somewhere that leaves all three "
+            "thirds reachable."
         )
     return Advice(
         id="zone_occupancy",
@@ -1375,9 +1490,8 @@ def _zone_occupancy(ctx: _Ctx) -> Advice | None:
         evidence=" | ".join(
             [
                 ctx.evidence("zone_share_max"),
-                "rear {:.0f} s, mid {:.0f} s, front {:.0f} s".format(
-                    depth["rear"], depth["mid"], depth["front"]
-                ),
+                f"rear {depth['rear']:.0f} s, mid {depth['mid']:.0f} s, "
+                f"front {depth['front']:.0f} s",
                 ctx.position_note(),
             ]
         ),
@@ -1460,7 +1574,6 @@ def _stroke_origin_split(ctx: _Ctx) -> Advice | None:
             "the net is going unused. Follow your own downward shots forward and take "
             "the reply in front of the service line."
         )
-    a, b = ORIGIN_SPLIT_PUBLISHED
     return Advice(
         id="stroke_origin_split",
         title=title,
@@ -1470,9 +1583,8 @@ def _stroke_origin_split(ctx: _Ctx) -> Advice | None:
             [
                 ctx.evidence("origin_back_share"),
                 f"rear {rear:.0f}, mid {mid:.0f}, front {front:.0f} contacts",
-                f"published back/net splits {a[0]:.1%}/{a[1]:.1%} and {b[0]:.1%}/{b[1]:.1%}; "
-                "Mikiri's zones are a three-way split, so mid-court contacts are listed "
-                "but left out of the ratio",
+                "the published split is a two-way one; Mikiri's zones are three-way, so "
+                "mid-court contacts are listed above but left out of the ratio",
                 ctx.position_note(),
             ]
         ),
@@ -1493,7 +1605,7 @@ def _rally_profile(ctx: _Ctx) -> Advice | None:
     if rally is not None:
         pieces.append(f"Your rallies average {rally:.1f} s")
     if density is not None:
-        pieces.append(f"you play about {density:.2f} s for every second of rest")
+        pieces.append(f"you play about {density:.1f} s for every second of rest")
     headline = " and ".join(pieces) + "."
     detail = (
         f"{headline} Rally length on its own does not tell you how good you are: the "
@@ -1515,6 +1627,12 @@ def _rally_profile(ctx: _Ctx) -> Advice | None:
         )
     if density is not None:
         evidence_parts.append(ctx.evidence("work_density"))
+    else:
+        evidence_parts.append(
+            "work density not computed: this clip holds less than "
+            f"{TRIMMED_CLIP_REST_SHARE:.0%} rest, so it looks trimmed to its rallies and "
+            "the ratio would measure the trim rather than the session"
+        )
     evidence_parts.append(
         "published rally/rest seconds: "
         + ", ".join(f"{k.replace('_', ' ')} {v[0]:g}/{v[1]:g}" for k, v in ref.items())
@@ -1574,7 +1692,9 @@ def _data_quality(ctx: _Ctx) -> Advice:
     else:
         parts.append("frame coverage unknown")
     if far is not None:
-        parts.append(f"{far:.0%} of measured time in the far half (warn above {FAR_HALF_LIMIT:.0%})")
+        parts.append(
+            f"{far:.0%} of measured time in the far half (warn above {FAR_HALF_LIMIT:.0%})"
+        )
     parts.append("camera geometry known" if trust.has_camera else "no camera geometry")
     parts.append(ctx.position_note())
     parts.extend(trust.reasons)
@@ -1687,6 +1807,7 @@ def _apply_trust(advice: list[Advice], trust: Trust) -> None:
         a.confidence = _clamp01(a.confidence * factor)
         if withhold and a.id in POSITIONAL_IDS:
             a.severity = UNKNOWN
+            a.title = NEUTRAL_TITLES.get(a.id, a.title)
             a.detail = (
                 f"Not judged: {reason}. The number is shown so you can see it, not so "
                 "you can act on it."

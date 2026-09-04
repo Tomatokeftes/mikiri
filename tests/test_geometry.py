@@ -287,7 +287,6 @@ def test_error_ellipse_scales_with_nsigma():
 def test_bias_correction_recovers_the_true_path_better_than_not_correcting():
     """End to end: a known walk, seen by a real camera, with and without the fix."""
     from mikiri.court import build_track
-    from mikiri.geometry import CameraGeometry
     from mikiri.keypoints import KP, N_KEYPOINTS
 
     cam = Camera(ground=(3.05, -4.0), height=2.2)  # a low tripod, where it hurts most
@@ -344,3 +343,52 @@ def test_bias_correction_does_not_distort_distance_covered():
     fixed = build_track(kp, H, 30.0, camera=cam.truth())
     got = fixed.metrics["distance_m"]
     assert abs(got - true_distance) < 0.25, (got, true_distance)
+
+
+def test_distance_uncertainty_is_not_inflated_by_the_frame_rate():
+    """Smoothed steps are correlated: counting each frame as independent inflates it.
+
+    The same physical track, sampled twice as fast, must not report a wildly
+    different confidence in its own path length.
+    """
+    from mikiri.court import CourtTrack, footwork_metrics
+
+    def track_at(fps: float, n: int) -> CourtTrack:
+        pos = np.stack([np.full(n, 3.05), np.linspace(2.0, 5.0, n)], axis=1)
+        cov = np.tile(np.array([[[0.01, 0.0], [0.0, 0.0025]]]), (n, 1, 1))
+        return CourtTrack(
+            positions=pos,
+            speed=np.full(n, 1.0),
+            airborne=np.zeros(n, bool),
+            valid=np.ones(n, bool),
+            fps=fps,
+            cov=cov,
+        )
+
+    slow = footwork_metrics(track_at(30.0, 120))["distance_uncertainty_m"]
+    fast = footwork_metrics(track_at(60.0, 240))["distance_uncertainty_m"]
+    assert slow > 0 and fast > 0
+    # Same seconds of the same movement: the figures must be comparable, not
+    # differ by the sqrt(2) that a naive per-frame count would produce.
+    assert 0.7 < fast / slow < 1.4, (slow, fast)
+
+
+def test_distance_uncertainty_is_a_sane_fraction_of_a_real_path():
+    """A 25 m rally must not come back with a metre-scale error bar per metre."""
+    from mikiri.court import CourtTrack, footwork_metrics
+
+    n = 300
+    t = np.linspace(0, 4 * np.pi, n)
+    pos = np.stack([3.05 + 1.8 * np.sin(t), 4.0 + 2.5 * np.cos(t)], axis=1)
+    cov = np.tile(np.array([[[0.005, 0.0], [0.0, 0.001]]]), (n, 1, 1))
+    track = CourtTrack(
+        positions=pos,
+        speed=np.full(n, 2.0),
+        airborne=np.zeros(n, bool),
+        valid=np.ones(n, bool),
+        fps=30.0,
+        cov=cov,
+    )
+    m = footwork_metrics(track)
+    assert m["distance_m"] > 20.0
+    assert m["distance_uncertainty_m"] < 0.25 * m["distance_m"]
