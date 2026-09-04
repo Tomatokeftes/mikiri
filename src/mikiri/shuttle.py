@@ -341,8 +341,12 @@ def _gray(frame: np.ndarray | None) -> np.ndarray | None:
     a = np.asarray(frame)
     if a.size == 0:
         return None
+    # A frame arriving with nan or inf in it is not a video frame, but it must
+    # not be allowed to reach OpenCV, where the conversion is undefined.
+    if a.dtype.kind == "f" and not np.isfinite(a).all():
+        a = np.nan_to_num(a, nan=0.0, posinf=255.0, neginf=0.0)
     if a.ndim == 3:
-        a = cv2.cvtColor(a.astype(np.uint8), cv2.COLOR_BGR2GRAY)
+        a = cv2.cvtColor(np.clip(a, 0, 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
     return a.astype(np.float32)
 
 
@@ -404,7 +408,7 @@ def difference_map(
     d = parts[0]
     for extra in parts[1:]:
         d = np.minimum(d, extra)
-    return np.clip(d, 0.0, 255.0).astype(np.uint8)
+    return np.clip(np.nan_to_num(d, nan=0.0, posinf=255.0), 0.0, 255.0).astype(np.uint8)
 
 
 def background_plate(reader, start: int, end: int, samples: int = PLATE_SAMPLES) -> np.ndarray:
@@ -480,7 +484,13 @@ def expected_shuttle_px(homography: np.ndarray | None, shape: tuple[int, ...]) -
     jac = position_jacobian(hom, centre)
     if not np.isfinite(jac).all():
         return DEFAULT_SHUTTLE_PX
-    scale = math.sqrt(abs(float(np.linalg.det(jac[0]))))  # metres per pixel
+    # The smallest singular value, not the area scale. A floor homography
+    # stretches the depth direction enormously, but a shuttle in the air is not
+    # on the floor: its apparent size is set by its distance from the camera,
+    # which is what the across-court -- unforeshortened -- scale measures. Using
+    # the area scale here would predict a one-pixel shuttle at mid-court and
+    # gate away every real detection.
+    scale = float(np.min(np.linalg.svd(jac[0], compute_uv=False)))  # metres per pixel
     if not math.isfinite(scale) or scale <= 1e-9:
         return DEFAULT_SHUTTLE_PX
     return float(np.clip(SHUTTLE_DIAMETER_M / scale, MIN_SHUTTLE_PX, MAX_SHUTTLE_PX))
@@ -1416,8 +1426,10 @@ def _metric_speed(
     j_end = _floor_scale(homography, pts[-1])
     if j_start is None or j_end is None:
         return None, None, "homography is unusable at the flight, so no metric speed"
-    s_start = math.sqrt(abs(float(np.linalg.det(j_start))))
-    s_end = math.sqrt(abs(float(np.linalg.det(j_end))))
+    # Transverse (across-court) scale, for the same reason as in
+    # expected_shuttle_px: it is the one that tracks distance to the camera.
+    s_start = float(np.min(np.linalg.svd(j_start, compute_uv=False)))
+    s_end = float(np.min(np.linalg.svd(j_end, compute_uv=False)))
     if not (math.isfinite(s_start) and math.isfinite(s_end)) or min(s_start, s_end) <= 1e-9:
         return None, None, "floor scale is degenerate at the flight, so no metric speed"
     drift = abs(s_end - s_start) / min(s_start, s_end)

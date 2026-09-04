@@ -693,8 +693,16 @@ def draw_court(
             alpha = np.clip(field, 0.0, 1.0)[:, :, None] * 0.72
             img = (img * (1.0 - alpha) + ramp * alpha).astype(np.uint8)
         pts = [P(float(x), float(y)) for x, y in pos[ok]]
-        for a, b in zip(pts[:-1], pts[1:]):
-            cv2.line(img, a, b, (255, 255, 255), 2, cv2.LINE_AA)
+        # A long track drawn opaque paints the whole court white and hides the
+        # density underneath, which is the thing worth looking at. Fade and thin
+        # the line as the track grows so the heat map stays readable.
+        if len(pts) > 1:
+            thin = len(pts) > 600
+            alpha = 0.9 if len(pts) < 200 else (0.55 if not thin else 0.35)
+            trace = img.copy()
+            for a, b in zip(pts[:-1], pts[1:]):
+                cv2.line(trace, a, b, (255, 255, 255), 1 if thin else 2, cv2.LINE_AA)
+            img = cv2.addWeighted(trace, alpha, img, 1.0 - alpha, 0)
         if pts:
             cv2.circle(img, pts[0], 6, (60, 200, 60), -1, cv2.LINE_AA)
         if current is not None and 0 <= current < len(pos) and ok[current]:
