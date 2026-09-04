@@ -26,6 +26,26 @@ the launch direction and speed -- is exactly what separates a smash from a
 clear from a drop, which the body pose cannot. Contacts where nothing is found
 keep their descriptor and no shot name.
 
+## Shot names need a side-on camera, and Mikiri checks
+
+Recovering the shuttle is necessary but not sufficient. What the search
+measures is the launch as it appears **in the image**, and the bands that
+separate a smash from a drop read that as if it were the launch in the world.
+
+Side-on those are close. From behind the baseline they are not: a shuttle
+travelling away from the camera is foreshortened along its own direction of
+travel, so a textbook smash at a true 20 degrees below the horizontal projects
+to roughly 60 degrees below it, at about a sixth of its real pace. That lands
+squarely in the drop band. Since a raised rear camera is exactly what Mikiri
+recommends for footwork, this would have been the ordinary case rather than an
+edge case.
+
+So shot naming is gated on the camera view recovered from the net posts. Unless
+the view is side-on, no shot is named and the stroke says why. That is a real
+trade-off and it is the honest one: **film from the side if you want shot
+names, film from behind and high if you want footwork.** They are different
+set-ups, and Mikiri will not pretend one is the other.
+
 ## How the detector works
 
 **Differencing, not background modelling.** A static background plate is built

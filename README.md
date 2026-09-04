@@ -178,8 +178,13 @@ than track the shuttle across a whole rally -- which is unreliable on consumer
 footage -- it searches the few frames after each contact the swing detector
 already found, starting from where the racket head was. The launch direction
 and speed it recovers are exactly what separate a smash from a clear from a
-drop, and contacts where nothing is found simply keep their description. See
-[docs/shuttle.md](docs/shuttle.md).
+drop, and contacts where nothing is found simply keep their description.
+
+Shot names also need a **side-on** camera. The launch is measured in the image,
+and from behind the baseline a smash is foreshortened until it reads as a drop,
+so Mikiri checks the recovered camera view and declines to name rather than
+name it wrong. Film from the side for shot names, from behind and high for
+footwork. See [docs/shuttle.md](docs/shuttle.md).
 
 ## Filming guidelines
 

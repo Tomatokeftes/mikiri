@@ -51,8 +51,11 @@ about a third of the time and giving the user no way to know which third. The
 descriptor is less exciting and it is true.
 
 Shot names become available when `mikiri.shots` is given a recovered shuttle
-launch. Each named shot then carries its own confidence and a sentence naming
-the evidence.
+launch **and** the camera is side-on. The launch is measured in the image
+plane, and from behind the baseline a smash is foreshortened into the drop
+band, so the bands only mean what they say from the side. Each named shot
+carries its own confidence and a sentence naming the evidence; each unnamed one
+carries the reason. See [shuttle.md](shuttle.md).
 
 ## Finding the contact
 
@@ -60,8 +63,14 @@ The swing signal is a weighted blend of hitting-wrist speed with elbow and
 shoulder displacement, divided by the player's height in pixels. The wrist
 carries the signal; the other two joints damp the jitter that would otherwise
 fire on one bad frame. Dividing by body height makes the signal scale-free, so
-a threshold tuned on a near-court player still holds when the same player is at
-the far baseline and half the size on screen.
+a threshold tuned on a near-court player still applies unchanged when the same
+player is at the far baseline and half the size on screen.
+
+The threshold carries over; the decision gets noisier. Normalising by a smaller
+torso amplifies pixel jitter in proportion, so a contact close to a class
+boundary will flip between neighbouring frames in the far court. That is what
+the per-stroke confidence is for, and another reason the near half is the half
+to trust.
 
 Contacts are the peaks of that signal that clear both a speed floor and a
 prominence test. The prominence test does most of the work: running across the
