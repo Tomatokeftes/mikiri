@@ -180,9 +180,14 @@ FAR_HALF_LIMIT = 0.25
 #: made of the half Mikiri cannot measure at the same fidelity.
 FAR_HALF_HARD = 0.45
 #: How much worse the propagated position error is at the far baseline than at
-#: the near one for a typical set-up, from Mikiri's own uncertainty grid. This
-#: is the reason the far half is gated rather than reported alongside.
-FAR_HALF_ERROR_RATIO = 4.7
+#: the near one. Derived from Mikiri's own uncertainty grid rather than quoted:
+#: for the reference set-up (camera 3 m high, 5 m behind the baseline, 1080p)
+#: the 95% major axis goes from about 10 cm near to about 58 cm far. It is a
+#: representative figure, not a constant of nature -- a 1.8 m tripod gives 7.4
+#: and a 5 m stand gives 4.6 -- so the advice text points the reader at their
+#: own clip's number. ``test_far_half_error_ratio_matches_the_uncertainty_grid``
+#: pins it to the machinery it came from.
+FAR_HALF_ERROR_RATIO = 6.0
 #: Confidence multiplier when no camera geometry is known. Without it the ankle
 #: off-plane bias is uncorrected, which court.py measures at up to most of a
 #: metre at the far baseline for a low camera.
@@ -243,7 +248,7 @@ REFUSED: dict[str, str] = {
     ),
     "far_half_detail": (
         "Position error at the far baseline is about "
-        f"{FAR_HALF_ERROR_RATIO:g}x the near-baseline error, so far-half figures "
+        "several times the near-baseline error, so far-half figures "
         "are gated rather than reported at near-half fidelity."
     ),
     "calibration_accuracy": (
@@ -801,7 +806,10 @@ def assess_trust(footwork: dict | None, trust: dict | None = None) -> Trust:
 
     err = _number(tr.get("position_error_m"))
     if err is None:
-        err = _number(_get(fw, "position_uncertainty_m", "median_along_court"))
+        err = _number(
+            _get(fw, "position_uncertainty_m", "median_major_m"),
+            _get(fw, "position_uncertainty_m", "median_along_court"),
+        )
 
     reasons: list[str] = []
     if coverage is None:
@@ -818,7 +826,8 @@ def assess_trust(footwork: dict | None, trust: dict | None = None) -> Trust:
     if far is not None and far > FAR_HALF_HARD:
         reasons.append(
             f"{far:.0%} of the measured time is in the far half, where the position "
-            f"error is about {FAR_HALF_ERROR_RATIO:g}x the near-half error"
+            f"error is roughly {FAR_HALF_ERROR_RATIO:g}x the near-half error on a typical "
+            "rear-camera set-up; your clip's own figure is in the court panel"
         )
     elif far is not None and far > FAR_HALF_LIMIT:
         reasons.append(f"{far:.0%} of the measured time is in the far half, which is down-weighted")
@@ -1075,7 +1084,7 @@ def _coverage_centre(ctx: _Ctx) -> Advice | None:
             "The middle of your court coverage sits near the middle of your half, "
             "which is what leaves every corner the same distance away."
         )
-    elif net is not None and net > (net_band.hi or math.inf):
+    elif net is not None and net > (net_band.hi if net_band.hi is not None else math.inf):
         title = "Recover deeper, not just back"
         detail = (
             "Your coverage sits about "
@@ -1788,8 +1797,26 @@ def coach(
         if item is not None:
             out.append(item)
     _apply_trust(out, quality)
+    _drop_fabricated_prescriptions(out)
     out.sort(key=_rank)
     return out
+
+
+def _drop_fabricated_prescriptions(advice: list[Advice]) -> None:
+    """Strip corrective wording from anything that is not a verdict.
+
+    A drill is a prescription and a corrective title is a diagnosis; both claim
+    the measurement said something. When the severity is anything other than
+    "work-on" it did not -- either the metric is fine, or there is no band for
+    it at this level, or the measurement could not be trusted. Leaving a drill
+    attached in those cases invents a fault out of an absence, which is the one
+    thing this module exists not to do.
+    """
+    for a in advice:
+        if a.severity != WORK and a.drill is not None:
+            a.drill = None
+        if a.severity == UNKNOWN and a.id in NEUTRAL_TITLES:
+            a.title = NEUTRAL_TITLES[a.id]
 
 
 def _apply_trust(advice: list[Advice], trust: Trust) -> None:
@@ -1834,12 +1861,23 @@ def top_cues(advice: list[Advice], n: int = MAX_CUES) -> list[Advice]:
             purpose.
 
     Returns:
-        Up to ``n`` items with a ``"work-on"`` severity, ranked. When nothing
-        needs work the list is empty and the caller should say so rather than
-        invent a correction.
+        Up to ``n`` items with a ``"work-on"`` severity, ranked, plus the
+        data-quality advisory whenever it has something to say. When nothing
+        needs work the list holds only that advisory, if any, and the caller
+        should say so rather than invent a correction.
+
+        The advisory rides outside the cap deliberately. It is the caveat on
+        every other number in the panel, so dropping it while keeping the
+        verdicts it qualifies would show conclusions without the reason to
+        doubt them -- the one omission this module cannot afford.
     """
     ranked = sorted([a for a in advice if a.severity == WORK], key=_rank)
-    return ranked[: max(0, int(n))]
+    kept = ranked[: max(0, int(n))]
+    quality = next(
+        (a for a in advice if a.id == "data_quality" and a.severity != GOOD and a not in kept),
+        None,
+    )
+    return kept if quality is None else [*kept, quality]
 
 
 def session_summary(

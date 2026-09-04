@@ -27,6 +27,7 @@ from mikiri.geometry import (
     NSIGMA_95,
     SIGMA_CLICK_PX,
     SIGMA_KEYPOINT_PX,
+    Z_95_SCALAR,
     CameraGeometry,
     correct_offplane,
     error_ellipse,
@@ -241,7 +242,7 @@ def court_uncertainty_grid(
     ny: int = 7,
     sigma_px: float = SIGMA_KEYPOINT_PX,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """1-sigma error ellipses on a grid across the court, for display.
+    """Position covariance on a grid across the court, for display.
 
     Args:
         H: Image-to-court homography.
@@ -297,7 +298,8 @@ class CourtTrack:
     metrics: dict = field(default_factory=dict)
     cov: np.ndarray | None = None  # (n, 2, 2) position covariance in m^2, nan where unknown
     camera: CameraGeometry | None = None  # when known, positions are bias-corrected
-    height_m: np.ndarray | None = None  # (n,) foot height above the floor during flights
+    height_m: np.ndarray | None = None  # (n,) ankle height above the floor during flights
+    ankle_height: float = ANKLE_HEIGHT  # the value height_m was measured against
 
 
 def _zone(x: float, y: float) -> tuple[str, str]:
@@ -401,6 +403,7 @@ def build_track(
         cov=cov,
         camera=camera,
         height_m=height_m,
+        ankle_height=float(ankle_height),
     )
     track.metrics = footwork_metrics(track, base)
     return track
@@ -437,12 +440,24 @@ def _coverage_shape(positions: np.ndarray) -> dict | None:
     axis = vecs[:, 1]
     # Angle from the court's long (front-back) axis, folded to 0..90 degrees.
     angle = abs(math.degrees(math.atan2(abs(float(axis[0])), abs(float(axis[1])))))
-    # Half-court centre: mid-width, and mid-way between baseline and net.
-    ref_y = NET_Y / 2.0
+
+    # "Toward the net" needs to know which half the player is in: y grows
+    # toward the net in the near half and away from it in the far one, so the
+    # sign flips. A track that straddles the net belongs to neither, and is
+    # usually a sign of a mis-clicked court rather than a player who crossed
+    # it -- report the shape and leave the offset unstated.
+    far_share = float((positions[:, 1] > NET_Y).mean())
+    if far_share < 0.2:
+        toward_net = float(centre[1] - NET_Y / 2.0)
+    elif far_share > 0.8:
+        toward_net = float((NET_Y + NET_Y / 2.0) - centre[1])
+    else:
+        toward_net = None
     return {
         "centroid_m": [round(float(centre[0]), 2), round(float(centre[1]), 2)],
         "offset_across_m": round(float(centre[0] - CENTRE_X), 2),
-        "offset_toward_net_m": round(float(centre[1] - ref_y), 2),
+        "offset_toward_net_m": None if toward_net is None else round(toward_net, 2),
+        "half": "near" if far_share < 0.2 else ("far" if far_share > 0.8 else "both"),
         "spread_major_m": round(math.sqrt(major_v), 2),
         "spread_minor_m": round(math.sqrt(minor_v), 2),
         "eccentricity": round(math.sqrt(max(0.0, 1.0 - minor_v / major_v)), 2),
@@ -507,14 +522,30 @@ def footwork_metrics(track: CourtTrack, base: tuple[float, float] | None = None)
         sigma_major, _, _ = error_ellipse(track.cov)
         good = np.isfinite(major)
         if good.any():
+            # Major and minor, not "along" and "across": for a camera down a
+            # sideline the long axis runs across the court, and labelling it
+            # "along" would invert the meaning. The angle says which it is.
+            _, _, ang = error_ellipse(track.cov)
+            ang_ok = np.isfinite(ang)
+            med_major = float(np.nanmedian(major[good]))
+            med_minor = float(np.nanmedian(minor[good]))
+            axis_deg = (
+                round(float(np.degrees(np.nanmedian(np.abs(ang[ang_ok])))), 1)
+                if ang_ok.any()
+                else None
+            )
             out["position_uncertainty_m"] = {
                 "coverage": "95%",
-                "median_along_court": round(float(np.nanmedian(major[good])), 3),
-                "median_across_court": round(float(np.nanmedian(minor[good])), 3),
-                "worst_along_court": round(float(np.nanmax(major[good])), 3),
-                "anisotropy": round(
-                    float(np.nanmedian(major[good]) / max(float(np.nanmedian(minor[good])), 1e-6)),
-                    1,
+                "median_major_m": round(med_major, 3),
+                "median_minor_m": round(med_minor, 3),
+                "worst_major_m": round(float(np.nanmax(major[good])), 3),
+                "anisotropy": round(med_major / max(med_minor, 1e-6), 1),
+                # 0 deg: the long axis runs across the court. 90: along it.
+                "major_axis_deg_from_across": axis_deg,
+                "major_axis_runs": (
+                    None
+                    if axis_deg is None
+                    else ("along the court" if axis_deg > 45.0 else "across the court")
                 ),
             }
             # Path length accumulates step errors in quadrature, but the steps
@@ -530,20 +561,27 @@ def footwork_metrics(track: CourtTrack, base: tuple[float, float] | None = None)
             # scale error rather than accumulating. Erring high is the safe
             # direction for a figure whose job is to say how much to trust the
             # number beside it.
-            n_steps = max(int(ok.sum()) - 1, 1)
+            # Count MEASURED frames. `ok` is true almost everywhere after
+            # fill_gaps, so using it would make this track clip length rather
+            # than measurement quality: six real observations padded out to 600
+            # frames would report a wider interval than two hundred of them.
+            n_steps = max(int(track.valid.sum()) - 1, 1)
             window = max(5, int(round(0.2 * track.fps)) | 1)
             independent = max(1.0, n_steps / window)
             fin = np.isfinite(sigma_major)
             step_sigma = float(np.nanmedian(sigma_major[fin])) * math.sqrt(2.0)
+            # Distance is one number, so the two-sided SCALAR factor applies.
+            # NSIGMA_95 is the 2-D ellipse factor and would widen this by a
+            # quarter while still being labelled 95%.
             out["distance_uncertainty_m"] = round(
-                NSIGMA_95 * step_sigma * math.sqrt(independent), 2
+                Z_95_SCALAR * step_sigma * math.sqrt(independent), 2
             )
 
         # Where the player lived, as a shape rather than a picture. The
         # literature's elite signature is a centroid near the court centre and
         # a near-circular spread; a developing player's is pulled toward the net
         # and stretched front-to-back.
-        spread = _coverage_shape(p)
+        spread = _coverage_shape(pos[track.valid & ok])
         if spread:
             out["coverage_shape"] = spread
 
@@ -563,9 +601,14 @@ def footwork_metrics(track: CourtTrack, base: tuple[float, float] | None = None)
         }
 
     if track.height_m is not None and np.isfinite(track.height_m).any():
-        clearance = np.nanmax(track.height_m) - ANKLE_HEIGHT
-        if np.isfinite(clearance):
-            out["jump_clearance_m"] = round(float(max(clearance, 0.0)), 3)
+        peak = float(np.nanmax(track.height_m))
+        clearance = peak - track.ankle_height
+        # A clearance at or below zero does not mean the player stayed down; it
+        # means the flight geometry did not resolve (a mis-recovered camera puts
+        # the nadir on the wrong side and every height collapses). Say nothing
+        # rather than assert a zero jump.
+        if np.isfinite(clearance) and clearance > 1e-3:
+            out["jump_clearance_m"] = round(clearance, 3)
     return out
 
 
@@ -654,8 +697,8 @@ def draw_court(
         cov: ``(n, 2, 2)`` per-frame position covariance. When given the heat
             map is smeared by the real uncertainty instead of a fixed radius.
         uncertainty: ``(points, cov)`` from :func:`court_uncertainty_grid`. When
-            given, 1-sigma error ellipses are drawn across the court so the
-            anisotropy and its growth with depth are visible.
+            given, 95%-coverage error ellipses are drawn across the court so
+            the anisotropy and its growth with depth are visible.
     """
     margin_m = 1.0
     scale = size / (COURT_LENGTH + 2 * margin_m)
@@ -687,6 +730,8 @@ def draw_court(
     if positions is not None:
         pos = np.asarray(positions, dtype=float)
         ok = np.isfinite(pos).all(axis=1)
+        if cov is not None and np.asarray(cov).shape[0] != pos.shape[0]:
+            cov = None  # a mismatched covariance is ignored, not fatal
         if heat and ok.sum() > 1:
             field = _heat_layer(pos[ok], None if cov is None else cov[ok], (h, w), P, scale)
             ramp = cv2.applyColorMap((field * 255).astype(np.uint8), cv2.COLORMAP_INFERNO)

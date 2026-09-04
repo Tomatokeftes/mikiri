@@ -631,3 +631,89 @@ def test_metric_values_omits_what_it_cannot_derive():
     # A rally-trimmed clip has no rest to build a work density from.
     assert "work_density" not in values
     assert set(values) <= set(METRICS)
+
+
+def test_far_half_error_ratio_matches_the_uncertainty_grid():
+    """The constant must come from the machinery, not from an assertion."""
+    import numpy as np
+    from tests.test_geometry import Camera
+
+    from mikiri.coaching import FAR_HALF_ERROR_RATIO
+    from mikiri.court import (
+        COURT_LENGTH,
+        DOUBLES_WIDTH,
+        CourtCalibration,
+        court_uncertainty_grid,
+    )
+    from mikiri.geometry import NSIGMA_95, error_ellipse
+
+    # The reference set-up named in the constant's comment.
+    cam = Camera(ground=(3.05, -5.0), height=3.0, f=1500.0, size=(1920, 1080))
+    corners = np.array(
+        [[0, 0], [DOUBLES_WIDTH, 0], [DOUBLES_WIDTH, COURT_LENGTH], [0, COURT_LENGTH]], float
+    )
+    calib = CourtCalibration(
+        image_points=cam.floor(corners).tolist(), court_points=corners.tolist()
+    )
+    grid, cov = court_uncertainty_grid(cam.homography(), calib, nx=3, ny=9)
+    major, _, _ = error_ellipse(cov, nsigma=NSIGMA_95)
+    ok = np.isfinite(major)
+    near = float(major[ok & (grid[:, 1] < 3.0)].mean())
+    far = float(major[ok & (grid[:, 1] > 10.0)].mean())
+    assert far / near == pytest.approx(FAR_HALF_ERROR_RATIO, rel=0.15)
+    # And the reason the far half is gated at all.
+    assert far > near
+
+
+# --- honesty guards found by review ----------------------------------------------
+
+
+def test_only_a_work_on_verdict_may_prescribe_a_drill():
+    """A drill claims the measurement said something. Absence is not a fault."""
+    from mikiri.coaching import coach
+
+    for footwork in (elite_footwork(), developing_footwork(), {}, {"frames_measured": 3}):
+        for level in ("beginner", "club", "national", "elite"):
+            for a in coach(footwork, level=level):
+                if a.severity != "work-on":
+                    assert a.drill is None, (a.id, a.severity, a.drill)
+
+
+def test_a_metric_with_no_band_does_not_produce_a_verdict():
+    """An open band means no opinion, so it must not read as a correction."""
+    from mikiri.coaching import BANDS, Band, coach
+
+    overrides = {level: dict.fromkeys(bands, Band(None, None)) for level, bands in BANDS.items()}
+    for a in coach(developing_footwork(), level="club", overrides=overrides):
+        assert a.severity != "work-on" or a.id == "data_quality"
+        if a.severity != "work-on":
+            assert a.drill is None
+
+
+def test_the_data_quality_advisory_always_reaches_the_panel():
+    """It is the caveat on every other number shown beside it."""
+    from mikiri.coaching import coach, top_cues
+
+    thin = dict(developing_footwork())
+    thin["frames_measured"] = 4
+    thin["frames_total"] = 400
+    advice = coach(thin, level="club")
+    quality = [a for a in advice if a.id == "data_quality"]
+    assert quality and quality[0].severity != "good"
+    cues = top_cues(advice)
+    assert any(a.id == "data_quality" for a in cues), [a.id for a in cues]
+
+
+def test_a_zero_upper_band_edge_is_a_real_edge():
+    """`hi or inf` would treat 0.0 as "no edge" and mis-route the verdict."""
+    from mikiri.coaching import BANDS, Band, bands_for, coach
+
+    overrides = {"club": {"coverage_offset_net_m": Band(-0.0, 0.0)}}
+    assert bands_for("club", overrides)["coverage_offset_net_m"].hi == 0.0
+    fw = dict(developing_footwork())
+    fw["coverage_shape"] = dict(fw["coverage_shape"], offset_toward_net_m=1.4, offset_across_m=0.0)
+    ids = {a.id: a for a in coach(fw, level="club", overrides=overrides)}
+    centre = ids.get("coverage_centre")
+    assert centre is not None and centre.severity == "work-on"
+    assert "deep" in centre.title.lower() or "net" in centre.detail.lower()
+    assert BANDS["club"]["coverage_offset_net_m"].hi is not None  # defaults untouched

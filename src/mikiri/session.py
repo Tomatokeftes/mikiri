@@ -601,7 +601,8 @@ class ProjectSession:
         if self._launches:
             from mikiri.shots import name_shots
 
-            name_shots(series, self._launches)
+            cam_view = self.camera_view()
+            name_shots(series, self._launches, view=None if cam_view is None else cam_view["view"])
         self._strokes = series
         return series
 

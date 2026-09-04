@@ -13,6 +13,7 @@ from mikiri.court import (
     COURT_LENGTH,
     DOUBLES_WIDTH,
     PRESETS,
+    CourtCalibration,
     build_track,
     compute_homography,
     court_to_image,
@@ -218,8 +219,8 @@ def test_court_track_carries_uncertainty(tracked_session):
     assert track is not None and track.cov is not None
     assert track.cov.shape == (track.positions.shape[0], 2, 2)
     finite = np.isfinite(track.cov).all(axis=(1, 2))
-    if finite.any():
-        assert (np.linalg.eigvalsh(track.cov[finite]) >= -1e-12).all()  # positive semi-definite
+    assert finite.sum() > 0, "no frame produced a usable covariance"
+    assert (np.linalg.eigvalsh(track.cov[finite]) >= -1e-12).all()  # positive semi-definite
 
 
 def test_court_uncertainty_payload_is_json_ready(tracked_session):
@@ -257,6 +258,8 @@ def test_draw_court_accepts_uncertainty_without_crashing(tracked_session):
     grid = court_uncertainty_grid(H, tracked_session.project.court)
     img = draw_court(track.positions, current=0, cov=track.cov, uncertainty=grid, heat=True)
     assert img.ndim == 3 and img.shape[2] == 3 and img.dtype == np.uint8
+    # A mismatched covariance must be ignored rather than raise.
+    assert draw_court(track.positions, cov=track.cov[:3], uncertainty=grid).shape == img.shape
 
 
 def test_export_pack_carries_the_full_advice_not_just_the_headline(tracked_session, tmp_path):
@@ -267,7 +270,11 @@ def test_export_pack_carries_the_full_advice_not_just_the_headline(tracked_sessi
     panel = tracked_session.coaching()
     full = tracked_session.coaching(limit=0)
     assert panel is not None and full is not None
-    assert len(panel) <= 3
+    # At most three things to work on, plus the data-quality advisory, which
+    # rides outside the cap because it is the caveat on the other three.
+    work_on = [a for a in panel if a["severity"] == "work-on"]
+    assert len(work_on) <= 3
+    assert all(a["severity"] == "work-on" or a["id"] == "data_quality" for a in panel)
     assert len(full) >= len(panel)
 
     out = tmp_path / "pack"
@@ -318,3 +325,187 @@ def test_memoised_racket_reacts_to_a_scale_calibration(tracked_session):
     assert tracked_session.racket().speed_mps is not None
     tracked_session.set_calibration("clear")
     assert tracked_session.racket().speed_mps is None
+
+
+# --- pinning the behaviour that mutation testing showed was unprotected ---------
+
+
+def test_coverage_shape_reports_the_major_axis_as_the_major_one():
+    from mikiri.court import _coverage_shape
+
+    rng = np.random.default_rng(0)
+    # Deliberately long up the court (y), short across it (x).
+    pts = np.stack([3.05 + rng.normal(0, 0.2, 400), 4.0 + rng.normal(0, 1.6, 400)], axis=1)
+    got = _coverage_shape(pts)
+    assert got["spread_major_m"] > got["spread_minor_m"]
+    assert got["spread_major_m"] == pytest.approx(1.6, rel=0.2)
+    assert got["spread_minor_m"] == pytest.approx(0.2, rel=0.3)
+    assert got["eccentricity"] > 0.9
+    assert got["axis_deg_from_front_back"] < 15.0  # the long axis runs up the court
+
+
+def test_coverage_shape_knows_which_half_it_is_in():
+    """ "Toward the net" flips sign between halves, so it must not assume one."""
+    from mikiri.court import _coverage_shape
+
+    rng = np.random.default_rng(1)
+    near = np.stack([3.05 + rng.normal(0, 0.3, 200), 5.5 + rng.normal(0, 0.3, 200)], axis=1)
+    far = np.stack([3.05 + rng.normal(0, 0.3, 200), 8.0 + rng.normal(0, 0.3, 200)], axis=1)
+    a, b = _coverage_shape(near), _coverage_shape(far)
+    assert a["half"] == "near" and b["half"] == "far"
+    # Both sit about 2.2 m from their own baseline-to-net midpoint, on the net side.
+    assert a["offset_toward_net_m"] > 1.5 and b["offset_toward_net_m"] > 1.5
+
+    straddle = np.vstack([near, far])
+    c = _coverage_shape(straddle)
+    assert c["half"] == "both"
+    assert c["offset_toward_net_m"] is None  # meaningless, so unstated
+
+
+def test_heat_layer_widens_with_the_covariance_it_is_given():
+    """The whole point of the kernel is that it is the measured uncertainty."""
+    from mikiri.court import COURT_LENGTH, DOUBLES_WIDTH, _heat_layer
+
+    size, margin = 400, 1.0
+    scale = size / (COURT_LENGTH + 2 * margin)
+    w = int(round((DOUBLES_WIDTH + 2 * margin) * scale))
+    shape = (size, w)
+
+    def to_px(x, y):
+        return int(round((x + margin) * scale)), int(round(size - (y + margin) * scale))
+
+    pos = np.tile([3.05, 6.7], (60, 1))
+    tight = np.tile(np.array([[[0.0004, 0.0], [0.0, 0.0004]]]), (60, 1, 1))
+    loose = tight * 100.0
+
+    def extent(field, axis):
+        mass = field.sum(axis=1 - axis)
+        idx = np.flatnonzero(mass > 0.02 * mass.max())
+        return int(idx[-1] - idx[0]) if idx.size else 0
+
+    a = _heat_layer(pos, tight, shape, to_px, scale)
+    b = _heat_layer(pos, loose, shape, to_px, scale)
+    assert extent(b, 0) > extent(a, 0)
+    assert extent(b, 1) > extent(a, 1)
+
+
+def test_heat_layer_smears_along_the_axis_the_covariance_names():
+    """An error long in y must smear the heat in y, not in x."""
+    from mikiri.court import COURT_LENGTH, DOUBLES_WIDTH, _heat_layer
+
+    size, margin = 400, 1.0
+    scale = size / (COURT_LENGTH + 2 * margin)
+    w = int(round((DOUBLES_WIDTH + 2 * margin) * scale))
+
+    def to_px(x, y):
+        return int(round((x + margin) * scale)), int(round(size - (y + margin) * scale))
+
+    pos = np.tile([3.05, 6.7], (60, 1))
+    # 1.2 m of error along the court, 2 cm across it. The kernel adds a stance
+    # footprint in quadrature, so the drawn ratio is bounded by that floor
+    # rather than by the covariance alone; make the error large enough that the
+    # axis, not the floor, decides the shape.
+    long_y = np.tile(np.array([[[0.0004, 0.0], [0.0, 1.44]]]), (60, 1, 1))
+    field = _heat_layer(pos, long_y, (size, w), to_px, scale)
+    rows = np.flatnonzero(field.sum(axis=1) > 0.02 * field.sum(axis=1).max())
+    cols = np.flatnonzero(field.sum(axis=0) > 0.02 * field.sum(axis=0).max())
+    assert (rows[-1] - rows[0]) > 3 * (cols[-1] - cols[0])
+
+
+def test_track_covariance_grows_when_clicked_points_are_uncertain():
+    from mikiri.court import track_covariance
+
+    cam = _synth_camera()
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    calib = CourtCalibration(
+        image_points=cam.floor(corners).tolist(), court_points=corners.tolist()
+    )
+    pts = cam.floor(np.array([[3.05, 11.0], [3.05, 2.0]]))
+    valid = np.ones(2, bool)
+    bare = track_covariance(pts, valid, tracked_homography(cam), None)
+    withcal = track_covariance(pts, valid, tracked_homography(cam), calib)
+    for i in range(2):
+        assert np.trace(withcal[i]) > np.trace(bare[i])
+
+
+def tracked_homography(cam):
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    H, _ = compute_homography(cam.floor(corners), corners)
+    return H
+
+
+def test_airborne_is_the_open_interval_between_takeoff_and_landing():
+    """The takeoff and landing frames are themselves floor contacts."""
+    from mikiri.court import build_track
+
+    cam = _synth_camera()
+    H = tracked_homography(cam)
+    n = 80
+    kp = np.zeros((n, N_KEYPOINTS, 3))
+    kp[:, :, 2] = 0.9
+    px = cam.floor(np.array([[3.05, 3.0]]))[0]
+    for name in ("left_ankle", "right_ankle", "head", "nose"):
+        kp[:, KP[name], :2] = px
+    kp[:, KP["head"], 1] -= 200
+    kp[:, KP["nose"], 1] -= 190
+    track = build_track(kp, H, 30.0, flights=[(39, 50)])
+    assert not track.airborne[39] and track.airborne[40]
+    assert track.airborne[49] and not track.airborne[50]
+
+
+def test_build_track_uses_the_ankle_height_it_was_given():
+    """The parameter is advertised; it must not be quietly ignored."""
+    from mikiri.court import build_track
+    from mikiri.geometry import project_offplane
+
+    cam = _synth_camera()
+    H = tracked_homography(cam)
+    n = 40
+    truth = np.tile([3.05, 6.0], (n, 1))
+    for z in (0.075, 0.15):
+        mapped = project_offplane(truth, z, cam.truth())
+        img = court_to_image(H, mapped)
+        kp = np.zeros((n, N_KEYPOINTS, 3))
+        kp[:, :, 2] = 0.9
+        for name in ("left_ankle", "right_ankle"):
+            kp[:, KP[name], :2] = img
+        kp[:, KP["head"], :2] = img - [0, 200]
+        kp[:, KP["nose"], :2] = img - [0, 190]
+        track = build_track(kp, H, 30.0, camera=cam.truth(), ankle_height=z)
+        ok = np.isfinite(track.positions).all(axis=1)
+        assert np.allclose(track.positions[ok], truth[ok], atol=0.02), z
+        assert track.ankle_height == z
+
+
+def test_drawn_ellipse_points_the_way_the_covariance_says():
+    """The court map flips y, so the drawn angle must be negated. Check the pixels."""
+    size = 900
+
+    def drawn_axis(theta_deg: float) -> float:
+        th = np.radians(theta_deg)
+        R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+        cov = (R @ np.diag([0.9, 0.02]) @ R.T)[None]
+        grid = np.array([[3.05, 6.70]])
+        img = draw_court(None, size=size, heat=False, uncertainty=(grid, cov))
+        # The caption at the bottom is drawn in the same colour, so crop to a
+        # window around the ellipse's own centre before measuring.
+        cy, cx = img.shape[0] // 2, img.shape[1] // 2
+        half = 220
+        img = img[max(0, cy - half) : cy + half, max(0, cx - half) : cx + half]
+        # The ellipse is drawn in BGR (90, 230, 255): the only thing on the
+        # image that is bright in red and green but not in blue. The court fill
+        # is (200, 160, 60) and the lines are white, so both are excluded.
+        b, g, r = img[:, :, 0].astype(int), img[:, :, 1].astype(int), img[:, :, 2].astype(int)
+        ys, xs = np.nonzero((r > 200) & (g > 190) & (b < 170))
+        assert xs.size > 30, theta_deg
+        pts = np.stack([xs - xs.mean(), ys - ys.mean()])
+        vals, vecs = np.linalg.eigh(np.cov(pts))
+        v = vecs[:, int(np.argmax(vals))]
+        # Screen y grows downward, so flip it back to court orientation.
+        return float(np.degrees(np.arctan2(-v[1], v[0]))) % 180.0
+
+    for court_deg in (0.0, 30.0, 60.0, 90.0):
+        got = drawn_axis(court_deg)
+        want = court_deg % 180.0
+        err = min(abs(got - want), 180.0 - abs(got - want))
+        assert err < 8.0, (court_deg, got)

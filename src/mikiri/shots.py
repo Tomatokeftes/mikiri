@@ -23,6 +23,18 @@ stroke's own descriptor. The discriminators are the coach's own:
 * contact low, launched **up**, with pace to travel  -> lift
 * first stroke of a real rally, underarm, gently up  -> serve
 
+**These discriminators need a side-on camera, and the module enforces that.**
+A :class:`~mikiri.shuttle.Launch` carries an image-plane direction and an
+image-plane pace. Side-on those are close to the world elevation and the world
+pace. From behind the baseline they are not: a shuttle travelling away from the
+camera is foreshortened along its own direction of travel, so a textbook smash
+at a true -20 degrees reads as roughly -60 degrees at a sixth of its real pace
+-- which lands squarely in the drop band. Since that is the camera placement
+Mikiri recommends for footwork, the failure would be the common case rather
+than the corner one. So :func:`name_shots` takes the view from
+:func:`mikiri.geometry.view_class` and names nothing at all unless it is
+side-on, saying so in the evidence.
+
 Every threshold below is a coaching heuristic chosen to sit clearly between the
 shot types on club footage. None of them is a literature value, and they are
 module constants precisely so a user can move them. Where the evidence lands
@@ -38,6 +50,7 @@ from __future__ import annotations
 
 import math
 
+from mikiri.geometry import VIEW_SIDE_ON
 from mikiri.shuttle import Launch
 from mikiri.strokes import Stroke, StrokeSeries, rally_segments
 
@@ -95,11 +108,19 @@ HEIGHT_CLASS_ABOVE_NET = {"overhead": True, "sidearm": True, "underarm": False}
 
 
 def _elevation_deg(launch: Launch) -> float:
-    """Signed angle above the horizon in ``[-90, 90]``, ignoring left from right.
+    """Signed IMAGE-PLANE angle above the horizontal in ``[-90, 90]``.
 
-    A shot to the left and a shot to the right are the same shot; only the
-    vertical component names it. ``asin(sin(theta))`` folds the direction onto
-    that axis in one step.
+    Not the world elevation, and the difference decides whether this module may
+    speak at all. Seen from the side, the two are close. Seen from behind the
+    baseline they are not: a shuttle travelling away from the camera and
+    downwards is foreshortened along its direction of travel, so the same
+    smash reads as far steeper in the image and much slower. A textbook smash
+    at a true -20 degrees projects to roughly -60 degrees at a sixth of its
+    real pace from a camera 4 m up behind the baseline, which reads as a drop.
+
+    :func:`name_shots` refuses the distinctions that depend on this whenever
+    the view is not side-on; the raw number is still returned, labelled for
+    what it is.
     """
     return launch.elevation_deg()
 
@@ -133,7 +154,11 @@ def _confidence(launch: Launch, stroke: Stroke, margin: float) -> float:
 
 
 def _classify(
-    stroke: Stroke, launch: Launch, net_height_m: float, is_rally_start: bool
+    stroke: Stroke,
+    launch: Launch,
+    net_height_m: float,
+    is_rally_start: bool,
+    view: str | None = None,
 ) -> tuple[str | None, float, str]:
     """Name one stroke from its launch, or explain why it stays unnamed.
 
@@ -152,6 +177,18 @@ def _classify(
     speed = float(launch.speed_bh)
     if not (math.isfinite(elev) and math.isfinite(speed)):
         return None, 0.0, "launch direction or speed is not finite: descriptor only"
+    # Every band below reads the image-plane angle and pace as though they were
+    # the world elevation and the world pace. That holds side-on and fails
+    # badly from behind: a smash travelling away from the camera is
+    # foreshortened along its own direction of travel, so it reads as much
+    # steeper and much slower -- as a drop. Refuse rather than name it wrong.
+    if view is not None and view != VIEW_SIDE_ON:
+        return (
+            None,
+            0.0,
+            f"a {view} camera foreshortens the shuttle's path along the direction "
+            "that separates these shots, so the launch cannot name one: descriptor only",
+        )
     where = f"launched {abs(elev):.0f} deg {'up' if elev >= 0 else 'down'} at {speed:.1f} bh/s"
     above, how = _above_net(stroke, net_height_m)
 
@@ -262,6 +299,7 @@ def name_shots(
     frame_tolerance: int = FRAME_TOLERANCE,
     min_launch_confidence: float = MIN_LAUNCH_CONFIDENCE,
     max_rally_gap_s: float = 4.0,
+    view: str | None = None,
 ) -> StrokeSeries:
     """Attach shot names to the strokes that have shuttle evidence for one.
 
@@ -281,6 +319,11 @@ def name_shots(
         min_launch_confidence: Launches weaker than this are ignored.
         max_rally_gap_s: Silence that separates two rallies, which is what
             makes a stroke the candidate first serve of one.
+        view: The camera view from :func:`mikiri.geometry.view_class`. The
+            bands read the image-plane launch as if it were the world launch,
+            which is true side-on and false from behind, so anything other than
+            ``"side-on"`` refuses every name. ``None`` means the view is not
+            known and the bands are applied with that caveat in the evidence.
 
     Returns:
         The same :class:`~mikiri.strokes.StrokeSeries`, with ``shot``,
@@ -312,7 +355,7 @@ def name_shots(
             )
             continue
         shot, confidence, evidence = _classify(
-            stroke, launch, float(net_height_m), int(stroke.frame) in starts
+            stroke, launch, float(net_height_m), int(stroke.frame) in starts, view
         )
         stroke.shot = shot
         stroke.shot_confidence = float(confidence)

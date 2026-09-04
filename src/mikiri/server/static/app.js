@@ -1055,7 +1055,7 @@ function renderCourt() {
       ['zones', zones],
       ['measured', `${fw.frames_measured} of ${fw.frames_total} frames`],
     ];
-    if (u) rows.push(['position error (95%)', `${Math.round(u.median_along_court * 100)} cm along court, ${Math.round(u.median_across_court * 100)} cm across (worst ${Math.round(u.worst_along_court * 100)} cm)`]);
+    if (u) rows.push(['position error (95%)', `${Math.round(u.median_major_m * 100)} cm ${u.major_axis_runs || 'on the long axis'}, ${Math.round(u.median_minor_m * 100)} cm the other way (worst ${Math.round(u.worst_major_m * 100)} cm)`]);
     if (fw.camera) {
       rows.push(['camera', `${fw.camera.height_m} m high at x ${fw.camera.ground_point_m[0]}, y ${fw.camera.ground_point_m[1]}`]);
       if (fw.ankle_bias_corrected_m) rows.push(['bias corrected', `${Math.round(fw.ankle_bias_corrected_m.far_baseline * 100)} cm at the far baseline`]);

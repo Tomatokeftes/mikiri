@@ -546,3 +546,66 @@ def test_a_launch_measured_from_video_names_a_shot():
     named = name_shots(_series(stroke), {4: launch})
     assert named.strokes[0].shot == "smash"
     assert "launched" in named.strokes[0].evidence
+
+
+# --- the view precondition -------------------------------------------------------
+
+
+def _overhead_smash_launch():
+    """A stroke and launch that name a smash cleanly from a side-on camera."""
+    from mikiri.shuttle import Launch
+    from mikiri.strokes import Stroke, StrokeSeries
+
+    stroke = Stroke(
+        frame=10,
+        confidence=0.9,
+        height_class="overhead",
+        side="forehand",
+        zone="rear",
+        racket_speed_bh=14.0,
+        contact_height_m=2.6,
+    )
+    launch = Launch(
+        frame=10,
+        direction_deg=-35.0,
+        rising=False,
+        speed_px_s=4000.0,
+        speed_bh=16.0,
+        speed_mps=None,
+        speed_uncertainty=None,
+        n_points=6,
+        confidence=0.9,
+        note="clean",
+    )
+    return StrokeSeries(strokes=[stroke], fps=30.0), {10: launch}
+
+
+def test_a_side_on_view_names_the_shot():
+    from mikiri.geometry import VIEW_SIDE_ON
+    from mikiri.shots import name_shots
+
+    series, launches = _overhead_smash_launch()
+    got = name_shots(series, launches, view=VIEW_SIDE_ON).strokes[0]
+    assert got.shot == "smash"
+    assert got.shot_confidence > 0
+
+
+@pytest.mark.parametrize("view", ["rear", "oblique"])
+def test_a_view_that_foreshortens_the_flight_names_nothing(view):
+    """From behind, a smash's image-plane launch reads like a drop. Refuse it."""
+    from mikiri.shots import name_shots
+
+    series, launches = _overhead_smash_launch()
+    got = name_shots(series, launches, view=view).strokes[0]
+    assert got.shot is None
+    assert got.shot_confidence == 0.0
+    assert view in got.evidence and "foreshortens" in got.evidence
+    assert got.label() == got.descriptor()  # falls back to what is still true
+
+
+def test_an_unknown_view_still_names_but_the_bands_are_unchanged():
+    """Without a camera we cannot check the view, so the bands apply as before."""
+    from mikiri.shots import name_shots
+
+    series, launches = _overhead_smash_launch()
+    assert name_shots(series, launches, view=None).strokes[0].shot == "smash"

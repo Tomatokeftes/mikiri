@@ -264,13 +264,27 @@ def test_uncertainty_shrinks_when_the_camera_is_raised():
 def test_degenerate_points_give_nan_not_a_crash():
     cam = Camera()
     H = cam.homography()
-    # A point on the horizon: w == 0.
-    horizon = np.array([[0.0, 0.0], [1e9, 1e9]])
-    J = position_jacobian(H, horizon)
-    cov = position_covariance(H, horizon, calibration=None)
+    # One real court point, and one exactly on the horizon, where the
+    # perspective divisor vanishes: solve H[2] . (u, v, 1) = 0 for v at u = 0.
+    horizon_v = -H[2, 2] / H[2, 1]
+    pts = np.vstack([cam.floor(np.array([[3.05, 2.0]])), np.array([[0.0, horizon_v]])])
+    J = position_jacobian(H, pts)
+    cov = position_covariance(H, pts, calibration=None)
     major, minor, angle = error_ellipse(cov)
     assert J.shape == (2, 2, 2) and cov.shape == (2, 2, 2)
-    assert np.isnan(major[1]) or np.isfinite(major[1])  # never raises
+    assert np.isfinite(major[0]) and major[0] > 0  # the real point is measurable
+    assert np.isnan(major[1]) and np.isnan(minor[1])  # the horizon point is not
+    assert np.isnan(J[1]).all()
+
+
+def test_a_point_far_outside_the_frame_does_not_raise():
+    """Not on the horizon, so not NaN -- but it must still come back finite."""
+    cam = Camera()
+    H = cam.homography()
+    cov = position_covariance(H, np.array([[1e9, 1e9]]), calibration=None)
+    major, minor, _ = error_ellipse(cov)
+    assert cov.shape == (1, 2, 2)
+    assert np.isfinite(major[0]) and major[0] >= 0
 
 
 def test_error_ellipse_scales_with_nsigma():
@@ -279,6 +293,51 @@ def test_error_ellipse_scales_with_nsigma():
     m2, n2, _ = error_ellipse(cov, nsigma=2.0)
     assert m1[0] == pytest.approx(0.2) and n1[0] == pytest.approx(0.1)
     assert m2[0] == pytest.approx(0.4) and n2[0] == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize("theta_deg", [0.0, 30.0, -45.0, 80.0])
+def test_error_ellipse_recovers_the_orientation(theta_deg):
+    """The angle is what the court map draws with, so it has to be right."""
+    th = np.radians(theta_deg)
+    R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+    cov = (R @ np.diag([0.04, 0.0025]) @ R.T)[None]
+    major, minor, angle = error_ellipse(cov)
+    assert major[0] == pytest.approx(0.2) and minor[0] == pytest.approx(0.05)
+    # The major axis is a direction, so it is only defined modulo 180 degrees.
+    got = np.degrees(angle[0]) % 180.0
+    assert min(abs(got - theta_deg % 180.0), 180.0 - abs(got - theta_deg % 180.0)) < 1e-6
+
+
+def test_nsigma_95_is_the_two_dimensional_chi_square_factor():
+    """1-sigma covers only 39% in 2-D; this constant is what makes it 95%."""
+    from scipy.stats import chi2
+
+    from mikiri.geometry import NSIGMA_95, Z_95_SCALAR
+
+    assert NSIGMA_95 == pytest.approx(float(np.sqrt(chi2.ppf(0.95, 2))), abs=1e-9)
+    assert Z_95_SCALAR == pytest.approx(float(np.sqrt(chi2.ppf(0.95, 1))), abs=1e-9)
+    assert NSIGMA_95 > Z_95_SCALAR  # the 2-D factor is the wider one
+
+
+def test_camera_recovery_rejects_posts_that_disagree():
+    """Two posts over-determine the fit, so their residual is a real check."""
+    from mikiri.geometry import MAX_CAMERA_RESIDUAL_M
+
+    cam = Camera(ground=(3.05, -5.0), height=4.0)
+    H = cam.homography()
+    posts = _posts(cam)
+    bad = [
+        posts[0],
+        VerticalSegment(
+            base_court=posts[1].base_court,
+            top_image=(posts[1].top_image[0], posts[1].top_image[1] + 40.0),
+        ),
+    ]
+    with pytest.raises(ValueError, match="disagree"):
+        camera_from_verticals(bad, H)
+    # A consistent pair still passes, with a residual well under the limit.
+    good = camera_from_verticals(posts, H)
+    assert good.residual_m < MAX_CAMERA_RESIDUAL_M
 
 
 # --- does the correction actually help? -----------------------------------------

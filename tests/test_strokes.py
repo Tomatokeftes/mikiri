@@ -240,8 +240,8 @@ def test_side_is_unknown_when_the_arm_is_hidden():
     kp = _add_swing(_pose(60), at=30)
     kp[:, KP["left_shoulder"], 2] = 0.0
     got = detect_strokes(kp, FPS, _series(kp))
-    if got.strokes:
-        assert got.strokes[0].side == "unknown"
+    assert got.strokes, "the swing must still be detected; only the side is unknown"
+    assert got.strokes[0].side == "unknown"
 
 
 def test_zone_comes_from_the_court_track():
@@ -435,3 +435,131 @@ def test_a_weak_launch_leaves_the_stroke_unnamed(tracked_session):
         )
     }
     assert tracked_session.strokes().strokes[0].shot is None
+
+
+# --- bugs found by review, pinned so they stay fixed -----------------------------
+
+
+def test_height_class_uses_the_racket_hand_not_the_best_seen_wrist():
+    """A left-hander's overhead must not read as underarm off the right arm."""
+    from mikiri.strokes import _height_class
+
+    kp = _pose(1)[0]
+    kp[KP["left_wrist"], :2] = (CX - 40, SHOULDER_Y - 150)  # hitting arm, overhead
+    kp[KP["right_wrist"], :2] = (CX + 60, HIP_Y + 90)  # other arm, low
+    assert _height_class(kp, "left", 0.3)[0] == "overhead"
+    assert _height_class(kp, "right", 0.3)[0] == "underarm"
+
+
+def test_height_class_does_not_flip_on_the_other_arm_being_better_seen():
+    """The non-hitting arm is usually the better-detected one; it must not decide."""
+    from mikiri.strokes import _height_class
+
+    kp = _pose(1)[0]
+    kp[KP["right_wrist"], :2] = (CX + 40, HIP_Y + 90)  # hitting arm, genuine underarm
+    kp[KP["left_wrist"], :2] = (CX - 40, SHOULDER_Y - 120)  # other arm raised
+    for other_conf in (0.95, 0.80, 0.31):
+        kp[KP["left_wrist"], 2] = other_conf
+        kp[KP["right_wrist"], 2] = 0.90
+        assert _height_class(kp, "right", 0.3)[0] == "underarm", other_conf
+
+
+def test_height_class_falls_back_to_the_other_wrist_with_less_confidence():
+    from mikiri.strokes import _height_class
+
+    kp = _pose(1)[0]
+    kp[KP["right_wrist"], 2] = 0.0  # hitting arm not visible
+    kp[KP["left_wrist"], :2] = (CX - 40, SHOULDER_Y - 120)
+    cls, conf = _height_class(kp, "right", 0.3)
+    assert cls == "overhead"
+    full = _height_class(kp, "left", 0.3)[1]
+    assert conf < full  # the fallback says so in the confidence
+
+
+def test_two_swings_just_over_the_refractory_do_not_manufacture_a_third():
+    """A follow-through exactly one gap-width along is not a contact."""
+    for offset in (11, 12, 13):
+        kp = _add_swing(
+            _add_swing(_pose(120), at=40, direction=1, reach=300.0),
+            at=40 + offset,
+            direction=-1,
+            reach=300.0,
+        )
+        got = detect_strokes(kp, FPS, _series(kp))
+        assert len(got.strokes) == 1, (offset, [s.frame for s in got.strokes])
+
+
+def test_a_rising_ramp_has_no_peaks():
+    """Without a local-maximum test the refractory rule alone invents one per gap."""
+    from mikiri.strokes import MIN_PEAK_PROMINENCE_BH, MIN_PEAK_SPEED_BH, _peaks
+
+    ramp = np.linspace(1.2, 9.0, 150)
+    assert _peaks(ramp, FPS, MIN_PEAK_SPEED_BH, MIN_PEAK_PROMINENCE_BH) == []
+
+
+def test_a_shoulder_on_a_big_peak_is_not_a_second_contact():
+    """Prominence is measured against the higher trough, not the lower."""
+    from mikiri.strokes import MIN_PEAK_PROMINENCE_BH, MIN_PEAK_SPEED_BH, _peaks
+
+    sig = np.full(120, 0.1)
+    # A peak with a decaying follow-through, and a small bump sitting on that
+    # decay far enough along to clear the refractory window.
+    sig[60:100] = 0.1 + 5.9 * np.exp(-np.arange(40) / 8.0)
+    sig[59] = 3.0
+    sig[75] += 0.25
+    got = _peaks(sig, FPS, MIN_PEAK_SPEED_BH, MIN_PEAK_PROMINENCE_BH)
+    # Frame 75 is a genuine local maximum and clears the window-wide minimum
+    # easily; it is only rejected because the trough on its uphill side is high.
+    assert sig[75] > sig[74] and sig[75] > sig[76]
+    assert sig[75] - sig.min() > MIN_PEAK_PROMINENCE_BH
+    assert got == [60], got
+
+
+def test_a_nan_anywhere_does_not_wipe_out_every_peak():
+    """NumPy sorts NaN last, so the reversed order puts it first: skip, not break."""
+    from mikiri.strokes import MIN_PEAK_PROMINENCE_BH, MIN_PEAK_SPEED_BH, _peaks
+
+    sig = np.full(150, 0.1)
+    for centre in (30, 90):
+        sig[centre] = 4.0
+        sig[centre - 1] = sig[centre + 1] = 2.5
+    assert _peaks(sig, FPS, MIN_PEAK_SPEED_BH, MIN_PEAK_PROMINENCE_BH) == [30, 90]
+    sig[5] = np.nan  # nowhere near either peak
+    assert _peaks(sig, FPS, MIN_PEAK_SPEED_BH, MIN_PEAK_PROMINENCE_BH) == [30, 90]
+
+
+def test_the_refractory_never_falls_below_the_stated_gap():
+    """At 29.97 fps, rounding down would silently shorten the guarantee."""
+    from mikiri.strokes import MIN_PEAK_PROMINENCE_BH, MIN_PEAK_SPEED_BH, _peaks
+
+    for fps in (25.0, 29.97, 30.0, 50.0, 59.94):
+        sig = np.full(400, 0.1)
+        step = int(MIN_STROKE_GAP_S * fps)  # deliberately just under the gap
+        for centre in (100, 100 + step):
+            sig[centre] = 4.0
+            sig[centre - 1] = sig[centre + 1] = 2.5
+        got = _peaks(sig, fps, MIN_PEAK_SPEED_BH, MIN_PEAK_PROMINENCE_BH)
+        assert len(got) == 1, (fps, got)
+
+
+def test_a_one_frame_clip_returns_empty_rather_than_raising():
+    assert swing_signal(_pose(1), FPS).shape == (1,)
+    assert detect_strokes(_pose(1), FPS).strokes == []
+    assert detect_strokes(_pose(2), FPS).strokes == []
+
+
+def test_side_is_unknown_inside_the_dead_band():
+    """The forehand/backhand test has a deliberate no-call zone; pin its edges."""
+    from mikiri.strokes import _side
+
+    kp = _pose(1)[0]
+    midline = 0.5 * (kp[KP["right_shoulder"], 0] + kp[KP["left_shoulder"], 0])
+    half = 0.5 * abs(kp[KP["right_shoulder"], 0] - kp[KP["left_shoulder"], 0])
+    for t, expect in (
+        (0.30, "forehand"),
+        (0.05, "unknown"),
+        (-0.05, "unknown"),
+        (-0.30, "backhand"),
+    ):
+        kp[KP["right_wrist"], 0] = midline + t * half
+        assert _side(kp, "right", 0.3)[0] == expect, t

@@ -28,12 +28,18 @@ direction recovered by :mod:`mikiri.shuttle`. Without that evidence the field
 stays ``None`` rather than guessing, and the reason is recorded.
 
 Everything is measured in body heights per second and in fractions of the
-player's own height, so a threshold tuned on a near-court player still holds
-when the same player is at the far baseline and half the size in pixels.
+player's own height, so a threshold tuned on a near-court player still applies
+unchanged when the same player is at the far baseline and half the size in
+pixels. The *threshold* carries over; the *decision* gets noisier, because
+normalising by a smaller torso amplifies pixel jitter in proportion. Near the
+camera the contact-height class is stable; at the far baseline a contact close
+to a class boundary will flip between neighbouring frames, which is what the
+per-stroke confidence is for.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -184,6 +190,8 @@ def swing_signal(
     n = kp.shape[0]
     if n == 0:
         return np.zeros(0)
+    if n < 2:
+        return np.full(n, np.nan)  # a gradient needs two samples
     bh = body_height_px(kp, conf_thr)
     if not np.isfinite(bh) or bh <= 0:
         return np.full(n, np.nan)
@@ -207,42 +215,83 @@ def swing_signal(
 
 
 def _peaks(sig: np.ndarray, fps: float, min_speed: float, min_prominence: float) -> list[int]:
-    """Local maxima that are fast enough and stand clear of their surroundings."""
+    """Local maxima that are fast enough and stand clear on *both* sides.
+
+    Three tests, each of which matters:
+
+    * a genuine local maximum, because without it the refractory rule alone
+      will happily accept the first sample one gap-width along from an
+      accepted peak, whatever its shape -- on a rising ramp that manufactures
+      one "contact" every gap-width, none of them a maximum;
+    * a speed floor, so ordinary court movement does not qualify;
+    * prominence measured against the higher of the two surrounding troughs,
+      not the lower. A shoulder on the side of a big peak clears the
+      window-wide minimum easily and is not a separate swing.
+    """
     n = sig.shape[0]
     if n < 3:
         return []
-    gap = max(1, int(round(MIN_STROKE_GAP_S * fps)))
+    # Round up: at 29.97 fps, rounding down would make the effective refractory
+    # 0.434 s and quietly break the guarantee MIN_STROKE_GAP_S is meant to give.
+    gap = max(1, math.ceil(MIN_STROKE_GAP_S * fps))
     order = np.argsort(sig)[::-1]
     chosen: list[int] = []
-    for i in order:
+    for idx in order:
+        i = int(idx)
         v = sig[i]
-        if not np.isfinite(v) or v < min_speed:
-            break  # sorted descending: everything after is worse
-        if any(abs(int(i) - c) < gap for c in chosen):
+        # NumPy sorts NaN last, so the reverse puts it first: skip, never break.
+        if not np.isfinite(v):
             continue
-        lo = max(0, int(i) - gap)
-        hi = min(n, int(i) + gap + 1)
-        window = sig[lo:hi]
-        trough = np.nanmin(window) if np.isfinite(window).any() else np.nan
-        if not np.isfinite(trough) or (v - trough) < min_prominence:
+        if v < min_speed:
+            break  # the rest are finite and smaller
+        if i == 0 or i == n - 1:
+            continue  # an endpoint cannot be shown to be a maximum
+        if not (v >= sig[i - 1] and v >= sig[i + 1]):
             continue
-        chosen.append(int(i))
+        if any(abs(i - c) < gap for c in chosen):
+            continue
+        left = sig[max(0, i - gap) : i]
+        right = sig[i + 1 : min(n, i + gap + 1)]
+        if not (left.size and right.size):
+            continue
+        with np.errstate(invalid="ignore"):
+            lmin = np.nanmin(left) if np.isfinite(left).any() else np.nan
+            rmin = np.nanmin(right) if np.isfinite(right).any() else np.nan
+        if not (np.isfinite(lmin) and np.isfinite(rmin)):
+            continue
+        if (v - max(float(lmin), float(rmin))) < min_prominence:
+            continue
+        chosen.append(i)
     return sorted(chosen)
 
 
-def _height_class(kp_frame: np.ndarray, conf_thr: float) -> tuple[str, float]:
-    """Contact height class from the wrist against the shoulder and hip lines.
+def _height_class(kp_frame: np.ndarray, racket_hand: str, conf_thr: float) -> tuple[str, float]:
+    """Contact height class from the hitting wrist against the shoulder and hip.
+
+    It must be the *hitting* wrist, not whichever wrist the pose model happened
+    to see best. The non-hitting arm is routinely the better-detected one --
+    it moves less, so it blurs less -- and it is frequently on the opposite
+    side of the body, which inverts the answer. The other wrist is used only
+    when the hitting one is not visible at all, and the confidence is halved to
+    say so.
 
     Returns ``(class, confidence)``; the class is ``"sidearm"`` with zero
     confidence when the reference joints are not visible.
     """
-    wrist_r, wrist_l = kp_frame[KP["right_wrist"]], kp_frame[KP["left_wrist"]]
-    wrist = wrist_r if wrist_r[2] >= wrist_l[2] else wrist_l
+    hand = "left" if racket_hand == "left" else "right"
+    wrist = kp_frame[KP[f"{hand}_wrist"]]
+    penalty = 1.0
+    if wrist[2] < conf_thr:
+        other = kp_frame[KP[f"{'right' if hand == 'left' else 'left'}_wrist"]]
+        if other[2] < conf_thr:
+            return "sidearm", 0.0
+        wrist = other
+        penalty = 0.5
     sh = [kp_frame[KP[f"{s}_shoulder"]] for s in ("left", "right")]
     hp = [kp_frame[KP[f"{s}_hip"]] for s in ("left", "right")]
     sh_ok = [p for p in sh if p[2] >= conf_thr]
     hp_ok = [p for p in hp if p[2] >= conf_thr]
-    if wrist[2] < conf_thr or not sh_ok or not hp_ok:
+    if not sh_ok or not hp_ok:
         return "sidearm", 0.0
     shoulder_y = float(np.mean([p[1] for p in sh_ok]))
     hip_y = float(np.mean([p[1] for p in hp_ok]))
@@ -252,10 +301,10 @@ def _height_class(kp_frame: np.ndarray, conf_thr: float) -> tuple[str, float]:
     # 0 at the shoulder, 1 at the hip, negative above the shoulder.
     t = (float(wrist[1]) - shoulder_y) / torso
     if t < -0.15:
-        return "overhead", float(min(1.0, 0.5 + abs(t)))
+        return "overhead", float(min(1.0, 0.5 + abs(t)) * penalty)
     if t > 1.0:
-        return "underarm", float(min(1.0, 0.5 + (t - 1.0)))
-    return "sidearm", float(0.5 + 0.5 * min(abs(t), abs(1.0 - t)))
+        return "underarm", float(min(1.0, 0.5 + (t - 1.0)) * penalty)
+    return "sidearm", float((0.5 + 0.5 * min(abs(t), abs(1.0 - t))) * penalty)
 
 
 def _side(kp_frame: np.ndarray, racket_hand: str, conf_thr: float) -> tuple[str, float]:
@@ -341,7 +390,7 @@ def detect_strokes(
     bh = body_height_px(kp, conf_thr)
     for i in _peaks(sig, fps, min_speed_bh, min_prominence_bh):
         frame = int(i)
-        height_class, hc_conf = _height_class(kp[frame], conf_thr)
+        height_class, hc_conf = _height_class(kp[frame], racket_hand, conf_thr)
         side, side_conf = _side(kp[frame], racket_hand, conf_thr)
         pos = None
         airborne = False
@@ -359,7 +408,7 @@ def detect_strokes(
                 speed_mps = float(racket.speed_mps[frame])
 
         contact_m, contact_bh = _contact_height(
-            kp, racket, frame, bh, homography, camera, pos, conf_thr
+            kp, racket, frame, bh, homography, camera, pos, racket_hand, conf_thr
         )
         # Confidence in the detection itself: how far the peak stood out,
         # tempered by whether the descriptive joints were actually visible.
@@ -396,6 +445,7 @@ def _contact_height(
     homography: np.ndarray | None,
     camera,
     position: np.ndarray | None,
+    racket_hand: str,
     conf_thr: float,
 ) -> tuple[float | None, float | None]:
     """Contact height above the floor, in metres and in body heights.
@@ -414,9 +464,11 @@ def _contact_height(
     ):
         point = racket.head[frame]
     if point is None:
-        w = kp[frame, KP["right_wrist"]]
-        w2 = kp[frame, KP["left_wrist"]]
-        w = w if w[2] >= w2[2] else w2
+        # The hitting wrist, for the same reason _height_class insists on it.
+        hand = "left" if racket_hand == "left" else "right"
+        w = kp[frame, KP[f"{hand}_wrist"]]
+        if w[2] < conf_thr:
+            w = kp[frame, KP[f"{'right' if hand == 'left' else 'left'}_wrist"]]
         if w[2] < conf_thr:
             return None, None
         point = w[:2]

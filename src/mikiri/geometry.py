@@ -59,6 +59,15 @@ SIGMA_CLICK_PX = 3.0
 #: sigma" as if it were the familiar 68% figure overstates the accuracy by a
 #: wide margin. Reported error ellipses use this instead.
 NSIGMA_95 = 2.4477468306808364
+#: Two-sided 95% factor for a SCALAR quantity. Distinct from NSIGMA_95: a
+#: one-dimensional interval needs 1.96 sigma, and using the 2-D ellipse factor
+#: on a scalar over-states the interval by a quarter.
+Z_95_SCALAR = 1.959963984540054
+#: Largest disagreement between vertical segments, in metres, that still counts
+#: as a consistent camera recovery. Two net posts over-determine the fit, so
+#: their residual is a real check: a single post top clicked 30 px off produces
+#: a metre of disagreement and a camera height 7% low.
+MAX_CAMERA_RESIDUAL_M = 0.35
 
 
 class CameraGeometry(BaseModel):
@@ -93,6 +102,11 @@ class CameraGeometry(BaseModel):
             return False, "camera ground point is not finite"
         if np.abs(g).max() > 100.0:
             return False, "camera ground point is implausibly far from the court"
+        if self.residual_m is not None and self.residual_m > MAX_CAMERA_RESIDUAL_M:
+            return (
+                False,
+                f"the net posts disagree by {self.residual_m:.2f} m; check the clicked tops",
+            )
         return True, ""
 
 
