@@ -445,12 +445,20 @@ def background_plate(reader, start: int, end: int, samples: int = PLATE_SAMPLES)
 
 
 def expected_shuttle_px(homography: np.ndarray | None, shape: tuple[int, ...]) -> float:
-    """Expected shuttle footprint in pixels, from the floor scale at the image centre.
+    """Expected shuttle footprint in pixels, from the floor scale at the court centre.
 
-    The scale is the floor scale, which for an airborne shuttle understates the
-    footprint (the shuttle is nearer the camera than the floor point it
-    projects to). The size gate is deliberately loose enough -- a factor of
-    three either way -- to absorb that.
+    The reference point is the centre of the court rather than the centre of
+    the image, and the difference is not cosmetic: on a camera behind the
+    baseline the image centre often sits beyond the far baseline where the
+    floor scale runs away to infinity, and a footprint derived there would gate
+    away every real shuttle.
+
+    One number cannot describe a perspective view. On a low camera the near
+    baseline and the far baseline differ by a factor of three or four in scale,
+    which is why the size gate spans about that range either side rather than
+    pretending to be tight. The scale is also the *floor* scale, so it
+    understates the footprint of an airborne shuttle, which is nearer the
+    camera than the floor point it projects to.
 
     Args:
         homography: Image-to-court homography, or ``None``.
@@ -466,7 +474,10 @@ def expected_shuttle_px(homography: np.ndarray | None, shape: tuple[int, ...]) -
     hom = np.asarray(homography, dtype=float)
     if hom.shape != (3, 3) or not np.isfinite(hom).all():
         return DEFAULT_SHUTTLE_PX
-    jac = position_jacobian(hom, np.array([[w_img / 2.0, h_img / 2.0]], dtype=float))
+    centre = court_to_image(hom, np.array([[DOUBLES_WIDTH / 2.0, COURT_LENGTH / 2.0]]))
+    if not np.isfinite(centre).all() or np.abs(centre).max() > 20.0 * max(h_img, w_img):
+        centre = np.array([[w_img / 2.0, h_img / 2.0]], dtype=float)
+    jac = position_jacobian(hom, centre)
     if not np.isfinite(jac).all():
         return DEFAULT_SHUTTLE_PX
     scale = math.sqrt(abs(float(np.linalg.det(jac[0]))))  # metres per pixel

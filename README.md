@@ -146,6 +146,19 @@ shuttle tracking is in [docs/roadmap.md](docs/roadmap.md).
 
 The racket head is estimated one racket length beyond the wrist along the forearm and drawn as a white line, with head speed per frame, contact-point height and swing direction in the smash assessment and `racket_*` columns in `angles.csv`. It is an estimate with known limits; read [docs/racket.md](docs/racket.md) before quoting a speed.
 
+### Coaching
+
+Once the court is calibrated, a Coaching panel turns the numbers into at most
+three things to work on, each with the evidence behind it and how much that
+evidence is worth. Pick your level (beginner, club, national, elite) and the
+bands tighten; edit `coaching.json` in the Mikiri folder if you disagree with
+them. Cues are phrased for what should happen on the court rather than what a
+joint should do, and a data-quality cue fires when the measurement itself is
+not good enough to draw a conclusion from. See
+[docs/coaching.md](docs/coaching.md), and
+[docs/feature-roadmap.md](docs/feature-roadmap.md) for the researched plan of
+what is worth building next and what is deliberately not.
+
 ### Strokes
 
 Mikiri finds each contact and describes it: contact height (overhead, sidearm,
