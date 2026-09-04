@@ -97,14 +97,17 @@ class ProjectSession:
         self._raw: np.ndarray | None = None
         self._eff: tuple[np.ndarray, np.ndarray] | None = None
         self._angles: AngleTable | None = None
+        # Derived series are memoised because state() is returned by most
+        # routes and each of these is now expensive enough to matter: without
+        # this, one state() call recomputed the court track four times.
+        self._track: CourtTrack | None = None
+        self._racket: RacketSeries | None = None
+        self._strokes: StrokeSeries | None = None
         self.last_export: dict | None = None
         #: Why camera recovery from the net posts failed, if it did. The court
         #: calibration stays usable either way, so this is a note, not an error.
         self.court_camera_error: str | None = None
-        #: Shuttle launches keyed by contact frame, once the search has run.
-        #: Expensive (it decodes video), so it is never computed implicitly:
-        #: the UI asks for it and it survives until tracking is re-run.
-        self._launches: dict | None = None
+        self._launches_store: dict | None = None
         self.lock = threading.RLock()
 
     # -- opening ---------------------------------------------------------
@@ -271,9 +274,45 @@ class ProjectSession:
 
     # -- derived data ----------------------------------------------------
 
+    @property
+    def _launches(self) -> dict | None:
+        """Shuttle launches keyed by contact frame, once the search has run.
+
+        Expensive (it decodes video), so it is never computed implicitly: the
+        UI asks for it, and it survives the ordinary invalidations because a
+        small pose change does not move a contact past the frame tolerance
+        ``name_shots`` matches with. Assigning to it drops the memoised stroke
+        series, since the names have to be reattached.
+        """
+        return self._launches_store
+
+    @_launches.setter
+    def _launches(self, value: dict | None) -> None:
+        self._launches_store = value
+        self._strokes = None
+
     def _invalidate(self) -> None:
+        """Drop everything derived from the keypoints."""
         self._eff = None
         self._angles = None
+        self._invalidate_derived()
+
+    def _invalidate_derived(self) -> None:
+        """Drop the memoised series, without recomputing the keypoints.
+
+        The track depends on the events (they mark the flights that are
+        interpolated rather than measured), on the court, on the trim and on
+        the confidence threshold; the racket series depends on the scale
+        calibration; the strokes depend on all of those. Anything that changes
+        one of them must land here or the panels go quietly stale.
+
+        Shuttle launches deliberately survive: they cost a video decode, and
+        they are matched to strokes by frame with a tolerance, so a small
+        change does not move a contact out from under one.
+        """
+        self._track = None
+        self._racket = None
+        self._strokes = None
 
     def raw_keypoints(self) -> np.ndarray | None:
         """Raw tracked keypoints ``(n, 26, 3)`` or ``None`` before tracking."""
@@ -442,6 +481,8 @@ class ProjectSession:
         """Remove the court calibration."""
         with self.lock:
             self.project.court = None
+            self.court_camera_error = None
+            self._invalidate()
 
     def flights(self) -> list[tuple[int, int]]:
         """``(takeoff, landing)`` relative frame pairs from the marked events."""
@@ -458,9 +499,11 @@ class ProjectSession:
         eff = self.effective_keypoints()
         if H is None or eff is None:
             return None
+        if self._track is not None:
+            return self._track
         calib = self.project.court
         camera = calib.camera if (calib is not None and calib.has_camera()) else None
-        return build_track(
+        self._track = build_track(
             eff[0],
             H,
             self.info.fps,
@@ -469,6 +512,7 @@ class ProjectSession:
             camera=camera,
             calibration=calib,
         )
+        return self._track
 
     def camera_view(self) -> dict | None:
         """How the camera looks at the court, and which metrics that supports.
@@ -537,6 +581,8 @@ class ProjectSession:
         that contact; every other stroke keeps its descriptor and an empty
         ``shot``. Run :meth:`find_shuttle_launches` to populate them.
         """
+        if self._strokes is not None:
+            return self._strokes
         eff = self.effective_keypoints()
         if eff is None:
             return None
@@ -556,6 +602,7 @@ class ProjectSession:
             from mikiri.shots import name_shots
 
             name_shots(series, self._launches)
+        self._strokes = series
         return series
 
     def find_shuttle_launches(
@@ -612,21 +659,24 @@ class ProjectSession:
                 if launch is not None:
                     found[stroke.frame] = launch
         with self.lock:
-            self._launches = found
+            self._launches = found  # the setter drops the memoised strokes
         return len(found)
 
     def racket(self) -> RacketSeries | None:
         """Racket-head estimate for the effective keypoints, or ``None``."""
+        if self._racket is not None:
+            return self._racket
         eff = self.effective_keypoints()
         if eff is None:
             return None
-        return racket_series(
+        self._racket = racket_series(
             eff[0],
             self.info.fps,
             self.project.racket_hand,
             self.project.conf_threshold,
             self.px_per_cm(),
         )
+        return self._racket
 
     @staticmethod
     def court_meta() -> dict:
@@ -694,6 +744,7 @@ class ProjectSession:
                 start, end = end, start
             self.project.trim_start = start
             self.project.trim_end = end
+            self._invalidate_derived()
 
     def set_options(
         self,
@@ -748,6 +799,7 @@ class ProjectSession:
         with self.lock:
             if method == "clear":
                 self.project.calibration = Calibration()
+                self._invalidate_derived()
                 return self.project.calibration
             if method == "height":
                 if not reference_cm or reference_cm <= 0:
@@ -772,6 +824,7 @@ class ProjectSession:
                     frame=frame,
                     note=f"head-top to ankle = {body_px:.0f} px taken as stature minus {HEIGHT_TO_HEAD_ANKLE_CM} cm",
                 )
+                self._invalidate_derived()
                 return self.project.calibration
             if method == "two_points":
                 if not points or len(points) != 2 or not reference_cm or reference_cm <= 0:
@@ -788,6 +841,7 @@ class ProjectSession:
                     frame=frame,
                     note=f"{dist_px:.1f} px between the two points",
                 )
+                self._invalidate_derived()
                 return self.project.calibration
             raise ValueError(f"unknown calibration method {method!r}")
 
@@ -807,6 +861,7 @@ class ProjectSession:
             ev = EventMarker(name=name, frame=frame, source=source, confidence=confidence)  # type: ignore[arg-type]
             self.project.events.append(ev)
             self.project.events.sort(key=lambda e: e.frame)
+            self._invalidate_derived()
             return ev
 
     def update_event(
@@ -824,6 +879,7 @@ class ProjectSession:
                 ev.frame = int(min(max(frame, 0), max(self.info.n_frames - 1, 0)))
                 ev.source = "user"
             self.project.events.sort(key=lambda e: e.frame)
+            self._invalidate_derived()
             return ev
 
     def delete_event(self, index: int) -> None:
@@ -833,6 +889,7 @@ class ProjectSession:
                 raise IndexError(index)
             self._snapshot()
             self.project.events.pop(index)
+            self._invalidate_derived()
 
     def accept_suggestions(self, suggestions: list[dict]) -> list[EventMarker]:
         """Add automatic suggestions as events (source ``auto``)."""
@@ -851,6 +908,7 @@ class ProjectSession:
                 self.project.events.append(ev)
                 added.append(ev)
             self.project.events.sort(key=lambda e: e.frame)
+            self._invalidate_derived()
             return added
 
     # corrections

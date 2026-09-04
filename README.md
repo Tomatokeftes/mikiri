@@ -166,12 +166,20 @@ underarm), forehand or backhand, and which part of the court it was played
 from. Contacts appear as ticks on the timeline and in a panel that seeks to
 them, and as `strokes.csv` in the export pack.
 
-It stops short of naming the shot. Smash, clear and drop share nearly identical
-overhead kinematics and separate only on racket-face angle and what the shuttle
-does afterwards, neither of which a single 30 fps camera can see. Rather than
-guess, Mikiri reports what it can defend and leaves the shot name unset until
-shuttle evidence supports one. [docs/strokes.md](docs/strokes.md) explains the
-reasoning and the evidence behind it.
+It stops short of naming the shot from the body alone. Smash, clear and drop
+share nearly identical overhead kinematics and separate only on racket-face
+angle and what the shuttle does afterwards, neither of which a single 30 fps
+camera can see. Rather than guess, Mikiri reports what it can defend and leaves
+the shot name unset until shuttle evidence supports one.
+[docs/strokes.md](docs/strokes.md) explains the reasoning.
+
+**Find shuttle** in the Strokes panel goes looking for that evidence. Rather
+than track the shuttle across a whole rally -- which is unreliable on consumer
+footage -- it searches the few frames after each contact the swing detector
+already found, starting from where the racket head was. The launch direction
+and speed it recovers are exactly what separate a smash from a clear from a
+drop, and contacts where nothing is found simply keep their description. See
+[docs/shuttle.md](docs/shuttle.md).
 
 ## Filming guidelines
 

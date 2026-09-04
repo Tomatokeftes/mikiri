@@ -104,6 +104,14 @@ trajectory alone beats the whole body pose.
 
 ## Phase 3: shuttle
 
+**Status: the narrow bet is done** (`src/mikiri/shuttle.py`,
+`src/mikiri/shots.py`, `docs/shuttle.md`). Rally-long tracking exists but is
+not exposed: on a real match clip it reported detections spread across the
+whole frame. What is exposed is the local search after a contact the swing
+detector already found, anchored on the racket head, which recovers the launch
+direction and speed that name a shot. Landing points and placement in metres
+remain open, and are probably higher value than speed for coaching.
+
 **Goal.** Shuttle trajectory, hit detection (when the shuttle reverses),
 contact point, shuttle speed after the hit (in court units with Phase 1),
 rally structure.

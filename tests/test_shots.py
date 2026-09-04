@@ -445,3 +445,104 @@ def test_a_net_shot_without_a_court_position_is_named_but_less_confidently():
     assert b.shot_confidence < a.shot_confidence
     assert "unknown court position" in b.evidence
     assert "unknowncourt" not in b.evidence
+
+
+# --------------------------------------------------------------------------
+# The contract with the two modules on either side
+# --------------------------------------------------------------------------
+
+
+def _swinging_pose(n: int = 60, fps: float = 30.0) -> np.ndarray:
+    """A still, confident figure whose right arm sweeps through one overhead swing."""
+    from mikiri.keypoints import KP, N_KEYPOINTS
+
+    kp = np.zeros((n, N_KEYPOINTS, 3))
+    kp[:, :, 2] = 0.9
+    place = {
+        "head": (500, 300),
+        "nose": (500, 315),
+        "left_eye": (492, 312),
+        "right_eye": (508, 312),
+        "neck": (500, 360),
+        "left_shoulder": (460, 380),
+        "right_shoulder": (540, 380),
+        "left_elbow": (440, 440),
+        "left_wrist": (430, 500),
+        "hip": (500, 500),
+        "left_hip": (475, 500),
+        "right_hip": (525, 500),
+        "left_knee": (472, 600),
+        "right_knee": (528, 600),
+        "left_ankle": (470, 700),
+        "right_ankle": (530, 700),
+        "left_heel": (468, 705),
+        "right_heel": (532, 705),
+    }
+    for name, (x, y) in place.items():
+        kp[:, KP[name], 0] = x
+        kp[:, KP[name], 1] = y
+    # The hitting arm sweeps overhead through a contact at frame 30. The
+    # logistic asymptotes at both ends, so the wrist accelerates into the
+    # contact and decelerates out of it with no artificial spike at either edge.
+    sweep = 1.0 / (1.0 + np.exp(-(np.arange(n) - 30) / 2.0))
+    kp[:, KP["right_elbow"], 0] = 560 + 60 * sweep
+    kp[:, KP["right_elbow"], 1] = 340 - 30 * sweep
+    kp[:, KP["right_wrist"], 0] = 480 + 340 * sweep
+    kp[:, KP["right_wrist"], 1] = 320 - 80 * sweep
+    return kp
+
+
+def test_real_detected_strokes_flow_through_naming():
+    """The strokes module leaves ``shot`` unset; this module is what fills it."""
+    from mikiri.strokes import detect_strokes
+
+    series = detect_strokes(_swinging_pose(), 30.0)
+    assert series.strokes, "the fixture must actually produce a contact"
+    assert all(s.shot is None for s in series.strokes)
+    assert all("no shuttle evidence" in s.evidence for s in series.strokes)
+
+    frame = series.strokes[0].frame
+    assert series.strokes[0].height_class == "overhead"
+    named = name_shots(series, {frame: _launch(-40.0, 22.0, frame=frame)})
+    assert named.strokes[0].shot == "smash"
+    out = shot_summary(named)
+    assert out["n_named"] >= 1
+    assert set(out["by_shot"]).issubset(set(SHOT_NAMES))
+
+
+def test_a_launch_measured_from_video_names_a_shot():
+    """End to end: pixels, then a launch, then a name -- with nothing hand-built."""
+    import cv2
+
+    from mikiri.shuttle import launch_after_hit
+
+    rng = np.random.default_rng(3)
+    bg = cv2.GaussianBlur(rng.integers(40, 90, size=(360, 640)).astype(np.uint8), (0, 0), 3.0)
+    bg = cv2.cvtColor(bg, cv2.COLOR_GRAY2BGR)
+    head = np.array([140.0, 90.0])
+    frames = []
+    p, v = head.copy(), np.array([60.0, 42.0])  # down and to the right: a smash
+    for i in range(14):
+        f = bg.copy()
+        cv2.circle(f, (110, 200), 30, (190,) * 3, -1)
+        if i > 4:
+            p = p + v
+            v = v * 0.94
+            v[1] += 1.2
+            a, b = p - v * 0.32, p + v * 0.32
+            cv2.line(f, (int(a[0]), int(a[1])), (int(b[0]), int(b[1])), (250,) * 3, 5)
+        frames.append(f)
+
+    class _Reader:
+        def read(self, idx):
+            return frames[idx] if 0 <= idx < len(frames) else None
+
+    # A 150 px player in a 360 px frame: a full-court framing.
+    launch = launch_after_hit(_Reader(), 4, head, 30.0, 150.0)
+    assert launch is not None
+    assert launch.rising is False
+    assert launch.speed_bh > 10.0
+    stroke = _stroke(frame=4, height_class="overhead", zone="rear")
+    named = name_shots(_series(stroke), {4: launch})
+    assert named.strokes[0].shot == "smash"
+    assert "launched" in named.strokes[0].evidence

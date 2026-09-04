@@ -280,3 +280,41 @@ def test_export_pack_carries_the_full_advice_not_just_the_headline(tracked_sessi
     assert len(written) == len(full)
     for a in written:
         assert a["evidence"] and 0.0 <= a["confidence"] <= 1.0
+
+
+def test_memoised_series_do_not_go_stale_when_events_change(tracked_session):
+    """Caching the track is only safe if every input to it invalidates.
+
+    Events mark the flights the track interpolates rather than measures, so
+    adding one must change the answer. Before the caches existed this held
+    trivially; with them it is a real invariant worth pinning.
+    """
+    cam = _synth_camera()
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    tracked_session.set_court("doubles_corners", cam.floor(corners).tolist(), None, 0)
+
+    tracked_session.project.events = []
+    tracked_session._invalidate_derived()
+    before = tracked_session.court_track()
+    assert before is not None
+    assert not before.airborne.any()
+
+    n = before.positions.shape[0]
+    tracked_session.add_event("takeoff", tracked_session.pose_start + 10)
+    tracked_session.add_event("landing", tracked_session.pose_start + min(30, n - 1))
+    after = tracked_session.court_track()
+    assert after.airborne.any(), "adding takeoff/landing must mark airborne frames"
+
+    tracked_session.delete_event(
+        next(i for i, e in enumerate(tracked_session.project.events) if e.name == "takeoff")
+    )
+    assert not tracked_session.court_track().airborne.any()
+
+
+def test_memoised_racket_reacts_to_a_scale_calibration(tracked_session):
+    """The racket series reports m/s only when calibrated, so it must refresh."""
+    assert tracked_session.racket().speed_mps is None
+    tracked_session.set_calibration("height", reference_cm=175.0, frame=0)
+    assert tracked_session.racket().speed_mps is not None
+    tracked_session.set_calibration("clear")
+    assert tracked_session.racket().speed_mps is None
