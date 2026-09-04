@@ -54,6 +54,8 @@ needs no new model, and unlocks the most requested coaching questions
 
 ## Phase 2: racket
 
+**Status: step 1 done** (forearm-extension estimate, racket line in overlays, `racket_speed` plot, stroke metrics in the smash profiles, CSV columns; see `docs/racket.md`). Step 2 was tested and parked: COCO YOLOX-s detects the racket in only about a third of frames and never the shuttle.
+
 **Goal.** Racket-head position and speed through a stroke, contact point
 height and location relative to the body, swing path in the image plane.
 

@@ -13,6 +13,7 @@ COLOR_RIGHT = (40, 120, 255)
 COLOR_CENTER = (230, 200, 90)
 COLOR_CORRECTED = (255, 80, 255)
 COLOR_LOW = (140, 140, 140)
+COLOR_RACKET = (255, 255, 255)
 
 
 def _edge_color(a: int, b: int) -> tuple[int, int, int]:
@@ -33,6 +34,7 @@ def draw_skeleton(
     highlight: int | None = None,
     draw_face: bool = False,
     thickness: int | None = None,
+    racket: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> np.ndarray:
     """Draw a ``(26, 3)`` pose onto ``img`` (modified in place and returned).
 
@@ -76,6 +78,13 @@ def draw_skeleton(
             cv2.circle(img, p, max(1, radius - 2), COLOR_LOW, 1, cv2.LINE_AA)
         if highlight is not None and i == highlight:
             cv2.circle(img, p, radius + 6, (255, 255, 255), 2, cv2.LINE_AA)
+    if racket is not None:
+        wrist, head = racket
+        if np.isfinite(wrist).all() and np.isfinite(head).all():
+            a = (int(round(wrist[0] * scale)), int(round(wrist[1] * scale)))
+            b = (int(round(head[0] * scale)), int(round(head[1] * scale)))
+            cv2.line(img, a, b, COLOR_RACKET, max(1, thickness - 1), cv2.LINE_AA)
+            cv2.circle(img, b, radius + 1, COLOR_RACKET, 2, cv2.LINE_AA)
     return img
 
 
@@ -94,10 +103,18 @@ def stick_figure(
     scale: float = 1.0,
     conf_thr: float = 0.3,
     corrected: np.ndarray | None = None,
+    racket: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> np.ndarray:
     """Skeleton on a plain white canvas of ``width x height``."""
     canvas = np.full((height, width, 3), 255, dtype=np.uint8)
     draw_skeleton(canvas, keypoints, conf_thr=conf_thr, scale=scale, corrected=corrected)
+    if racket is not None:
+        wrist, head = racket
+        if np.isfinite(wrist).all() and np.isfinite(head).all():
+            a = (int(round(wrist[0] * scale)), int(round(wrist[1] * scale)))
+            b = (int(round(head[0] * scale)), int(round(head[1] * scale)))
+            cv2.line(canvas, a, b, (40, 40, 40), 2, cv2.LINE_AA)
+            cv2.circle(canvas, b, 5, (40, 40, 40), 2, cv2.LINE_AA)
     return canvas
 
 

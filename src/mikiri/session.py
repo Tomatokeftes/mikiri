@@ -57,6 +57,7 @@ from mikiri.project import (
     SmoothingSettings,
     TrackingRun,
 )
+from mikiri.racket import RacketSeries, racket_series
 from mikiri.settings import Settings
 from mikiri.smoothing import apply_corrections, interpolate_joint, smooth_keypoints
 from mikiri.video import FrameCache, VideoInfo, VideoReader, fit_size, probe_video
@@ -415,6 +416,19 @@ class ProjectSession:
         if H is None or eff is None:
             return None
         return build_track(eff[0], H, self.info.fps, self.project.conf_threshold, self.flights())
+
+    def racket(self) -> RacketSeries | None:
+        """Racket-head estimate for the effective keypoints, or ``None``."""
+        eff = self.effective_keypoints()
+        if eff is None:
+            return None
+        return racket_series(
+            eff[0],
+            self.info.fps,
+            self.project.racket_hand,
+            self.project.conf_threshold,
+            self.px_per_cm(),
+        )
 
     @staticmethod
     def court_meta() -> dict:
@@ -832,6 +846,7 @@ class ProjectSession:
             else [None if not np.isfinite(v) else round(float(v), 2) for v in track.speed],
             "airborne": None if track is None else track.airborne.tolist(),
             "footwork": None if track is None else track.metrics,
+            "racket": None if (racket := self.racket()) is None else racket.to_dict(),
         }
 
     def save(self, path: str | Path | None = None) -> Path:
@@ -866,6 +881,7 @@ class ProjectSession:
             px_per_cm=self.px_per_cm(),
             assessment=self.assessment(),
             track=self.court_track(),
+            racket=self.racket(),
         )
 
         def progress(frac: float, msg: str) -> None:

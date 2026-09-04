@@ -37,6 +37,7 @@ from mikiri.events import (
 )
 from mikiri.keypoints import KP, body_height_px, body_height_series
 from mikiri.paths import app_home
+from mikiri.racket import RacketSeries, racket_series, stroke_metrics
 from mikiri.smoothing import fill_gaps, savgol
 
 G = 9.81
@@ -55,6 +56,8 @@ class Band:
         """``"ideal"``, ``"low"``, ``"high"`` or ``"unknown"``."""
         if value is None or (isinstance(value, float) and not math.isfinite(value)):
             return "unknown"
+        if self.lo is None and self.hi is None:
+            return "info"
         if self.lo is not None and value < self.lo:
             return "low"
         if self.hi is not None and value > self.hi:
@@ -70,7 +73,7 @@ class Band:
             return f">= {self.lo:g}{u}"
         if self.hi is not None:
             return f"<= {self.hi:g}{u}"
-        return "any"
+        return "informational"
 
     def to_dict(self) -> dict:
         """JSON view."""
@@ -244,6 +247,24 @@ class MetricContext:
         """Trailing-leg suffix for lunges."""
         lead = self.lead()
         return None if lead is None else ("R" if lead == "L" else "L")
+
+    # racket
+
+    def racket_track(self) -> RacketSeries | None:
+        """Racket-head estimate for the racket hand (cached)."""
+        if not hasattr(self, "_racket"):
+            self._racket = racket_series(
+                self.kp, self.fps, self.racket_hand, self.conf_thr, self.px_per_cm
+            )
+        return self._racket
+
+    def stroke(self) -> dict:
+        """Stroke metrics around the contact event (cached)."""
+        if not hasattr(self, "_stroke"):
+            self._stroke = stroke_metrics(
+                self.racket_track(), self.kp, self.fps, self.ev("contact"), conf_thr=self.conf_thr
+            )
+        return self._stroke
 
     # positions
 
@@ -471,6 +492,26 @@ def m_landing_knee(ctx: MetricContext) -> float | None:
 def m_split_timing_s(ctx: MetricContext) -> float | None:
     land, opp = ctx.ev("landing"), ctx.ev("opponent contact")
     return None if land is None or opp is None else (land - opp) / ctx.fps
+
+
+def m_racket_speed_contact(ctx: MetricContext) -> float | None:
+    return ctx.stroke().get("speed_contact_bh")
+
+
+def m_racket_speed_contact_mps(ctx: MetricContext) -> float | None:
+    return ctx.stroke().get("speed_contact_mps")
+
+
+def m_racket_peak_speed(ctx: MetricContext) -> float | None:
+    return ctx.stroke().get("peak_speed_bh")
+
+
+def m_contact_height_pct(ctx: MetricContext) -> float | None:
+    return ctx.stroke().get("contact_height_pct")
+
+
+def m_swing_direction(ctx: MetricContext) -> float | None:
+    return ctx.stroke().get("swing_direction_deg")
 
 
 def m_recovered_knee(ctx: MetricContext) -> float | None:
@@ -727,6 +768,46 @@ METRICS: dict[str, MetricDef] = {
             m_split_timing_s,
         ),
         MetricDef(
+            "racket_speed_contact",
+            "Racket-head speed at contact (estimate)",
+            "body heights/s",
+            "forearm-extension estimate of the racket head; a lower bound at 30 fps",
+            ("contact",),
+            m_racket_speed_contact,
+        ),
+        MetricDef(
+            "racket_speed_contact_mps",
+            "Racket-head speed at contact (estimate)",
+            "m/s",
+            "needs the scale calibration",
+            ("contact",),
+            m_racket_speed_contact_mps,
+        ),
+        MetricDef(
+            "racket_peak_speed",
+            "Peak racket-head speed around contact (estimate)",
+            "body heights/s",
+            "maximum within 0.5 s of the contact",
+            ("contact",),
+            m_racket_peak_speed,
+        ),
+        MetricDef(
+            "contact_height_pct",
+            "Contact point above the head",
+            "% body height",
+            "racket head above the top of the head at contact",
+            ("contact",),
+            m_contact_height_pct,
+        ),
+        MetricDef(
+            "swing_direction",
+            "Racket direction after contact",
+            "deg",
+            "0 = horizontal, negative = downward, over the 0.1 s after contact",
+            ("contact",),
+            m_swing_direction,
+        ),
+        MetricDef(
             "recovered_knee",
             "Knees when recovered",
             "deg",
@@ -831,6 +912,21 @@ def _jump_metrics() -> tuple[MetricUse, ...]:
             "stiff landing: bend the knees to absorb",
         ),
         MetricUse("recovery_time", Band(None, 1.0), "", "slow recovery to base"),
+        MetricUse(
+            "contact_height_pct",
+            Band(35, None),
+            "contact point low: reach up, extend the arm and the racket",
+            "",
+        ),
+        MetricUse(
+            "swing_direction",
+            Band(None, -5),
+            "",
+            "racket not travelling downward after contact: hitting flat, or the contact frame is early",
+        ),
+        MetricUse("racket_speed_contact", Band(None, None)),
+        MetricUse("racket_speed_contact_mps", Band(None, None)),
+        MetricUse("racket_peak_speed", Band(None, None)),
     )
 
 
@@ -1098,7 +1194,7 @@ def effective_band(profile_id: str, use: MetricUse, overrides: dict | None) -> B
 def assess(profile: MovementProfile, ctx: MetricContext, overrides: dict | None = None) -> dict:
     """Compare a clip with a profile; returns a JSON-friendly report."""
     rows = []
-    counts = {"ideal": 0, "low": 0, "high": 0, "missing": 0, "unknown": 0}
+    counts = {"ideal": 0, "low": 0, "high": 0, "missing": 0, "unknown": 0, "info": 0}
     missing_events: set[str] = set()
     for use in profile.metrics:
         d = METRICS[use.id]
@@ -1116,6 +1212,8 @@ def assess(profile: MovementProfile, ctx: MetricContext, overrides: dict | None 
             status = band.status(value)
         counts[status] = counts.get(status, 0) + 1
         cue = use.cue_low if status == "low" else use.cue_high if status == "high" else ""
+        if status == "info" and value is None:
+            status = "unknown"
         rows.append(
             {
                 "id": use.id,

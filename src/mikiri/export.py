@@ -26,6 +26,7 @@ from mikiri.events import flight_time_s
 from mikiri.ffmpeg import FFmpegWriter
 from mikiri.keypoints import KEYPOINT_NAMES, N_KEYPOINTS
 from mikiri.project import Project
+from mikiri.racket import RacketSeries
 from mikiri.render import contact_sheet, draw_skeleton, put_label, stick_figure
 from mikiri.video import FrameCache, VideoInfo, VideoReader, downscale, fit_size
 
@@ -59,6 +60,7 @@ class ExportInputs:
     px_per_cm: float | None = None
     assessment: dict | None = None
     track: CourtTrack | None = None
+    racket: RacketSeries | None = None
 
 
 def _safe(name: str) -> str:
@@ -81,6 +83,10 @@ def write_angles_csv(path: Path, inp: ExportInputs) -> None:
     header = ["frame", "time_s", *names]
     if inp.px_per_cm:
         header += ["hip_height_cm"]
+    if inp.racket is not None:
+        header += ["racket_head_x", "racket_head_y", "racket_speed_bh"]
+        if inp.racket.speed_mps is not None:
+            header += ["racket_speed_mps"]
     header += [*conf_names, "corrected", "corrected_joints", "lost", "n_low_conf_joints"]
     ground_y = None
     if inp.px_per_cm:
@@ -103,6 +109,15 @@ def write_angles_csv(path: Path, inp: ExportInputs) -> None:
                     row.append(_fmt((ground_y - float(hip_y)) / inp.px_per_cm, 1))
                 else:
                     row.append("")
+            if inp.racket is not None:
+                hx, hy = inp.racket.head[i]
+                row += [
+                    _fmt(float(hx), 1),
+                    _fmt(float(hy), 1),
+                    _fmt(float(inp.racket.speed_bh[i]), 2),
+                ]
+                if inp.racket.speed_mps is not None:
+                    row.append(_fmt(float(inp.racket.speed_mps[i]), 2))
             for name in ANGLE_NAMES:
                 row.append(_fmt(float(inp.angles.confidence[name][i]), 3))
             joints = np.flatnonzero(inp.corrected[i])
@@ -182,6 +197,7 @@ def _overlay(
             conf_thr=inp.project.conf_threshold,
             scale=scale,
             corrected=inp.corrected[i],
+            racket=None if inp.racket is None else (inp.racket.wrist[i], inp.racket.head[i]),
         )
     if label:
         put_label(img, label, (12, 30), 0.7)
@@ -407,6 +423,9 @@ def write_summary(
         "- `hip_y`, `ankle_L_y`, `ankle_R_y`: vertical pixel positions (smaller = higher); `stance_width`: horizontal ankle separation in px"
     )
     lines.append(
+        "- `racket_head_x/y`, `racket_speed_bh` (and `racket_speed_mps` when calibrated): racket head estimated one racket length beyond the wrist along the forearm; a lower bound on head speed at 30 fps"
+    )
+    lines.append(
         "- `*_conf`: minimum keypoint confidence of the joints used by that angle; `corrected`: a keypoint in that frame was hand-placed; `lost`: the tracker had no confident person in that frame"
     )
     lines.append("")
@@ -574,13 +593,29 @@ def export_pack(
                 i = f - start
                 kp = inp.keypoints[i]
                 corrected = inp.corrected[i]
-                draw_skeleton(img, kp, conf_thr=p.conf_threshold, scale=scale, corrected=corrected)
+                racket_seg = (
+                    None if inp.racket is None else (inp.racket.wrist[i], inp.racket.head[i])
+                )
+                draw_skeleton(
+                    img,
+                    kp,
+                    conf_thr=p.conf_threshold,
+                    scale=scale,
+                    corrected=corrected,
+                    racket=racket_seg,
+                )
                 label = f"frame {f}  t={f / fps:.3f}s"
                 if f in ev_by_frame:
                     label += f"  {ev_by_frame[f]}"
                 put_label(img, label)
                 stick = stick_figure(
-                    kp, w, h, scale=scale, conf_thr=p.conf_threshold, corrected=corrected
+                    kp,
+                    w,
+                    h,
+                    scale=scale,
+                    conf_thr=p.conf_threshold,
+                    corrected=corrected,
+                    racket=racket_seg,
                 )
                 put_label(stick, label)
                 cv2.putText(

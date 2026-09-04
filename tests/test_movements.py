@@ -84,7 +84,10 @@ def test_jump_smash_assessment_on_synthetic_truth(demo_video: Path):
     assert by_id["racket_shoulder_contact"]["status"] == "ideal"
     assert by_id["racket_elbow_contact"]["status"] == "ideal"
     assert report["summary"]["missing"] == 0
-    assert all(m["status"] in ("ideal", "low", "high") for m in report["metrics"])
+    banded = [m for m in report["metrics"] if not m["id"].startswith("racket_")]
+    assert all(m["status"] in ("ideal", "low", "high") for m in banded)
+    info = {m["id"]: m["status"] for m in report["metrics"] if m["id"].startswith("racket_")}
+    assert info["racket_speed_contact"] == "info" and info["racket_speed_contact_mps"] == "unknown"
     assert report["racket_hand"] == "right"
 
 

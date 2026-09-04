@@ -142,6 +142,7 @@ canvas#video-canvas, canvas#compare-canvas { display: block; max-width: 100%; ma
 .assessment .st.ideal { background: rgba(63,195,128,0.25); color: var(--left); }
 .assessment .st.low, .assessment .st.high { background: rgba(255,127,42,0.25); color: var(--right); }
 .assessment .st.missing, .assessment .st.unknown { background: rgba(154,160,173,0.2); color: var(--muted); }
+.assessment .st.info { background: rgba(79,140,255,0.2); color: var(--accent); }
 .assessment .cue { color: var(--fg); }
 #movement-desc { margin: 2px 0 6px; }
 .court-row { display: flex; gap: 12px; align-items: flex-start; }

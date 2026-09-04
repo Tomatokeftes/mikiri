@@ -211,6 +211,20 @@ function renderVideo() {
     for (const [x, y] of S.calibPick.points) { ctx.beginPath(); ctx.moveTo(x * scale - 8, y * scale); ctx.lineTo(x * scale + 8, y * scale); ctx.moveTo(x * scale, y * scale - 8); ctx.lineTo(x * scale, y * scale + 8); ctx.stroke(); }
     if (S.calibPick.points.length === 2) { const [a, b] = S.calibPick.points; ctx.beginPath(); ctx.moveTo(a[0] * scale, a[1] * scale); ctx.lineTo(b[0] * scale, b[1] * scale); ctx.stroke(); }
   }
+  // racket-head estimate
+  if (S.pose && S.pose.racket && $('#show-racket').checked) {
+    const i = poseIndex(S.frame);
+    const head = i >= 0 ? S.pose.racket.head[i] : null;
+    const kpNow = keypointsAt(S.frame);
+    const wi = S.state.racket_hand === 'left' ? 9 : 10;
+    if (head && kpNow && kpNow[wi][2] >= S.state.conf_threshold) {
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(kpNow[wi][0] * scale, kpNow[wi][1] * scale); ctx.lineTo(head[0] * scale, head[1] * scale); ctx.stroke();
+      ctx.beginPath(); ctx.arc(head[0] * scale, head[1] * scale, 5, 0, Math.PI * 2); ctx.stroke();
+      const sp = S.pose.racket.speed_mps ? S.pose.racket.speed_mps[i] : null; const spb = S.pose.racket.speed_bh[i];
+      const txt = sp != null ? `${sp.toFixed(1)} m/s` : (spb != null ? `${spb.toFixed(1)} bh/s` : '');
+      if (txt) { ctx.font = '11px sans-serif'; ctx.fillStyle = '#000'; ctx.fillText(txt, head[0] * scale + 8, head[1] * scale + 4); ctx.fillStyle = '#fff'; ctx.fillText(txt, head[0] * scale + 7, head[1] * scale + 3); }
+    }
+  }
   // court calibration points (stored, and the ones being clicked)
   const courtPts = S.courtPick ? S.courtPick.points : (($('#show-court').checked && S.state.court && S.state.court.image_points) ? S.state.court.image_points : []);
   if (courtPts && courtPts.length) {
@@ -342,10 +356,12 @@ function seriesLabel(name) {
   if (name === 'ankle_L_y') return 'ankle L height (px)';
   if (name === 'ankle_R_y') return 'ankle R height (px)';
   if (name === 'stance_width') return 'stance width (px)';
+  if (name === 'racket_speed') return (S.pose && S.pose.racket && S.pose.racket.speed_mps) ? 'racket head speed (m/s, estimate)' : 'racket head speed (body heights/s, estimate)';
   if (name.endsWith('_seg')) return name.replace('_seg', ' segment vs ground (deg)');
   return name.replace('_', ' ') + ' (deg)';
 }
 function seriesValues(pose, state, name) {
+  if (name === 'racket_speed') return pose.racket ? (pose.racket.speed_mps || pose.racket.speed_bh) : null;
   const v = pose.angles[name];
   if (!v) return null;
   if (name === 'hip_y' || name === 'ankle_L_y' || name === 'ankle_R_y') return v.map((x) => (x == null ? null : state.video.height - x));
@@ -357,7 +373,7 @@ function buildPlots() {
   S.plots = [];
   const toggles = $('#angle-toggles'); toggles.innerHTML = '';
   if (!S.state) return;
-  const names = [...S.state.meta.angle_names, ...S.state.meta.segment_names, ...S.state.meta.position_names];
+  const names = [...S.state.meta.angle_names, ...S.state.meta.segment_names, ...S.state.meta.position_names, 'racket_speed'];
   for (const name of names) {
     const lab = document.createElement('label');
     const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = S.series.has(name); cb.dataset.series = name;
@@ -396,6 +412,7 @@ function renderPlots() {
     ctx.font = '11px sans-serif'; ctx.fillStyle = '#c8ccd6'; ctx.fillText(seriesLabel(p.name), PLOT_PAD.l + 4, 10);
     if (!S.pose) { ctx.fillStyle = '#666'; ctx.fillText('run tracking to see angles', PLOT_PAD.l + 4, h / 2); continue; }
     const vals = seriesValues(S.pose, S.state, p.name);
+    if (!vals) { ctx.fillStyle = '#666'; ctx.fillText('not available', PLOT_PAD.l + 4, h / 2); continue; }
     const n = vals.length; const x0 = PLOT_PAD.l, x1 = w - PLOT_PAD.r, y0 = PLOT_PAD.t, y1 = h - PLOT_PAD.b;
     const finite = vals.filter((v) => v != null);
     let cmpVals = null;
@@ -1018,6 +1035,7 @@ function bindUI() {
   $('#court-start').addEventListener('click', startCourtPick);
   $('#court-clear').addEventListener('click', async () => { applyState(await api('DELETE', `/api/projects/${S.pid}/court`)); await loadPose(); closeModals(); renderAll(); });
   $('#show-court').addEventListener('change', renderVideo);
+  $('#show-racket').addEventListener('change', renderVideo);
   $('#calib-height-btn').addEventListener('click', calibHeight);
   $('#calib-points-btn').addEventListener('click', calibPointsStart);
   $('#calib-clear-btn').addEventListener('click', async () => { applyState(await api('PUT', `/api/projects/${S.pid}/calibration`, { method: 'clear' })); });

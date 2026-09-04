@@ -320,6 +320,28 @@ line) and the far half as one zone, since a single tracked player rarely
 crosses the net. The homography is stored in the project as clicked points,
 not as a matrix, so it survives edits and stays inspectable.
 
+## Racket from the pose first, detector later (roadmap phase 2)
+
+There is no racket keypoint, so the racket head is estimated one racket
+length beyond the wrist along the forearm (length from the scale calibration,
+else 0.39 of stature). That is honest about what it is: right at contact with
+a neutral grip, wrong by the wrist angle in the backswing, and a lower bound
+on head speed at 30 fps because pronation and wrist action are invisible to a
+2D forearm line. The metrics built on it (contact point above the head,
+racket direction after contact, head speed at and around contact) are
+therefore either loosely banded or marked informational, and speeds are
+given in body heights per second so they need no calibration.
+
+A detector was tried before deciding this: the official COCO YOLOX-s ONNX
+runs through rtmlib's detector wrapper unchanged (it returns class ids in
+multi-class mode) at about 30 ms per frame. On the three real clips it found
+every player, the racket in roughly a third of the frames where it is
+visible, and the shuttle never. A one-in-three racket detection would add
+jitter rather than accuracy, so the detector is not shipped; the racket
+series accepts per-frame detections so a badminton-specific model can slot
+in later, and the same experiment settles that shuttle tracking cannot rely
+on COCO classes.
+
 ## Export videos repeat frames for slow motion
 
 Slow motion is done by writing every frame `slowmo` times at the source frame

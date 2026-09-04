@@ -128,6 +128,10 @@ the plan for racket and shuttle tracking is in [docs/roadmap.md](docs/roadmap.md
 
 ![Court map with the footwork track](docs/screenshots/08_court.png)
 
+### Racket
+
+The racket head is estimated one racket length beyond the wrist along the forearm and drawn as a white line, with head speed per frame, contact-point height and swing direction in the smash assessment and `racket_*` columns in `angles.csv`. It is an estimate with known limits; read [docs/racket.md](docs/racket.md) before quoting a speed.
+
 ## Filming guidelines
 
 * **Side-on.** Put the camera perpendicular to the direction of the jump so
