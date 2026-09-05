@@ -229,12 +229,14 @@ Known gaps:
   than a small fast one; that error only costs pose time, so it stands. The
   first two minutes of `benchmarks/lindan_source.mp4` pin the merge gap: at
   2.5 s consecutive points fused into 47 s blobs, at 1.5 s the rallies come
-  out at a median near the published length. Two things remain unmeasured.
-  `scan_motion` takes a `mask` for restricting motion to the court, nothing
-  passes one, and on arena footage the crowd never stops moving -- whether
-  that defeats the play/rest split could not be settled on `lindan_source`,
-  because that clip has its intervals edited out and so has no real rests to
-  find (the segmenter detects that and disowns the rests). And the
+  out at a median near the published length. `scan_motion` takes a `mask`
+  for restricting motion to the court and nothing passes one, on purpose:
+  measured on the whole of `lindan_source`, the unmasked scan finds 45
+  stretches of play with a 10.3 s median, and the same scan masked to the
+  court (two metres beyond the lines) finds no contrast to split on and
+  treats the twelve minutes as one stretch of play. The crowd's motion did
+  not defeat the split there; the court region alone lacked the contrast.
+  Whether a livelier crowd would is still unmeasured. And the
   not-badminton path has only ever met a title card, a lens occlusion and a
   run of black frames, never an actual advert or replay.
 

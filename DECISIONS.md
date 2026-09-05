@@ -181,6 +181,13 @@ Three consequences that are easy to get wrong later:
   rewrite, and doubles is a real target -- it is also where the app can be
   strongest, because doubles tactics are formation and rotation, which are
   court-position questions, and court position is the best measurement we have.
+* **Motion is scanned over the whole frame, not the court.** `scan_motion`
+  can take a court mask, and the obvious use is a moving crowd behind the
+  court. Measured on the twelve minutes of `lindan_source`, the whole-frame
+  scan splits the clip into 45 stretches of play at a 10.3 s median, and the
+  court-masked scan finds no contrast to split on and returns one stretch.
+  The crowd did not defeat the split; the court alone lacked the contrast.
+  The mask stays available and unused until a clip shows the opposite.
 * **Frames are labelled, never deleted.** Clip segmentation into not-badminton,
   no-play, warm-up, rally and interval lets each consumer choose: tactics take
   rallies only, work density needs the rests, the tracker runs across

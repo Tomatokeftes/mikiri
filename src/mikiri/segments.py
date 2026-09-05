@@ -446,8 +446,13 @@ def scan_motion(
         end: Last frame, inclusive. ``None`` scans to the end of the video.
         longest: Longest side to scale frames to before comparing.
         mask: Optional boolean mask in *scaled* frame coordinates, True where
-            pixels should be counted. Restricting to the court removes a
-            moving crowd behind it; without one the whole frame is used.
+            pixels should be counted. Meant for restricting motion to the
+            court in front of a moving crowd, and unused by the pipeline:
+            on the whole of the Lin Dan source clip the unmasked scan finds
+            45 stretches of play at a 10.3 s median, and the same scan
+            masked to the court finds no contrast to split on at all. The
+            crowd was not the problem there; the court alone lacked the
+            contrast. Kept for a clip that shows the opposite.
 
     Returns:
         A :class:`MotionScan`. The first scanned frame has no predecessor and
