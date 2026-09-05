@@ -267,6 +267,24 @@ def court_uncertainty_grid(
     return grid, cov
 
 
+def flip_end(points: np.ndarray) -> np.ndarray:
+    """Rotate court points half a turn, so the far end becomes the near end.
+
+    The court frame puts ``y = 0`` at the end nearer the camera, and every
+    footwork figure -- zones, the base, the coverage shape -- reads a track
+    as if the player defended that end. A player at the far end is the same
+    player seen from the other side of the net, so their track is expressed
+    in their own frame by this flip, and flipped back for anything drawn on
+    the shared map. It is an isometry, so covariances and distances are
+    untouched; ``nan`` stays ``nan``.
+    """
+    pts = np.asarray(points, dtype=float)
+    out = pts.copy()
+    out[..., 0] = DOUBLES_WIDTH - pts[..., 0]
+    out[..., 1] = COURT_LENGTH - pts[..., 1]
+    return out
+
+
 def player_floor_points(
     keypoints: np.ndarray, conf_thr: float = 0.3
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -327,6 +345,7 @@ def build_track(
     camera: CameraGeometry | None = None,
     calibration: CourtCalibration | None = None,
     ankle_height: float = ANKLE_HEIGHT,
+    far_end: bool = False,
 ) -> CourtTrack:
     """Court-plane track of the player with speed and footwork metrics.
 
@@ -334,6 +353,11 @@ def build_track(
     feet are not on the floor; positions inside them are interpolated linearly.
     ``base`` is the player's base position in metres; the median position of the
     range is used when not given.
+
+    ``far_end`` says the player defends the end beyond the net. Their positions
+    are then expressed in their own frame (see :func:`flip_end`), so the zones,
+    the base and every footwork figure mean the same thing for both players;
+    the camera's frame is one :func:`flip_end` away for anything shared.
 
     When ``camera`` is supplied two things improve. Ankle points are corrected
     for sitting ``ankle_height`` above the floor, which removes a systematic
@@ -352,6 +376,8 @@ def build_track(
         court[valid] = image_to_court(H, floor[valid])
         if camera is not None:
             court[valid] = correct_offplane(court[valid], ankle_height, camera)
+        if far_end:
+            court[valid] = flip_end(court[valid])
     airborne = np.zeros(n, dtype=bool)
     for takeoff, landing in flights or []:
         takeoff = max(0, int(takeoff))

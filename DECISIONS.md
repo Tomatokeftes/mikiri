@@ -3,6 +3,87 @@
 Every non-obvious choice made while building Mikiri, and why. Ordered roughly
 by how much they affect you.
 
+## The side of the net is a player's identity
+
+Two players are now tracked, and the second one is identified by nothing but
+which half of the court their feet are in. That sounds like a shortcut and is
+the opposite: in singles nobody ever crosses the net, the calibrated court
+already says which half any detection stands in, and a constraint that is
+never violated is stronger than any appearance model, which is violated
+whenever two people wear the same kit. So `tracking.py` runs one
+`PersonTracker` per side and each one refuses, outright, a detection from the
+other side, and a far-side tracker refuses any confident pose whose ankles
+map more than a metre into the near half. The margin is there because ankles
+sit above the floor and a low camera pushes a net-side position out by up to
+about that much; the refusal returns an empty frame rather than the pose,
+because a confident pose on the wrong side is a confident pose of the *other*
+player, and writing it into this track is exactly the corruption the
+constraint exists to prevent.
+
+The refusal is one-directional on purpose, and this was learned the hard way:
+a jump lifts the ankles up the image, and a floor homography reads that as
+metres away from the camera. A near-side player mid-smash, filmed from behind
+at head height, maps five metres up the court and well past the net, so a
+symmetric check would throw away the one movement the app exists to measure.
+A far-side player can never map into the near half that way. From behind the
+baseline, far-to-near is the only direction that can be policed per frame;
+the near side is held by detection-time filtering, and by the box refusing to
+shrink onto a much smaller person.
+
+Several things follow, and each was a choice:
+
+* **Two players need the court.** Without a homography there is no side, and
+  two trackers with nothing to tell them apart would swap at the first
+  crossing. The run modal offers the other player only when the court is
+  calibrated, and both the session and the pipeline refuse otherwise. The
+  fallback of "track two people by overlap and hope" was rejected because it
+  produces tracks that look right until they are silently wrong.
+* **The subject stays the subject.** The person the user clicked is track 0
+  and still the only one the biomechanics run on; everyone else is an
+  `other` with a side, in the result, the `.npz` cache (version 5) and the
+  project file. Corrections and the left/right swap apply to the subject
+  only: the swap says how the camera sees *that* player, and a player facing
+  the other way is seen the other way round.
+* **A far-end player's track is expressed in their own frame.** Every
+  footwork figure -- zones, the base, the coverage shape -- assumes the player
+  defends `y = 0`, so a far player's court positions are turned half a turn
+  (`court.flip_end`) before any of it is computed, and turned back for the
+  shared map. That also applies to the subject when the user clicks the far
+  player, which used to produce a track whose zones were all "far".
+* **Doubles is a phase, still.** A side holds a list of trackers, the subject
+  is whichever the user clicked, and nothing assumes one person per side.
+  What is missing for doubles is telling partners apart *within* a side,
+  which needs appearance and continuity; the side constraint bounds that
+  problem but does not solve it.
+
+The umpire was the other lesson. He sits on a high chair beside the far net
+post: large, still, confidently posed, with his feet on a footrest that maps
+them into the far half, and with the opponent hidden behind the near player
+in the first frame he was the only far-side candidate. A tracker holding him
+is never lost, so it never re-seeded, and the first two-player run tracked
+him for a third of the rally. The fix is a preference rather than a rule:
+someone standing between the sidelines outranks someone beside the court,
+both at seeding and whenever the current target is itself beside the court.
+The chair is beside the sideline by nearly a metre; a player is outside it
+only for the instant of a lunge, and never while the other candidate is
+standing on the court.
+
+Three more things surfaced while building it. The court outline was reaching the
+tracker in video pixels while the tracker worked on a downscaled frame, so on
+a 1080p clip downscaled to 1280 the court sat a third too far right and down
+and the restriction had been working by accident; it is now scaled with the
+frame, and the homography composed with the same scaling. The "on the court"
+test itself was a pixel margin around that outline, and from an eye-level
+camera the whole far half is a few dozen pixels tall, so the margin that
+admits a lunge at the near end admitted the stands at the far end: the first
+two-player run on the Lin Dan rally tracked a spectator whose feet map to
+ninety metres up the court for the whole clip. With a homography the test is
+now made in metres (`CourtGeometry`), with a looser allowance beyond the far
+baseline because a metre there is inside the keypoint jitter, and a point
+above the horizon is not on the floor at all. And a single pose call now
+carries every tracked box, which is how RTMPose is meant to be used and is
+why the second player costs a crop, not a second pass.
+
 ## A second module, and an amendment to the rule that governs both
 
 Mikiri answers "how well did you move". It cannot answer "what did you play and

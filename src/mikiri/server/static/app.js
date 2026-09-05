@@ -7,6 +7,8 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const COLORS = {
   left: '#3fc380', right: '#ff7f2a', center: '#e6c85a', corrected: '#ff5cff',
   low: '#8a8f9c', accent: '#4f8cff', cursor: '#ffffff', event: '#ffd166', compare: '#c9d1ff',
+  // The other player: one flat colour, so the subject's coloured limbs stay the thing the eye lands on.
+  other: '#d7dbe3',
 };
 const LEFT = new Set([1, 3, 5, 7, 9, 11, 13, 15, 20, 22, 24]);
 const RIGHT = new Set([2, 4, 6, 8, 10, 12, 14, 16, 21, 23, 25]);
@@ -151,15 +153,15 @@ function fitCanvas(canvas, wrap, vw, vh) {
 }
 
 function drawSkeleton(ctx, kp, scale, opts) {
-  const thr = opts.thr, corrected = opts.corrected || [];
+  const thr = opts.thr, corrected = opts.corrected || [], muted = !!opts.muted;
   const edges = S.state.meta.skeleton_edges;
-  const lw = Math.max(2, scale * S.state.video.width / 360);
+  const lw = Math.max(2, scale * S.state.video.width / 360) * (muted ? 0.7 : 1);
   ctx.lineWidth = lw; ctx.lineCap = 'round';
   for (const [a, b] of edges) {
     if (a < 5 || b < 5) continue;
     if (kp[a][2] < thr || kp[b][2] < thr) continue;
     const sides = new Set([sideOf(a), sideOf(b)]); sides.delete('center');
-    ctx.strokeStyle = sides.size === 1 ? COLORS[[...sides][0]] : COLORS.center;
+    ctx.strokeStyle = muted ? COLORS.other : (sides.size === 1 ? COLORS[[...sides][0]] : COLORS.center);
     ctx.beginPath(); ctx.moveTo(kp[a][0] * scale, kp[a][1] * scale); ctx.lineTo(kp[b][0] * scale, kp[b][1] * scale); ctx.stroke();
   }
   const r = lw * 1.3;
@@ -171,7 +173,7 @@ function drawSkeleton(ctx, kp, scale, opts) {
       ctx.fillStyle = COLORS.corrected; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = COLORS.corrected; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, r + 4, 0, Math.PI * 2); ctx.stroke();
     } else if (c >= thr) {
-      ctx.fillStyle = COLORS[sideOf(i)]; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = muted ? COLORS.other : COLORS[sideOf(i)]; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
     } else if (c > 0) {
       ctx.strokeStyle = COLORS.low; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cx, cy, Math.max(2, r - 1), 0, Math.PI * 2); ctx.stroke();
     }
@@ -205,6 +207,14 @@ function renderVideo() {
     const corrected = (S.pose.corrected[poseIndex(S.frame)] || []).slice();
     if (S.drag) corrected.push(S.drag.joint);
     drawSkeleton(ctx, drawn, scale, { thr: S.state.conf_threshold, corrected, highlight: S.edit ? (S.drag ? S.drag.joint : S.hoverJoint) : null, labels: S.showLabels });
+  }
+  // The other player, when one was tracked: muted, and never editable.
+  if (S.pose && S.showSkeleton && S.pose.others) {
+    const i = poseIndex(S.frame);
+    for (const o of S.pose.others) {
+      const okp = i >= 0 ? o.keypoints[i] : null;
+      if (okp) drawSkeleton(ctx, okp, scale, { thr: S.state.conf_threshold, muted: true });
+    }
   }
   if (S.calibPick) {
     ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2;
@@ -614,7 +624,10 @@ function renderOptions() {
   $('#undo-btn').disabled = !S.state.can_undo; $('#redo-btn').disabled = !S.state.can_redo;
   $('#save-btn').disabled = false; $('#export-btn').disabled = !S.state.has_pose; $('#compare-btn').disabled = false;
   const t = S.state.tracking;
-  $('#tracking-info').textContent = t ? `Tracked frames ${t.start}-${t.end} with ${t.model} in ${t.seconds ?? '?'} s (${t.processed_at}).` : 'Not tracked yet. Set the in/out points, then Run tracking.';
+  const share = (p) => (p.found_share == null ? '' : ` (found in ${Math.round(p.found_share * 100)}% of the frames looked at)`);
+  const others = (S.state.players || []).filter((p) => !p.subject).map((p) => `the ${p.side || 'other'} player${share(p)}`);
+  const who = t && t.side ? ` The subject is on the ${t.side} side${others.length ? ', and ' + others.join(', ') + ' was tracked too' : ''}.` : '';
+  $('#tracking-info').textContent = t ? `Tracked frames ${t.start}-${t.end} with ${t.model} in ${t.seconds ?? '?'} s (${t.processed_at}).${who}` : 'Not tracked yet. Set the in/out points, then Run tracking.';
   const cs = S.state.corrections;
   $('#corrections-summary').textContent = cs.length ? `${cs.length} corrected keypoint${cs.length > 1 ? 's' : ''} (${cs.filter((c) => c.interpolated).length} interpolated), frames ${Math.min(...cs.map((c) => c.frame))}-${Math.max(...cs.map((c) => c.frame))}` : 'No corrections yet.';
   const sel = $('#interp-joint');
@@ -756,6 +769,10 @@ async function openRunModal() {
   $('#run-hint').textContent = 'Loading first frame and detecting people (the model downloads on first use)...';
   const canvas = $('#select-canvas'); const ctx = canvas.getContext('2d');
   S.selectFrame = S.state.trim_start; S.selectPeople = [];
+  // The other player is told apart by which side of the net they stand on, so without a court there is nothing to track them by.
+  const hasCourt = !!(S.state.court && S.state.court.image_points && S.state.court.image_points.length >= 4);
+  const both = $('#run-both'); both.disabled = !hasCourt; both.checked = hasCourt;
+  $('#run-both-hint').textContent = hasCourt ? 'The other player is told apart by which side of the net they stand on.' : 'Needs the court calibration: the other player is told apart by which side of the net they stand on.';
   try {
     const ms = await api('GET', '/api/models/status');
     $('#run-model-status').textContent = ms.all_present ? `Models ready (${ms.backend}) in ${ms.models_dir}` : (ms.allow_download ? `Some models are missing and will be downloaded once from ${ms.models.filter((m) => !m.present).map((m) => m.url).join(', ')}` : 'Models missing and downloads are disabled: set local model paths in Settings.');
@@ -782,7 +799,7 @@ async function startRun(selectPoint) {
   $('#job-box').classList.remove('hidden'); $('#run-cancel-job').classList.remove('hidden'); $('#run-largest').disabled = true;
   $('#select-canvas').onclick = null;
   try {
-    const { job_id } = await api('POST', `/api/projects/${S.pid}/run`, { select_point: selectPoint });
+    const { job_id } = await api('POST', `/api/projects/${S.pid}/run`, { select_point: selectPoint, players: $('#run-both').checked ? 2 : 1 });
     $('#run-cancel-job').onclick = () => api('POST', `/api/jobs/${job_id}/cancel`);
     const job = await pollJob(job_id, (j) => {
       const bar = $('#job-progress');
@@ -1065,7 +1082,20 @@ function renderCourt() {
     const i = poseIndex(S.frame);
     if (i >= 0 && pos[i]) { const [x, y] = P(pos[i][0], pos[i][1]); ctx.fillStyle = '#ff3b3b'; ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
     const fw = S.pose.footwork;
-    if (fw && fw.base_m) { const [x, y] = P(fw.base_m[0], fw.base_m[1]); ctx.strokeStyle = '#ffdc00'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 7, y); ctx.lineTo(x + 7, y); ctx.moveTo(x, y - 7); ctx.lineTo(x, y + 7); ctx.stroke(); }
+    if (fw && fw.base_m) {
+      // Footwork figures are in the subject's own frame; a far-end subject's base sits a half turn away on the shared map.
+      const b = S.pose.side === 'far' ? [meta.width - fw.base_m[0], meta.length - fw.base_m[1]] : fw.base_m;
+      const [x, y] = P(b[0], b[1]); ctx.strokeStyle = '#ffdc00'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 7, y); ctx.lineTo(x + 7, y); ctx.moveTo(x, y - 7); ctx.lineTo(x, y + 7); ctx.stroke();
+    }
+  }
+  // The other player's track, when one was tracked: a faint path and the current position.
+  for (const o of (S.pose && S.pose.others) || []) {
+    if (!o.positions) continue;
+    ctx.strokeStyle = 'rgba(215,219,227,0.55)'; ctx.lineWidth = 1; ctx.beginPath(); let pen = false;
+    for (const p of o.positions) { if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
+    ctx.stroke();
+    const i = poseIndex(S.frame);
+    if (i >= 0 && o.positions[i]) { const [x, y] = P(o.positions[i][0], o.positions[i][1]); ctx.fillStyle = COLORS.other; ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#222'; ctx.lineWidth = 1.5; ctx.stroke(); }
   }
   // 1-sigma position error across the court: shows where the map can be trusted.
   const unc = S.showUncertainty !== false && S.state.court_uncertainty;

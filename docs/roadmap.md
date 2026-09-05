@@ -20,7 +20,7 @@ move" needs court coordinates, not pixels.
 
 ## Phase 1: court calibration and footwork
 
-**Status: done** (court calibration modal, court map, footwork metrics, `positions.csv` and `court.png`; see `docs/footwork.md`). Phase 1b, tracking the opponent as a second person, is still open and has been promoted: it is the first step of Phase 4 and everything tactical is behind it.
+**Status: done** (court calibration modal, court map, footwork metrics, `positions.csv` and `court.png`; see `docs/footwork.md`). Phase 1b, tracking the opponent as a second person, is done as the first step of Phase 4: with a calibrated court the run modal offers the player at the other end, and the tracker holds each player to their side of the net (`tracking.py`). Nothing is computed from the opponent's pose yet.
 
 ### Phase 1c: camera geometry and honest error bars
 

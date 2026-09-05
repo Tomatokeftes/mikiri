@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +32,7 @@ from mikiri.court import (
     compute_homography,
     court_to_image,
     court_uncertainty_grid,
+    flip_end,
     preset_points,
     recover_camera,
 )
@@ -61,6 +63,7 @@ from mikiri.project import (
     EventMarker,
     Project,
     SmoothingSettings,
+    TrackedPlayer,
     TrackingRun,
 )
 from mikiri.racket import RacketSeries, racket_series
@@ -69,11 +72,39 @@ from mikiri.settings import Settings
 from mikiri.smoothing import apply_corrections, interpolate_joint, smooth_keypoints
 from mikiri.strokes import StrokeSeries, detect_strokes
 from mikiri.strokes import summarise as stroke_summary
+from mikiri.tracking import SIDE_FAR
 from mikiri.video import FrameCache, VideoInfo, VideoReader, fit_size, probe_video
 
 #: Distance from the ankle keypoint to the floor plus the head keypoint offset,
 #: subtracted from stature when calibrating from the athlete's height.
 HEIGHT_TO_HEAD_ANKLE_CM = 7.5
+
+
+@dataclass
+class OtherPlayer:
+    """A tracked person other than the subject, as the app displays them.
+
+    Attributes:
+        side: The half of the court this track is confined to.
+        keypoints: ``(n, 26, 3)``, smoothed the way the subject's are.
+        meta: Per-frame tracking diagnostics as plain dicts.
+    """
+
+    side: str | None
+    keypoints: np.ndarray
+    meta: list[dict]
+
+
+def _found_share(meta: list[dict]) -> float | None:
+    """Share of the frames the tracker looked at in which it found its person.
+
+    Skipped frames are left out of both numerator and denominator: the tracker
+    never looked, so they say nothing about whether the player was there.
+    """
+    looked = [m for m in meta if not m.get("skipped")]
+    if not looked:
+        return None
+    return round(sum(1 for m in looked if not m.get("lost")) / len(looked), 3)
 
 
 def _ellipse_axes(cov: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -107,6 +138,8 @@ class ProjectSession:
         self._racket: RacketSeries | None = None
         self._strokes: StrokeSeries | None = None
         self._footwork: FootworkSeries | None = None
+        self._others: list[OtherPlayer] | None = None
+        self._other_tracks: list[CourtTrack | None] | None = None
         self.last_export: dict | None = None
         #: Why camera recovery from the net posts failed, if it did. The court
         #: calibration stays usable either way, so this is a note, not an error.
@@ -299,6 +332,7 @@ class ProjectSession:
         """Drop everything derived from the keypoints."""
         self._eff = None
         self._angles = None
+        self._others = None
         self._invalidate_derived()
 
     def _invalidate_derived(self) -> None:
@@ -318,6 +352,7 @@ class ProjectSession:
         self._racket = None
         self._strokes = None
         self._footwork = None
+        self._other_tracks = None
 
     def raw_keypoints(self) -> np.ndarray | None:
         """Raw tracked keypoints ``(n, 26, 3)`` or ``None`` before tracking."""
@@ -371,6 +406,95 @@ class ProjectSession:
         )
         self._eff = (kp.astype(np.float32), mask)
         return self._eff
+
+    # -- the other players -----------------------------------------------
+
+    @property
+    def subject_side(self) -> str | None:
+        """Which side of the net the subject stood on, when the run knew the court."""
+        return self.project.tracking.side if self.project.tracking else None
+
+    def others(self) -> list[OtherPlayer]:
+        """Everyone tracked besides the subject, smoothed the way the subject is.
+
+        Neither the left/right swap nor the corrections apply: the swap says
+        how the camera sees the subject, and a player facing the other way is
+        seen the other way round; corrections are the user's edits of the
+        subject's joints. Empty before tracking, and for a run that tracked
+        the subject alone.
+        """
+        if self._others is not None:
+            return self._others
+        sm = self.project.smoothing
+        out: list[OtherPlayer] = []
+        for stored in self.project.others:
+            raw = stored.get_keypoints()
+            if raw is None:
+                continue
+            kp = smooth_keypoints(
+                raw,
+                sm.method,
+                self.info.fps,
+                conf_thr=self.project.conf_threshold,
+                pinned=np.zeros(raw.shape[:2], dtype=bool),
+                window=sm.window,
+                polyorder=sm.polyorder,
+                cutoff_hz=sm.cutoff_hz,
+                order=sm.order,
+            )
+            out.append(OtherPlayer(stored.side, kp.astype(np.float32), stored.frame_meta or []))
+        self._others = out
+        return out
+
+    def other_tracks(self) -> list[CourtTrack | None]:
+        """Court tracks of the other players, each in that player's own frame.
+
+        Aligned with :meth:`others`. ``None`` entries without a court, which
+        cannot happen for a track that exists -- the other player is only ever
+        found through the court -- but the calibration can be cleared later.
+        """
+        others = self.others()
+        H = self.homography()
+        if H is None or not others:
+            return [None] * len(others)
+        if self._other_tracks is not None:
+            return self._other_tracks
+        calib = self.project.court
+        camera = calib.camera if (calib is not None and calib.has_camera()) else None
+        self._other_tracks = [
+            build_track(
+                o.keypoints,
+                H,
+                self.info.fps,
+                self.project.conf_threshold,
+                None,
+                camera=camera,
+                calibration=calib,
+                far_end=o.side == SIDE_FAR,
+            )
+            for o in others
+        ]
+        return self._other_tracks
+
+    def players_summary(self) -> list[dict]:
+        """One entry per tracked person, the subject first.
+
+        Says which side each one stood on and how often the tracker found them
+        in the frames it looked at, so the UI can tell a player who was barely
+        there from one who was tracked throughout.
+        """
+        if self.project.tracking is None:
+            return []
+        out = [
+            {
+                "side": self.subject_side,
+                "subject": True,
+                "found_share": _found_share(self.project.frame_meta or []),
+            }
+        ]
+        for o in self.others():
+            out.append({"side": o.side, "subject": False, "found_share": _found_share(o.meta)})
+        return out
 
     def angles(self) -> AngleTable | None:
         """Angle table for the effective keypoints."""
@@ -516,8 +640,24 @@ class ProjectSession:
             self.flights(),
             camera=camera,
             calibration=calib,
+            far_end=self.subject_side == SIDE_FAR,
         )
         return self._track
+
+    def _camera_frame(self, track: CourtTrack | None, far_end: bool) -> list | None:
+        """A track's positions as the shared map draws them: the camera's frame.
+
+        A far-end player's track is kept in their own frame so the footwork
+        figures mean the same for both players; the map shows both players on
+        one court, so it is flipped back here.
+        """
+        if track is None:
+            return None
+        pos = flip_end(track.positions) if far_end else track.positions
+        return [
+            None if not np.isfinite(pt).all() else [round(float(pt[0]), 3), round(float(pt[1]), 3)]
+            for pt in pos
+        ]
 
     def camera_view(self) -> dict | None:
         """How the camera looks at the court, and which metrics that supports.
@@ -1023,14 +1163,25 @@ class ProjectSession:
 
     # tracking
 
-    def run_request(self, select_point: tuple[float, float] | None = None) -> RunRequest:
+    def run_request(
+        self, select_point: tuple[float, float] | None = None, players: int = 1
+    ) -> RunRequest:
         """Build the request for the current trim and settings.
 
         When the court is calibrated the request carries its outline, so
-        tracking ignores people who are not standing on it. On match footage
+        tracking ignores people who are not standing on it -- on match footage
         that is the difference between following the player and following a
-        line judge.
+        line judge -- and its homography, so each tracker holds to its side of
+        the net. ``players`` of two also tracks whoever stands on the other
+        side, and raises ``ValueError`` without a court, because the other
+        player is identified by side and by nothing else.
         """
+        H = self.homography()
+        if players > 1 and H is None:
+            raise ValueError(
+                "calibrate the court before tracking both players: the other player is "
+                "told apart by which side of the net they stand on"
+            )
         return RunRequest(
             start=self.project.trim_start,
             end=self.project.trim_end,
@@ -1040,6 +1191,8 @@ class ProjectSession:
             conf_threshold=self.settings.conf_threshold,
             court_polygon=self.court_polygon(),
             segment=self.settings.segment_clip,
+            homography=None if H is None else [[float(v) for v in row] for row in H],
+            players=max(1, int(players)),
         )
 
     def court_polygon(self, margin_m: float = 1.0) -> list[list[float]] | None:
@@ -1072,6 +1225,14 @@ class ProjectSession:
             )
             self.project.set_keypoints(result.keypoints)
             self.project.frame_meta = [m.to_dict() for m in result.meta]
+            self.project.others = [
+                TrackedPlayer(
+                    side=o.side,
+                    keypoints=np.round(np.asarray(o.keypoints, dtype=float), 2).tolist(),
+                    frame_meta=[m.to_dict() for m in o.meta],
+                )
+                for o in result.others
+            ]
             self.project.tracking = TrackingRun(
                 backend=result.backend,
                 model=result.model,
@@ -1085,6 +1246,8 @@ class ProjectSession:
                 else [float(v) for v in req.select_point],
                 seconds=result.seconds,
                 cache_file=result.cache_file,
+                side=result.side,
+                players=1 + len(result.others),
             )
             self.project.conf_threshold = req.conf_threshold
             self._raw = result.keypoints.astype(np.float32)
@@ -1126,6 +1289,7 @@ class ProjectSession:
             "camera_view": self.camera_view(),
             "court_camera_error": self.court_camera_error,
             "footwork": (track.metrics if (track := self.court_track()) is not None else None),
+            "players": self.players_summary(),
             "strokes": (stroke_summary(sv) if (sv := self.strokes()) is not None else None),
             "bouts": self.bouts_summary(),
             "split_steps": self.footwork_summary(),
@@ -1178,13 +1342,22 @@ class ProjectSession:
             "suggestions": [s.to_dict() for s in self.suggestions()],
             "metrics": self.metrics(),
             "assessment": self.assessment(),
-            "positions": None
-            if (track := self.court_track()) is None
-            else [
-                None
-                if not np.isfinite(pt).all()
-                else [round(float(pt[0]), 3), round(float(pt[1]), 3)]
-                for pt in track.positions
+            # Which end the subject defends. Positions below are in the
+            # camera's frame for the shared map; the footwork figures are in
+            # the subject's own frame, which differs by a half turn when far.
+            "side": self.subject_side,
+            "positions": self._camera_frame(
+                (track := self.court_track()), self.subject_side == SIDE_FAR
+            ),
+            "others": [
+                {
+                    "side": o.side,
+                    "keypoints": np.round(o.keypoints, 1).tolist(),
+                    "meta": o.meta,
+                    "positions": self._camera_frame(ot, o.side == SIDE_FAR),
+                    "footwork": None if ot is None else ot.metrics,
+                }
+                for o, ot in zip(self.others(), self.other_tracks())
             ],
             "speed": None
             if track is None

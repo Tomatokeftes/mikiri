@@ -69,7 +69,7 @@ Notes that will otherwise cost time:
 | `strokes.py` | swing detection and the two-tier stroke description |
 | `shuttle.py`, `shots.py` | classical shuttle search after each contact, and shot naming gated on it |
 | `coaching.py` | turning the numbers into at most three things to work on |
-| `tracking.py` | keeping the tracker on one player, inside the court |
+| `tracking.py` | one tracker per player, each held to its side of the net by the homography, and all of them inside the court |
 | `pipeline.py` | the tracking run and its cache (`CACHE_VERSION`); segments the clip first and spends the model only where there is something to see |
 | `benchmarks.py` | dev tooling: finding the benchmark clips and reading their manifest |
 | `session.py` | in-memory state for one open project; the layer between the API and the maths |
@@ -146,6 +146,11 @@ Verified:
 * The tracker stays on the player for the whole Lin Dan rally (it used to lock
   onto a seated line judge after eight seconds).
 * Bouts, moves and the detrended split-step signal, pinned on that footage.
+* Two-player tracking on that footage: the opponent is held to the far half
+  for the whole rally, found in about three quarters of the frames he is
+  looked for (he is behind Lin Dan for the rest), and never confused with
+  the umpire on his chair or the spectator above the far baseline, both of
+  whom the first runs tracked instead of him.
 
 Not verified, and the module docstrings say so:
 
@@ -156,8 +161,13 @@ Not verified, and the module docstrings say so:
 
 Known gaps:
 
-* Only one player is tracked. This is the blocker for everything tactical, and
-  is now the next piece of work rather than a someday item.
+* Two players are tracked, one per side of the net, and only with a court:
+  the other player is identified by side and nothing else, so an uncalibrated
+  clip gets the subject alone. Doubles is not: a side holds one tracker, and
+  telling partners apart within a side needs appearance and continuity that
+  nothing here has. The other player's pose is displayed and mapped but
+  nothing is computed from it yet; strokes, bouts and footwork are still the
+  subject's alone, which is what the tactical build's next steps consume.
 * `coaching.compare_sessions` turns a list of session summaries into progress
   and is tested, but nothing calls it: there is no way to load an earlier
   session, so the comparator the split-step numbers point at -- the same

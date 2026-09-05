@@ -121,11 +121,55 @@ def match_session(match_clip: Path):
     s.project.project_path = None
     s.set_trim(0, s.info.n_frames - 1)
     s.set_court("doubles_corners", MATCH_COURT_IMAGE, MATCH_COURT_WORLD, frame=0)
-    req = s.run_request(MATCH_CLICK)
+    # Both players: the subject's assertions below must hold on the same run
+    # that tracks the opponent, or two-player tracking would be a mode nobody
+    # tests the biomechanics on.
+    req = s.run_request(MATCH_CLICK, players=2)
     assert req.court_polygon is not None, "a calibrated court must restrict tracking"
+    assert req.homography is not None, "a calibrated court must give the tracker its sides"
     s.apply_result(run_tracking(s.reader, backend, req, frame_cache=s.frame_cache), req)
     yield s
     s.close()
+
+
+def test_the_opponent_is_tracked_on_his_own_side_of_the_net(match_session):
+    """Two-player tracking on real footage, with the net as the identity.
+
+    The far player is small at eye level and spends a quarter of the rally
+    behind the near player's body, so this is the honest test of whether
+    side-of-net holds a track where overlap alone would not. Two people
+    beside the court failed it before the player did: a spectator above the
+    far baseline, and the umpire on his chair, both of whom the first runs
+    tracked for a third of the clip. His track has to stay in his half, be
+    found most of the time he is visible, and never sit on top of the subject.
+
+    The bounds beyond his own baseline are loose because they have to be: at
+    eye level the far half is eighty pixels tall, and a foot one jitter too
+    high maps metres past the line.
+    """
+    from mikiri.court import flip_end
+
+    s = match_session
+    assert s.subject_side == "near"
+    others = s.others()
+    assert len(others) == 1 and others[0].side == "far"
+    summary = s.state()["players"]
+    assert summary[1]["found_share"] > 0.65, summary
+
+    far = s.other_tracks()[0]
+    assert far is not None
+    assert far.valid.sum() > 500, far.valid.sum()
+    own = far.positions[far.valid]
+    # In his own frame he defends y = 0, like the subject does in theirs.
+    on_own_half = (own[:, 0] > -1.0) & (own[:, 0] < 7.1) & (own[:, 1] > -2.5) & (own[:, 1] < 7.3)
+    assert on_own_half.mean() > 0.9, f"only {on_own_half.mean():.0%} of frames in his own half"
+    assert 30.0 < far.metrics["distance_m"] < 200.0, far.metrics["distance_m"]
+
+    # On the shared court the two players are never the same person.
+    near = s.court_track().positions
+    both = far.valid & np.isfinite(near).all(axis=1)
+    apart = np.hypot(*(flip_end(far.positions[both]) - near[both]).T)
+    assert (apart > 1.0).mean() > 0.99, f"players within a metre on {(apart <= 1.0).mean():.0%}"
 
 
 def test_tracker_stays_on_the_player_not_the_officials(match_session):

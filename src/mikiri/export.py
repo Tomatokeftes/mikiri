@@ -605,8 +605,17 @@ def export_pack(
                         "1" if inp.track.valid[i] else "0",
                     ]
                 )
+        # A far-end player's track is kept in their own frame, so the figures
+        # mean the same as anyone else's; the file has to say so, or the
+        # coordinates read as the wrong half of the court.
+        own_end = (
+            " (in the player's own frame: they defended the far end, so y = 0 is their baseline)"
+            if p.tracking is not None and p.tracking.side == "far"
+            else ""
+        )
         files["positions.csv"] = (
-            "court position of the player per frame (metres), speed, airborne and measured flags"
+            "court position of the player per frame (metres), speed, airborne and measured "
+            f"flags{own_end}"
         )
         base = inp.track.metrics.get("base_m")
         # The same map the app draws, uncertainty included. Without the
@@ -627,14 +636,14 @@ def export_pack(
                 None,
                 size=900,
                 base=None if base is None else (base[0], base[1]),
-                label=f"{p.name}: footwork track",
+                label=f"{p.name}: footwork track" + (" (own frame)" if own_end else ""),
                 cov=inp.track.cov,
                 uncertainty=grid,
             ),
         )
         files["court.png"] = (
             "top-down court map: footwork track, heat map blurred by the measured position "
-            "uncertainty, and 95% error ellipses across the court"
+            f"uncertainty, and 95% error ellipses across the court{own_end}"
         )
 
     if inp.strokes is not None and inp.strokes.strokes:

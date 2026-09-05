@@ -21,11 +21,11 @@ from mikiri.paths import cache_dir
 from mikiri.pose.base import PoseBackend, get_backend
 from mikiri.segments import STATE_NOT_BADMINTON, scan_motion, segment_clip
 from mikiri.settings import Settings
-from mikiri.tracking import FrameMeta, PersonTracker
+from mikiri.tracking import SIDES, FrameMeta, PlayersTracker
 from mikiri.video import FrameCache, VideoReader, downscale, video_id
 
 #: Bump when the reader or tracker changes so stale cached results are never reused.
-CACHE_VERSION = 4  # segmentation skips frames, so keypoint arrays differ
+CACHE_VERSION = 5  # the side constraint changes the subject's track; others are stored
 
 #: How often to run the model through a stretch the segmentation called idle,
 #: in hertz. Not zero, because identity is far cheaper to keep than to recover:
@@ -57,6 +57,16 @@ class RunRequest:
     #: saves most of the model time on a recording that is mostly dead air.
     #: Turning it off tracks every frame, which is what happened before.
     segment: bool = True
+    #: Image-to-court homography of the calibrated court, row-major. It is
+    #: what lets the tracker read which side of the net a person stands on,
+    #: which is the identity constraint for both the subject and anyone else
+    #: tracked. ``None`` without a calibration.
+    homography: list[list[float]] | None = None
+    #: How many people to track: one, the subject alone, or two, the subject
+    #: and whoever stands on the other side of the net. Two needs the
+    #: homography, because the other player is identified by side and nothing
+    #: else, and the pipeline refuses rather than guessing.
+    players: int = 1
 
     def key(self, backend_key: str) -> str:
         """Short hash identifying this run for the on-disk cache."""
@@ -72,6 +82,10 @@ class RunRequest:
                 "court": None
                 if self.court_polygon is None
                 else [[round(v, 1) for v in p] for p in self.court_polygon],
+                "homography": None
+                if self.homography is None
+                else [[float(f"{v:.6g}") for v in row] for row in self.homography],
+                "players": int(self.players),
                 "segment": self.segment,
                 "backend": backend_key,
                 "cache_version": CACHE_VERSION,
@@ -79,6 +93,29 @@ class RunRequest:
             sort_keys=True,
         )
         return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+
+
+@dataclass
+class PlayerTrack:
+    """One tracked person besides the subject: their side of the net and their pose.
+
+    Attributes:
+        side: :data:`mikiri.tracking.SIDE_NEAR` or :data:`mikiri.tracking.SIDE_FAR`,
+            the half of the court this track is confined to. ``None`` only when
+            the run had no court, in which case there is no such track at all.
+        keypoints: ``(n, 26, 3)`` in full-resolution display pixels, zero
+            confidence on frames where this person was lost or skipped.
+        meta: Per-frame diagnostics, aligned with ``keypoints``.
+    """
+
+    side: str | None
+    keypoints: np.ndarray
+    meta: list[FrameMeta] = field(default_factory=list)
+
+    @property
+    def n_frames(self) -> int:
+        """Number of frames in the track."""
+        return int(self.keypoints.shape[0])
 
 
 @dataclass
@@ -94,6 +131,10 @@ class TrackingResult:
     seconds: float
     cache_file: str | None = None
     extra: dict = field(default_factory=dict)
+    #: Which side of the net the subject stood on, when the court was known.
+    side: str | None = None
+    #: Everyone else that was tracked, each on their own side.
+    others: list[PlayerTrack] = field(default_factory=list)
 
     @property
     def n_frames(self) -> int:
@@ -159,6 +200,14 @@ def save_result(path: Path, result: TrackingResult) -> None:
     """Write a :class:`TrackingResult` as ``.npz``."""
     path.parent.mkdir(parents=True, exist_ok=True)
     meta_json = json.dumps([m.to_dict() for m in result.meta])
+    others_kp = (
+        np.stack([o.keypoints for o in result.others]).astype(np.float32)
+        if result.others
+        else np.zeros((0, result.n_frames, N_KEYPOINTS, 3), dtype=np.float32)
+    )
+    others_json = json.dumps(
+        [{"side": o.side, "meta": [m.to_dict() for m in o.meta]} for o in result.others]
+    )
     np.savez_compressed(
         path,
         keypoints=result.keypoints.astype(np.float32),
@@ -168,6 +217,9 @@ def save_result(path: Path, result: TrackingResult) -> None:
         backend=np.array(result.backend),
         model=np.array(result.model),
         seconds=np.float64(result.seconds),
+        side=np.array(result.side or ""),
+        others_keypoints=others_kp,
+        others=np.array(others_json),
     )
     result.cache_file = str(path)
 
@@ -180,6 +232,18 @@ def load_result(path: Path) -> TrackingResult | None:
             if kp.ndim != 3 or kp.shape[1:] != (N_KEYPOINTS, 3):
                 return None
             meta = [FrameMeta(**m) for m in json.loads(str(data["meta"]))]
+            others: list[PlayerTrack] = []
+            if "others" in data:
+                others_kp = np.asarray(data["others_keypoints"], dtype=np.float32)
+                for k, entry in enumerate(json.loads(str(data["others"]))):
+                    others.append(
+                        PlayerTrack(
+                            side=entry.get("side"),
+                            keypoints=others_kp[k],
+                            meta=[FrameMeta(**m) for m in entry.get("meta", [])],
+                        )
+                    )
+            side = str(data["side"]) if "side" in data else ""
             return TrackingResult(
                 start=int(data["start"]),
                 end=int(data["end"]),
@@ -189,8 +253,10 @@ def load_result(path: Path) -> TrackingResult | None:
                 model=str(data["model"]),
                 seconds=float(data["seconds"]),
                 cache_file=str(path),
+                side=side or None,
+                others=others,
             )
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, IndexError):
         return None
 
 
@@ -201,7 +267,17 @@ def run_tracking(
     job: Job | None = None,
     frame_cache: FrameCache | None = None,
 ) -> TrackingResult:
-    """Track one person from ``req.start`` to ``req.end`` inclusive.
+    """Track the subject, and with ``req.players > 1`` the other side's player too.
+
+    The subject is the person under ``req.select_point``, or the largest. With
+    a homography in the request the tracker reads which side of the net each
+    person stands on and holds every track to its side (see
+    :mod:`mikiri.tracking`); with ``players`` set to two, whoever stands on the
+    other side is tracked as well and comes back in
+    :attr:`TrackingResult.others`. Two players without a homography is refused
+    with ``ValueError``: the other player is identified by side and nothing
+    else, and a second tracker with nothing to tell the two apart would swap
+    them at the first crossing.
 
     With ``req.segment`` set the clip is scanned first (see
     :mod:`mikiri.segments`) and the model is spent where there is something to
@@ -220,6 +296,11 @@ def run_tracking(
     frames than requested if the video ends early.
     """
     t0 = time.time()
+    if req.players > 1 and req.homography is None:
+        raise ValueError(
+            "tracking both players needs the court calibration: the other player is "
+            "identified by which side of the net they stand on"
+        )
 
     def progress(fraction: float, message: str) -> None:
         if job is not None:
@@ -249,15 +330,13 @@ def run_tracking(
     if job is not None:
         job.check_cancel()
 
-    tracker = PersonTracker(
-        backend,
-        det_every=req.det_every,
-        conf_thr=req.conf_threshold,
-        court_polygon=None if req.court_polygon is None else np.asarray(req.court_polygon, float),
-    )
+    tracker: PlayersTracker | None = None
     total = max(1, req.end - req.start + 1)
-    keypoints = np.zeros((total, N_KEYPOINTS, 3), dtype=np.float32)
-    metas: list[FrameMeta] = []
+    # Room for everyone that might be tracked; trimmed to the trackers that
+    # actually exist once the first frame has been seen.
+    max_players = max(1, int(req.players))
+    keypoints = np.zeros((max_players, total, N_KEYPOINTS, 3), dtype=np.float32)
+    metas: list[list[FrameMeta]] = [[] for _ in range(max_players)]
     n = 0
     first = True
     last_tracked = -(10**9)
@@ -280,43 +359,84 @@ def run_tracking(
             elsewhere = _state_at(skip_mask, i)
             resting = _state_at(stride_mask, i) and (i - last_tracked) < stride
             if elsewhere or resting:
-                metas.append(FrameMeta(idx, None, False, 0.0, False, skipped=True))
+                for k in range(len(tracker.trackers) if tracker is not None else 1):
+                    metas[k].append(FrameMeta(idx, None, False, 0.0, False, skipped=True))
                 n = i + 1
                 n_skipped += 1
                 continue
 
         small, scale = downscale(frame, req.downscale_longest)
         if first:
+            # The tracker works in the downscaled frame, so everything handed
+            # to it in video pixels -- the click, the court outline and the
+            # homography -- has to be brought into that frame first.
+            tracker = _build_tracker(backend, req, scale)
             click = None
             if req.select_point is not None:
                 click = (req.select_point[0] * scale, req.select_point[1] * scale)
             tracker.start(small, click, frame_index=idx)
             first = False
-        kp, meta = tracker.step(small, frame_index=idx)
-        if scale != 1.0:
-            kp = kp.copy()
-            kp[:, :2] /= scale
-            if meta.bbox is not None:
-                meta.bbox = [v / scale for v in meta.bbox]
-        keypoints[i] = kp
-        metas.append(meta)
+        assert tracker is not None
+        for k, (kp, meta) in enumerate(tracker.step(small, frame_index=idx)):
+            if scale != 1.0:
+                kp = kp.copy()
+                kp[:, :2] /= scale
+                if meta.bbox is not None:
+                    meta.bbox = [v / scale for v in meta.bbox]
+            keypoints[k, i] = kp
+            metas[k].append(meta)
         last_tracked = i
         n = i + 1
         progress(0.05 + 0.95 * n / total, f"Tracking frame {idx} ({n}/{total})")
 
-    keypoints = keypoints[:n]
+    n_tracks = len(tracker.trackers) if tracker is not None else 1
+    keypoints = keypoints[:n_tracks, :n]
     end = req.start + n - 1 if n else req.start - 1
     extra: dict = {"request": asdict(req)}
     if segments_summary is not None:
         extra["segments"] = segments_summary
         extra["skipped_frames"] = int(n_skipped)
+    others = [
+        PlayerTrack(side=tracker.trackers[k].side, keypoints=keypoints[k], meta=metas[k])
+        for k in range(1, n_tracks)
+        if tracker is not None
+    ]
     return TrackingResult(
         start=req.start,
         end=end,
-        keypoints=keypoints,
-        meta=metas,
+        keypoints=keypoints[0],
+        meta=metas[0],
         backend=backend.name,
         model=backend.model_description,
         seconds=round(time.time() - t0, 2),
         extra=extra,
+        side=None if tracker is None else tracker.subject.side,
+        others=others,
+    )
+
+
+def _build_tracker(backend: PoseBackend, req: RunRequest, scale: float) -> PlayersTracker:
+    """The tracker for ``req``, with its court geometry in the downscaled frame.
+
+    The frames the tracker sees are ``scale`` times the video's size, so the
+    court outline is scaled the same way and the homography is composed with
+    the inverse scaling: court metres from a downscaled pixel are what the
+    calibration gives for that pixel divided by ``scale``. Before this the
+    outline was handed over in video pixels, which on a 1080p clip downscaled
+    to 1280 put the whole court a third too far right and down and left the
+    restriction working by accident.
+    """
+    polygon = None
+    if req.court_polygon is not None:
+        polygon = np.asarray(req.court_polygon, dtype=float) * scale
+    homography = None
+    if req.homography is not None:
+        homography = np.asarray(req.homography, dtype=float) @ np.diag([1 / scale, 1 / scale, 1.0])
+    return PlayersTracker(
+        backend,
+        homography=homography,
+        sides=SIDES if req.players > 1 else (),
+        det_every=req.det_every,
+        conf_thr=req.conf_threshold,
+        court_polygon=polygon,
     )

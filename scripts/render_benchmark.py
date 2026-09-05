@@ -39,6 +39,7 @@ from mikiri.court import (  # noqa: E402
     SHORT_SERVICE_FROM_NET,
     SIDE_ALLEY,
     draw_court,
+    flip_end,
 )
 from mikiri.ffmpeg import FFmpegWriter  # noqa: E402
 from mikiri.pipeline import build_backend, run_tracking  # noqa: E402
@@ -52,6 +53,19 @@ COURT_LINE = (255, 255, 120)
 COURT_SIZE = 620
 CONTACT_COLOUR = (60, 200, 255)
 SPLIT_COLOUR = (120, 255, 140)
+OTHER_COLOUR = (227, 219, 215)
+
+
+def court_point(x: float, y: float, height: int) -> tuple[int, int]:
+    """Where a court position lands on :func:`mikiri.court.draw_court`'s image.
+
+    The same mapping the court drawer uses -- a metre of margin around the
+    court, ``y`` up the image -- so a point added afterwards sits where the
+    track it belongs beside was drawn.
+    """
+    margin_m = 1.0
+    scale = height / (COURT_LENGTH + 2 * margin_m)
+    return int(round((x + margin_m) * scale)), int(round(height - (y + margin_m) * scale))
 
 
 def court_lines_in_image(h_inv: np.ndarray, scale: float) -> list[np.ndarray]:
@@ -126,11 +140,16 @@ def main() -> int:
     if court:
         s.set_court(court["preset"], court["image_points"], court["world_points"], frame=0)
     click = entry.get("click")
-    req = s.run_request(tuple(click) if click else None)
+    # With a court the other player is tracked too: watching both skeletons is
+    # the check that the side constraint held, which no number in a table is.
+    req = s.run_request(tuple(click) if click else None, players=2 if court else 1)
     print(f"tracking {path.name} frames {start}-{end} ...")
     s.apply_result(run_tracking(s.reader, backend, req, frame_cache=s.frame_cache), req)
 
     track = s.court_track()
+    subject_far = s.subject_side == "far"
+    others = s.others()
+    other_tracks = s.other_tracks()
     keypoints = s.effective_keypoints()[0]
     racket = s.racket()
     strokes = s.strokes()
@@ -181,6 +200,14 @@ def main() -> int:
                 for poly in court_polys[key]:
                     cv2.polylines(img, [poly], False, COURT_LINE, 1, cv2.LINE_AA)
             segment = None if racket is None else (racket.wrist[i], racket.head[i])
+            for other in others:
+                draw_skeleton(
+                    img,
+                    other.keypoints[i],
+                    conf_thr=s.project.conf_threshold,
+                    scale=scale,
+                    thickness=2,
+                )
             draw_skeleton(
                 img, keypoints[i], conf_thr=s.project.conf_threshold, scale=scale, racket=segment
             )
@@ -196,14 +223,28 @@ def main() -> int:
 
             canvas = np.full((canvas_h, canvas_w, 3), PANEL_BG, dtype=np.uint8)
             canvas[:vh, :vw] = img
+            # The map is drawn in the camera's frame; a far-end subject's track
+            # is kept in their own frame and turned back here.
+            shown = flip_end(track.positions[: i + 1]) if subject_far else track.positions[: i + 1]
+            base = track.metrics.get("base_m")
             court_img = draw_court(
-                track.positions[: i + 1],
+                shown,
                 current=i,
                 size=COURT_SIZE,
                 cov=None if track.cov is None else track.cov[: i + 1],
-                base=track.metrics.get("base_m"),
+                base=None if base is None else (flip_end(np.array(base)) if subject_far else base),
             )
             ch, cw = court_img.shape[:2]
+            for other, other_track in zip(others, other_tracks):
+                if other_track is None:
+                    continue
+                pos = other_track.positions[i]
+                if other.side == "far":
+                    pos = flip_end(pos)
+                if np.isfinite(pos).all():
+                    px = court_point(pos[0], pos[1], ch)
+                    cv2.circle(court_img, px, 7, OTHER_COLOUR, -1, cv2.LINE_AA)
+                    cv2.circle(court_img, px, 7, (30, 30, 32), 2, cv2.LINE_AA)
             x0 = vw + 12
             canvas[12 : 12 + ch, x0 : x0 + cw] = court_img
 

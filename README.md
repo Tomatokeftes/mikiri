@@ -35,7 +35,10 @@ The browser opens at `http://127.0.0.1:8765`. Then:
    <kbd>O</kbd> on the current frame.
 3. **Run tracking**: click the athlete in the first frame (or "Track largest
    person"). The first run downloads the models (about 150 MB) and tells you
-   where from. Progress bar and Cancel are in the dialog.
+   where from. Progress bar and Cancel are in the dialog. Once the court is
+   calibrated the dialog also offers the player at the other end: they are
+   told apart by which side of the net they stand on, drawn in grey on the
+   video and on the court map, and nothing is measured from them yet.
 4. **Scrub**: <kbd>Left</kbd>/<kbd>Right</kbd> one frame,
    <kbd>Shift</kbd>+arrows ten frames, <kbd>Space</kbd> play/pause at 0.1x to
    1x. Click any plot or the timeline to jump.

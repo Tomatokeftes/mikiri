@@ -133,6 +133,35 @@ class TrackingRun(BaseModel):
     processed_at: str = Field(default_factory=now_iso)
     seconds: float | None = None
     cache_file: str | None = None
+    #: Which side of the net the subject stood on, when the court was known.
+    #: The footwork figures are computed in the subject's own frame, so this
+    #: is what says whether that frame is the camera's or the flipped one.
+    side: Literal["near", "far"] | None = None
+    #: How many people the run tracked: the subject alone, or the subject and
+    #: whoever stood on the other side of the net.
+    players: int = 1
+
+
+class TrackedPlayer(BaseModel):
+    """Someone tracked besides the subject: their side of the net, and their pose.
+
+    Stored the way the subject's keypoints are, rounded to 0.01 px and never
+    with corrections or smoothing baked in. There are no corrections for these
+    tracks yet; the subject is the one whose joints the user edits.
+    """
+
+    side: Literal["near", "far"] | None = None
+    keypoints: list | None = None
+    frame_meta: list[dict] | None = None
+
+    def get_keypoints(self) -> np.ndarray | None:
+        """Raw tracked keypoints as ``(n, 26, 3)`` float32, or ``None``."""
+        if self.keypoints is None:
+            return None
+        arr = np.asarray(self.keypoints, dtype=np.float32)
+        if arr.ndim != 3 or arr.shape[1:] != (N_KEYPOINTS, 3):
+            return None
+        return arr
 
 
 class Project(BaseModel):
@@ -159,6 +188,9 @@ class Project(BaseModel):
     tracking: TrackingRun | None = None
     keypoints: list | None = None
     frame_meta: list[dict] | None = None
+    #: Everyone tracked besides the subject, each with the side of the net
+    #: they stood on. Empty for a run that tracked the subject alone.
+    others: list[TrackedPlayer] = Field(default_factory=list)
     notes: str = ""
     created_at: str = Field(default_factory=now_iso)
     modified_at: str = Field(default_factory=now_iso)

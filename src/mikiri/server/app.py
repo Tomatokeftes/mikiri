@@ -83,6 +83,9 @@ class RunBody(BaseModel):
 
     select_point: list[float] | None = None
     force: bool = False
+    #: One tracks the chosen athlete; two also tracks whoever stands on the
+    #: other side of the net, which needs the court calibration.
+    players: int = 1
 
 
 class EventBody(BaseModel):
@@ -563,7 +566,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if body.select_point is None
             else (float(body.select_point[0]), float(body.select_point[1]))
         )
-        req = s.run_request(select)
+        try:
+            req = s.run_request(select, players=body.players)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         bkey = backend_key(st.settings)
         cache_path = pose_cache_path(s.info.path, req, bkey)
 

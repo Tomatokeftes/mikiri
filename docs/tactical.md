@@ -343,7 +343,15 @@ The amended rule opens doors; it does not open all of them.
    later with the constraint chain.
 1. **Two-player tracking.** Everything else is behind it. Extend `tracking.py`
    to hold several targets, with net side from the homography as the primary
-   identity constraint.
+   identity constraint. *Done:* `PlayersTracker` holds one `PersonTracker`
+   per side, sharing each detector and pose call; a tracker never takes a
+   detection from the other side and refuses a confident pose whose feet map
+   more than a metre past the net. The subject stays the one the user
+   clicked, with its side recorded; the other player comes back as a track
+   with a side, in the result, the cache and the project file. Pinned on the
+   Lin Dan rally, where the far player is small, at eye level, and often
+   behind the near player. Doubles is the open part: one tracker per side,
+   and nothing yet to tell partners apart within one.
 2. **Rallies, serves and scores**, on the constraint chain above, producing
    rally outcomes from the serve alternation.
 3. **Contacts for both sides**, running the existing detection per player, with
