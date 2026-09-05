@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from mikiri import demo
+from mikiri.benchmarks import clip_path
 from mikiri.pose.base import Detection
 from mikiri.tracking import PersonTracker, choose_person, iou
 from mikiri.video import FrameCache, VideoReader, downscale, fit_size, probe_video, video_id
@@ -155,12 +156,10 @@ def test_reads_are_frame_accurate_without_seeking(demo_video: Path):
         assert r.position == 1
 
 
-REAL_VFR = (
-    Path(__file__).resolve().parents[1] / "demo" / "Screen_Recording_20260412_123956_OneDrive.mp4"
-)
+REAL_VFR = clip_path("jump_smash_behind")
 
 
-@pytest.mark.skipif(not REAL_VFR.exists(), reason="real variable-frame-rate clip not present")
+@pytest.mark.skipif(REAL_VFR is None, reason="benchmark clip 'jump_smash_behind' not present")
 def test_vfr_clip_frame_index_is_exact():
     """OpenCV's own seek lands about 50 frames late on this clip; ours must not."""
     with VideoReader(REAL_VFR) as r:

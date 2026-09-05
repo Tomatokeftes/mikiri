@@ -2,7 +2,7 @@
 
 Usage (server already running, e.g. ``mikiri serve --no-browser --port 8765``)::
 
-    python scripts/real_clip_screenshots.py http://127.0.0.1:8765 demo/Screen_Recording_20260412_123956_OneDrive.mp4 \
+    python scripts/real_clip_screenshots.py http://127.0.0.1:8765 benchmarks/Screen_Recording_20260412_123956_OneDrive.mp4 \
         --trim 60 200 --click 1170 740 --out docs/screenshots/real
 
 The script opens the clip, trims, runs tracking (clicking the athlete at the

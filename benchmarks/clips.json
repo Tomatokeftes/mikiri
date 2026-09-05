@@ -1,0 +1,109 @@
+{
+  "note": "Benchmark footage. The videos are never committed; this file describes them so that a clip can be added, calibrated and asserted on without editing test code. See README.md in this folder.",
+  "clips": [
+    {
+      "id": "lindan_rally",
+      "file": "lindan_rally.mp4",
+      "title": "Lin Dan, one rally, German Open",
+      "source": "Broadcast footage from YouTube, cropped to a single rally. Third party: kept locally, never committed or redistributed.",
+      "source_file": "lindan_source.mp4",
+      "view": "behind the baseline, raised to about eye level, slightly off centre",
+      "resolution": "1920x1080",
+      "fps": 29.97,
+      "frames": 1199,
+      "duration_s": 40.0,
+      "guards": [
+        "the tracker stays on the player and not on the seated line judge",
+        "an eye-level camera is diagnosed rather than blamed on the clicked points",
+        "bouts: a clip cut to one rally reports no work-to-rest figure",
+        "moves are counted per trip to a corner, not per run of fast frames",
+        "the split-step signal survives the perspective drift"
+      ],
+      "click": [869.0, 600.0],
+      "click_note": "the near player's torso in the first frame, for the tracking click",
+      "court": {
+        "preset": "doubles_corners",
+        "note": "The nine intersections of three detected sidelines (left doubles, left singles, centre) with three detected cross lines (baseline, doubles long service, short service), each line least-squares fitted to its own painted pixels. Reprojection error 0.35 cm, and it lands on every painted line at 0.0 px median, including the two right-hand sidelines it never saw and extrapolates. Hand-clicked points were tried and made it worse: adding the net-post bases read off a zoomed frame took the fit from 0.4 cm to 14 cm, because a post stands on a base plate and the visible bottom of the post is not the floor.",
+        "image_points": [
+          [168.7, 1102.6],
+          [242.3, 1016.6],
+          [435.1, 791.1],
+          [387.8, 1090.5],
+          [430.6, 1007.0],
+          [543.0, 787.3],
+          [1503.1, 1028.8],
+          [1397.9, 957.5],
+          [1116.4, 766.7]
+        ],
+        "world_points": [
+          [0.0, 0.0],
+          [0.0, 0.76],
+          [0.0, 4.72],
+          [0.46, 0.0],
+          [0.46, 0.76],
+          [0.46, 4.72],
+          [3.05, 0.0],
+          [3.05, 0.76],
+          [3.05, 4.72]
+        ],
+        "max_reprojection_error_m": 0.02
+      },
+      "post_tops": [
+        [470.0, 438.0],
+        [1574.0, 432.0]
+      ],
+      "post_tops_note": "Clicked, and deliberately expected to fail: the camera sits near the 1.55 m post height, so the post tops are within a few pixels of the ground plane's horizon and map hundreds of metres up the court.",
+      "camera_recoverable": false
+    },
+    {
+      "id": "jump_smash_behind",
+      "file": "Screen_Recording_20260412_123956_OneDrive.mp4",
+      "title": "Jump smash filmed from behind",
+      "source": "The user's own screen recording of a match seen from behind.",
+      "view": "behind, at about head height",
+      "resolution": "2340x1080",
+      "fps": 37.251,
+      "frames": 461,
+      "duration_s": 12.4,
+      "variable_frame_rate": true,
+      "guards": [
+        "takeoff and landing are suggested within six frames of the truth",
+        "the export pack survives real footage end to end",
+        "the frame index stays exact on a variable-frame-rate clip"
+      ],
+      "trim": [150, 300],
+      "events": {
+        "takeoff": 209,
+        "landing": 226,
+        "tolerance_frames": 6,
+        "note": "airborne about frames 207 to 228, verified by eye"
+      }
+    },
+    {
+      "id": "jump_smashes_phone",
+      "file": "20260611_220344.mp4",
+      "title": "Two minutes of jump smashes, phone on a tripod",
+      "source": "The user's own recording.",
+      "view": "behind-diagonal",
+      "resolution": "1920x1080",
+      "fps": 29.998,
+      "frames": 3798,
+      "duration_s": 126.6,
+      "guards": [],
+      "note": "Not yet asserted on by any test. Long enough to be the clip for anything that needs several rallies rather than one."
+    },
+    {
+      "id": "side_on_smash",
+      "file": "VID_20260616_073553_226.mp4",
+      "title": "Side-on jump smash, portrait",
+      "source": "Downloaded social-media clip, watermarked @haley.cutty. Third party: kept locally, never committed or redistributed.",
+      "view": "side-on, at about chest height",
+      "resolution": "1080x1920",
+      "fps": 30.0,
+      "frames": 419,
+      "duration_s": 14.0,
+      "guards": [],
+      "note": "The only side-on clip here, so it is the one that could exercise shot naming, which refuses on every other clip because naming needs a side-on view. Nothing asserts on it yet."
+    }
+  ]
+}

@@ -37,9 +37,10 @@ Consequences:
   the Playwright UI test use it so they are deterministic and independent of
   model downloads and CPU speed. The integration test uses the real rtmlib
   backend.
-* When you drop your own clip into `demo/` nothing breaks: the tests only need
-  `demo/demo.mp4` to exist and the synthetic backend only needs its truth file
-  when selected. Point the app at any video to analyse it.
+* When you drop your own clip anywhere nothing breaks: the tests only need
+  `demo/demo.mp4` to exist, and it regenerates itself. Point the app at any
+  video to analyse it; put a clip in `benchmarks/` only when something should
+  be measured against it repeatedly.
 
 ## Python 3.11 via uv, versions pinned to what was verified
 
@@ -151,7 +152,7 @@ is tagged by remuxing with `-display_rotation`.
 ffmpeg as a fallback when they are missing or absurd. This is deliberate for
 WhatsApp-style re-encodes with odd timestamps.
 
-The screen recording in `demo/` showed why this matters more than expected:
+The screen recording in `benchmarks/` showed why this matters more than expected:
 it is variable frame rate (7 to 17 ms between frames while the phone UI is
 on screen, then about 27 ms), and OpenCV's `CAP_PROP_POS_FRAMES` seek turns
 the requested index into a timestamp with the average rate, landing about 50
@@ -227,8 +228,10 @@ of its ground truth.
 
 ## Real footage
 
-Two clips of the user's own arrived after the first build and live in
-`demo/` next to the synthetic one:
+Clips of the user's own arrived after the first build. They live in
+`benchmarks/` with the rest of the real footage, described one entry each in
+`benchmarks/clips.json`; `demo/` keeps only the synthetic clip, which is
+regenerated rather than stored:
 
 * `20260611_220344.mp4`: a 2 minute 1080p phone recording (HEVC, 30 fps
   despite the container's nominal 120) of jump smashes in a hall, filmed from

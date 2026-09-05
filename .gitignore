@@ -1,7 +1,5 @@
-!demo/*.mikiri.json
 # Footage and generated media stay out of the repository
 *.egg-info/
-*.mikiri.json
 *.pyc
 *.tmp
 .pytest_cache/
@@ -18,4 +16,16 @@ demo/demo_truth.json
 dist/
 exports/
 tests/_out/
+# Benchmark footage: the clips and anything rendered from them. The manifest
+# and the README that describe them are tracked, which is the point of the
+# folder, so the ignore is a blanket with those carved back out -- and the
+# negations come after the blanket, because git takes the last match.
+benchmarks/**
+!benchmarks/README.md
+!benchmarks/clips.json
+# Saved projects. The negation is last so it actually wins: a saved project
+# next to the demo clip is worth keeping, and the negation used to sit above
+# the rule it negated, where git's last-match-wins left it doing nothing.
+*.mikiri.json
 *.jumplab.json
+!demo/*.mikiri.json

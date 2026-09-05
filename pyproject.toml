@@ -94,7 +94,7 @@ quote-style = "double"
 testpaths = ["tests"]
 timeout = 900
 markers = [
-  "slow: runs the real pose model on the demo clip (minutes on CPU)",
+  "slow: runs the real pose model on the demo clip and the benchmark footage (minutes on CPU)",
   "ui: drives the web UI with Playwright",
 ]
 addopts = "-ra"

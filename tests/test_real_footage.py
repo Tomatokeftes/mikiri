@@ -1,6 +1,8 @@
-"""Real phone footage in ``demo/``: tracking and event detection on a jump smash.
+"""The benchmark clips: tracking, events and court measurement on real footage.
 
-Skipped when the clip is not present (it is the user's own recording).
+Every clip and its calibration comes from ``benchmarks/clips.json``; see
+``benchmarks/README.md``. Each test skips when its clip is not on this machine,
+and ``tests/test_benchmarks.py`` is what stops that skip from being silent.
 """
 
 from __future__ import annotations
@@ -11,26 +13,29 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from mikiri.benchmarks import clip as benchmark_clip
+from mikiri.benchmarks import clip_path
 from mikiri.export import ExportOptions
 from mikiri.pipeline import build_backend, run_tracking
 from mikiri.pose.rtmlib_backend import ModelNotAvailableError
 from mikiri.session import ProjectSession
 from mikiri.settings import Settings
 
-ROOT = Path(__file__).resolve().parents[1]
-CLIP = ROOT / "demo" / "Screen_Recording_20260412_123956_OneDrive.mp4"
-# Jump smash in that clip, verified by eye: airborne about frames 207 to 228.
-TRIM = (150, 300)
-TAKEOFF, LANDING = 209, 226
+SMASH = benchmark_clip("jump_smash_behind") or {}
+TRIM = tuple(SMASH.get("trim", (150, 300)))
+TAKEOFF = SMASH.get("events", {}).get("takeoff", 209)
+LANDING = SMASH.get("events", {}).get("landing", 226)
+EVENT_TOL = SMASH.get("events", {}).get("tolerance_frames", 6)
 
 pytestmark = pytest.mark.slow
 
 
 @pytest.fixture(scope="module")
 def clip() -> Path:
-    if not CLIP.exists():
-        pytest.skip(f"real footage not present: {CLIP.name}")
-    return CLIP
+    path = clip_path("jump_smash_behind")
+    if path is None:
+        pytest.skip("benchmark clip 'jump_smash_behind' not present")
+    return path
 
 
 def test_jump_smash_from_behind(clip: Path, out_dir: Path):
@@ -55,8 +60,8 @@ def test_jump_smash_from_behind(clip: Path, out_dir: Path):
     suggestions = {x.name: x for x in s.suggestions()}
     assert {"takeoff", "landing"} <= set(suggestions), suggestions
     assert suggestions["takeoff"].frame < suggestions["landing"].frame
-    assert abs(suggestions["takeoff"].frame - TAKEOFF) <= 6
-    assert abs(suggestions["landing"].frame - LANDING) <= 6
+    assert abs(suggestions["takeoff"].frame - TAKEOFF) <= EVENT_TOL
+    assert abs(suggestions["landing"].frame - LANDING) <= EVENT_TOL
     assert suggestions["takeoff"].confidence > 0.5
     s.accept_suggestions([x.to_dict() for x in suggestions.values()])
     s.set_options(camera_side="unknown", notes="filmed from behind: angles are indicative only")
@@ -75,49 +80,23 @@ def test_jump_smash_from_behind(clip: Path, out_dir: Path):
 
 # --- match footage: a static camera behind the court, both players present -------
 
-MATCH_CLIP = ROOT / "demo" / "lindan_rally.mp4"
-# Court calibration for that clip: the nine intersections of three detected
-# sidelines (left doubles, left singles, centre) with three detected cross lines
-# (baseline, doubles long service, short service), each line least-squares
-# fitted to its own painted pixels. Reprojection error 0.35 cm, and it lands on
-# every painted line at 0.0 px median -- including the two right-hand sidelines
-# it never saw, which it extrapolates correctly.
-#
-# Hand-clicked points were tried and made it worse: adding the net-post bases
-# read off a zoomed frame took the fit from 0.4 cm to 14 cm, because a post
-# stands on a base plate and the visible bottom of the post is not the floor.
-# Fitted lines beat clicked corners.
-MATCH_COURT_IMAGE = [
-    [168.7, 1102.6],
-    [242.3, 1016.6],
-    [435.1, 791.1],
-    [387.8, 1090.5],
-    [430.6, 1007.0],
-    [543.0, 787.3],
-    [1503.1, 1028.8],
-    [1397.9, 957.5],
-    [1116.4, 766.7],
-]
-MATCH_COURT_WORLD = [
-    [0.0, 0.0],
-    [0.0, 0.76],
-    [0.0, 4.72],
-    [0.46, 0.0],
-    [0.46, 0.76],
-    [0.46, 4.72],
-    [3.05, 0.0],
-    [3.05, 0.76],
-    [3.05, 4.72],
-]
-# The near player's torso in the first frame, for the initial click.
-MATCH_CLICK = (869.0, 600.0)
+RALLY = benchmark_clip("lindan_rally") or {}
+_COURT = RALLY.get("court", {})
+# The court fit and the reasoning behind it live in benchmarks/clips.json, where
+# the next clip's calibration can go beside it instead of in this file.
+MATCH_COURT_IMAGE = _COURT.get("image_points", [])
+MATCH_COURT_WORLD = _COURT.get("world_points", [])
+MATCH_COURT_ERR = _COURT.get("max_reprojection_error_m", 0.02)
+MATCH_CLICK = tuple(RALLY.get("click", (869.0, 600.0)))
+MATCH_POST_TOPS = RALLY.get("post_tops", [])
 
 
 @pytest.fixture(scope="module")
 def match_clip() -> Path:
-    if not MATCH_CLIP.exists():
-        pytest.skip(f"match footage not present: {MATCH_CLIP.name}")
-    return MATCH_CLIP
+    path = clip_path("lindan_rally")
+    if path is None:
+        pytest.skip("benchmark clip 'lindan_rally' not present")
+    return path
 
 
 @pytest.fixture(scope="module")
@@ -156,7 +135,7 @@ def test_tracker_stays_on_the_player_not_the_officials(match_session):
     assert on: a player cannot spend the match standing outside his own half.
     """
     s = match_session
-    assert s.project.court.reprojection_error_m < 0.02
+    assert s.project.court.reprojection_error_m < MATCH_COURT_ERR
     track = s.court_track()
     pos = track.positions[np.isfinite(track.positions).all(axis=1)]
     assert pos.shape[0] > 1000
@@ -189,7 +168,7 @@ def test_an_eye_level_camera_cannot_be_recovered_from_the_net_posts(match_clip: 
         MATCH_COURT_IMAGE,
         MATCH_COURT_WORLD,
         frame=0,
-        post_tops=[[470.0, 438.0], [1574.0, 432.0]],
+        post_tops=MATCH_POST_TOPS,
     )
     assert cal.is_valid(), "the court itself must survive a failed camera recovery"
     assert not cal.has_camera()

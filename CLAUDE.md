@@ -29,8 +29,9 @@ ruff format src tests && ruff check src tests && pytest
 ```
 
 That is the whole check, and it is the one to run before committing. `pytest`
-runs everything -- unit tests, the real pose pipeline on two clips, and the
-Playwright UI smoke test -- in about a minute and a half on this machine.
+runs everything -- unit tests, the real pose pipeline on the demo clip and two
+benchmark clips, and the Playwright UI smoke test -- in about two minutes on
+this machine.
 Subsets:
 
 ```bash
@@ -47,9 +48,12 @@ Notes that will otherwise cost time:
   jitters by a few bytes. **Do not commit that churn** unless the UI actually
   changed: `git checkout -- docs/screenshots`.
 * Video files are gitignored. The synthetic demo clip regenerates itself (the
-  `demo_video` fixture calls `make_demo`); the real clips in `demo/` are the
-  user's own recordings, and the tests that need them skip when they are
-  absent, which is every test in `test_real_footage.py`.
+  `demo_video` fixture calls `make_demo`); the real clips live in `benchmarks/`
+  in the **main checkout**, described by the tracked `benchmarks/clips.json`,
+  and `mikiri.benchmarks.clip_path` finds them from any worktree. Tests that
+  need a clip skip when it is absent, and `tests/test_benchmarks.py` fails if
+  the footage is only *partially* there, which is what a broken path looks
+  like.
 * Heredocs through the Bash tool fail on large or quote-heavy Python; write
   files with the editing tools instead.
 
@@ -66,6 +70,7 @@ Notes that will otherwise cost time:
 | `coaching.py` | turning the numbers into at most three things to work on |
 | `tracking.py` | keeping the tracker on one player, inside the court |
 | `pipeline.py` | the tracking run and its cache (`CACHE_VERSION`) |
+| `benchmarks.py` | dev tooling: finding the benchmark clips and reading their manifest |
 | `session.py` | in-memory state for one open project; the layer between the API and the maths |
 | `server/` | FastAPI app plus `static/` (one `app.js`, no build step) |
 | `pose/` | RTMPose, MediaPipe and synthetic backends behind one interface |
