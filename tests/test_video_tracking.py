@@ -168,3 +168,75 @@ def test_vfr_clip_frame_index_is_exact():
     with VideoReader(REAL_VFR) as r:
         assert np.array_equal(r.read(150), seq[150])
         assert np.array_equal(r.read(160), seq[160])
+
+
+# --- keeping the tracker on the court -------------------------------------------
+
+
+def test_on_court_uses_the_feet_not_the_box_centre():
+    """A seated official's head can be over the court while their feet are not."""
+    from mikiri.tracking import foot_point, on_court
+
+    court = np.array([[100.0, 900.0], [900.0, 900.0], [700.0, 500.0], [300.0, 500.0]])
+    on = np.array([480.0, 600.0, 520.0, 800.0])  # feet at (500, 800): well inside
+    off = np.array([880.0, 600.0, 960.0, 780.0])  # feet at (920, 780): outside to the right
+    assert on_court(on, court)
+    assert not on_court(off, court)
+    assert np.allclose(foot_point(on), (500.0, 800.0))
+    # A generous margin keeps a lunging player who oversteps a line.
+    assert on_court(off, court, margin=200.0)
+    # With no polygon nothing is ever excluded.
+    assert on_court(off, None)
+
+
+def test_the_tracker_ignores_people_off_the_court():
+    """The failure this fixes: losing the player and locking onto a line judge.
+
+    The fake backend offers a big, perfectly still figure and a small moving
+    one. Without a court the tracker is free to take either; with a court that
+    contains only the mover, the still one is not a candidate at all.
+    """
+    from mikiri.pose.base import PoseFrame  # noqa: F401  (imported for the fake)
+    from mikiri.tracking import PersonTracker
+
+    backend = _TwoPeopleBackend()
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    # The still figure spans x 260..340, y 200..800; the mover starts near x 85.
+    court = np.array([[40.0, 820.0], [240.0, 820.0], [240.0, 480.0], [40.0, 480.0]])
+    restricted = PersonTracker(backend, det_every=1, court_polygon=court, court_margin=10.0)
+    chosen = restricted.start(frame, click=None, frame_index=0)
+    assert chosen is not None
+    assert chosen.bbox[0] < 200, "should have taken the small mover inside the court"
+
+    free = PersonTracker(backend, det_every=1)
+    assert free.start(frame, click=None, frame_index=0).bbox[0] > 200  # the big still one
+
+
+def test_a_polygon_that_excludes_everyone_does_not_blank_the_track():
+    """Better to track the wrong person than to silently return nothing."""
+    from mikiri.tracking import PersonTracker
+
+    backend = _TwoPeopleBackend()
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    nowhere = np.array([[0.0, 0.0], [5.0, 0.0], [5.0, 5.0], [0.0, 5.0]])
+    t = PersonTracker(backend, det_every=1, court_polygon=nowhere, court_margin=0.0)
+    assert t.start(frame, click=None, frame_index=0) is not None
+
+
+def test_the_court_polygon_reaches_the_tracker_through_the_request(tracked_session):
+    """It must be in the run request, and in the cache key, or a stale result wins."""
+    from mikiri.court import preset_points
+
+    assert tracked_session.court_polygon() is None
+    before = tracked_session.run_request(None)
+    assert before.court_polygon is None
+
+    from tests.test_geometry import Camera
+
+    cam = Camera(ground=(3.05, -4.0), height=3.0)
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    tracked_session.set_court("doubles_corners", cam.floor(corners).tolist(), None, 0)
+    after = tracked_session.run_request(None)
+    assert after.court_polygon is not None and len(after.court_polygon) == 4
+    assert before.key("b") != after.key("b"), "the cache must not reuse an unrestricted run"

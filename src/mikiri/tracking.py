@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+import cv2
 import numpy as np
 
 from mikiri.keypoints import N_KEYPOINTS, keypoints_bbox
@@ -74,6 +75,39 @@ def _diag(bbox: np.ndarray) -> float:
     return float(np.hypot(bbox[2] - bbox[0], bbox[3] - bbox[1]))
 
 
+def foot_point(bbox: np.ndarray) -> np.ndarray:
+    """Where a detection meets the floor: the bottom-centre of its box."""
+    b = np.asarray(bbox, dtype=float).reshape(-1)[:4]
+    return np.array([0.5 * (b[0] + b[2]), b[3]])
+
+
+def on_court(bbox: np.ndarray, polygon: np.ndarray | None, margin: float = 0.0) -> bool:
+    """Whether a detection is standing on (or just beside) the court.
+
+    Real match footage is full of people who are not the player: the umpire on
+    a chair, line judges seated at the corners, coaches, ball kids and the front
+    row of the crowd. They are large, they are near the court, and several are
+    perfectly still -- which makes them ideal false targets for a tracker that
+    has briefly lost its subject. Once the court is calibrated, the cheapest and
+    most decisive filter is simply where a person's feet are.
+
+    Args:
+        bbox: ``[x0, y0, x1, y1]`` detection box in image pixels.
+        polygon: Court outline in image pixels, or ``None`` to accept everything.
+        margin: Extra pixels of tolerance outside the polygon, so a player
+            lunging over a sideline is not thrown away.
+
+    Returns:
+        ``True`` when the box's foot point is inside the polygon plus margin,
+        and always ``True`` when no polygon is given.
+    """
+    if polygon is None or len(polygon) < 3:
+        return True
+    pt = foot_point(bbox)
+    poly = np.asarray(polygon, dtype=np.float32).reshape(-1, 1, 2)
+    return cv2.pointPolygonTest(poly, (float(pt[0]), float(pt[1])), True) >= -float(margin)
+
+
 def choose_person(
     people: list[Detection], click: tuple[float, float] | None = None
 ) -> Detection | None:
@@ -120,12 +154,16 @@ class PersonTracker:
         conf_thr: float = 0.3,
         redetect_below: float = 0.35,
         match_iou: float = 0.1,
+        court_polygon: np.ndarray | None = None,
+        court_margin: float = 120.0,
     ) -> None:
         self.backend = backend
         self.det_every = max(1, int(det_every))
         self.conf_thr = float(conf_thr)
         self.redetect_below = float(redetect_below)
         self.match_iou = float(match_iou)
+        self.court_polygon = None if court_polygon is None else np.asarray(court_polygon, float)
+        self.court_margin = float(court_margin)
         self.bbox: np.ndarray | None = None
         self.click: tuple[float, float] | None = None
         self.last_det_idx: int | None = None
@@ -138,7 +176,7 @@ class PersonTracker:
         """Choose the target in the first frame. Returns the chosen detection."""
         self.click = click
         h, w = frame.shape[:2]
-        people = self.backend.detect_people(frame, frame_index=frame_index)
+        people = self._on_court(self.backend.detect_people(frame, frame_index=frame_index))
         target = choose_person(people, click)
         if target is not None:
             self.bbox = sanitize_bbox(target.bbox, w, h)
@@ -156,8 +194,16 @@ class PersonTracker:
         self.n_lost = 0
         return target
 
+    def _on_court(self, people: list[Detection]) -> list[Detection]:
+        """Drop anyone whose feet are not on the court, unless that leaves nobody."""
+        if self.court_polygon is None:
+            return people
+        keep = [d for d in people if on_court(d.bbox, self.court_polygon, self.court_margin)]
+        return keep or people
+
     def _match(self, people: list[Detection], width: int, height: int) -> Detection | None:
         """Pick the detection that continues the current target."""
+        people = self._on_court(people)
         if not people:
             return None
         if self.bbox is None:

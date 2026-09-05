@@ -514,3 +514,26 @@ def test_view_payload_is_json_ready():
     from mikiri.geometry import view_class
 
     json.dumps(view_class(CameraGeometry(ground_point=[3.05, -5.0], height_m=3.0)))
+
+
+def test_a_camera_at_post_height_is_diagnosed_not_blamed_on_the_clicks():
+    """Real footage found this: an eye-level camera cannot use the net posts.
+
+    A vertical's top crosses the ground plane's horizon exactly when its height
+    equals the camera's, so as the camera drops toward 1.55 m the post tops
+    approach the horizon and map arbitrarily far up the court. The failure is
+    geometric, and telling the user to re-click would send them back to points
+    that were never wrong.
+    """
+    cam = Camera(ground=(3.05, -6.0), height=1.62, f=1500.0, size=(1920, 1080))
+    H = cam.homography()
+    with pytest.raises(ValueError, match="too close to 1.55 m"):
+        camera_from_verticals(_posts(cam), H)
+
+
+def test_a_camera_clearly_above_the_posts_still_recovers():
+    """The same clip filmed from higher works, which is what the advice says."""
+    for height in (2.6, 4.0, 8.0):
+        cam = Camera(ground=(3.05, -6.0), height=height, f=1500.0, size=(1920, 1080))
+        got = camera_from_verticals(_posts(cam), cam.homography())
+        assert got.height_m == pytest.approx(height, rel=0.02)

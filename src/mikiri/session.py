@@ -29,6 +29,7 @@ from mikiri.court import (
     CourtTrack,
     build_track,
     compute_homography,
+    court_to_image,
     court_uncertainty_grid,
     preset_points,
     recover_camera,
@@ -979,7 +980,13 @@ class ProjectSession:
     # tracking
 
     def run_request(self, select_point: tuple[float, float] | None = None) -> RunRequest:
-        """Build the request for the current trim and settings."""
+        """Build the request for the current trim and settings.
+
+        When the court is calibrated the request carries its outline, so
+        tracking ignores people who are not standing on it. On match footage
+        that is the difference between following the player and following a
+        line judge.
+        """
         return RunRequest(
             start=self.project.trim_start,
             end=self.project.trim_end,
@@ -987,7 +994,30 @@ class ProjectSession:
             downscale_longest=self.settings.downscale_longest,
             det_every=self.settings.det_every,
             conf_threshold=self.settings.conf_threshold,
+            court_polygon=self.court_polygon(),
         )
+
+    def court_polygon(self, margin_m: float = 1.0) -> list[list[float]] | None:
+        """The court outline in image pixels, or ``None`` without a calibration.
+
+        Grown by ``margin_m`` on every side so a player who lunges over a
+        sideline or chases a shot behind the baseline is still on it.
+        """
+        H = self.homography()
+        if H is None:
+            return None
+        corners = np.array(
+            [
+                [-margin_m, -margin_m],
+                [DOUBLES_WIDTH + margin_m, -margin_m],
+                [DOUBLES_WIDTH + margin_m, COURT_LENGTH + margin_m],
+                [-margin_m, COURT_LENGTH + margin_m],
+            ]
+        )
+        px = court_to_image(H, corners)
+        if not np.isfinite(px).all():
+            return None
+        return [[float(x), float(y)] for x, y in px]
 
     def apply_result(self, result: TrackingResult, request: RunRequest | None = None) -> None:
         """Store a tracking result in the project."""

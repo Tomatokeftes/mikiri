@@ -63,6 +63,11 @@ NSIGMA_95 = 2.4477468306808364
 #: one-dimensional interval needs 1.96 sigma, and using the 2-D ellipse factor
 #: on a scalar over-states the interval by a quarter.
 Z_95_SCALAR = 1.959963984540054
+#: How far up the court a segment top may map before the recovery is declared
+#: degenerate. A net-post top belongs a few court lengths away at most; when it
+#: maps hundreds of metres out, it is sitting on the horizon and the camera is
+#: at about post height. Generous, because the honest failure is unmistakable.
+MAX_OFFPLANE_REACH_M = 60.0
 #: Largest disagreement between vertical segments, in metres, that still counts
 #: as a consistent camera recovery. Two net posts over-determine the fit, so
 #: their residual is a real check: a single post top clicked 30 px off produces
@@ -249,6 +254,24 @@ def camera_from_verticals(segments: list[VerticalSegment], H: np.ndarray) -> Cam
     mapped = image_to_court(H, tops_img)
     if not np.isfinite(mapped).all():
         raise ValueError("a segment top maps behind the horizon; check the clicked points")
+
+    # A vertical's top crosses the ground plane's horizon exactly when its
+    # height equals the camera's. So as the camera drops toward the segment
+    # height, the top approaches the horizon and its mapped court position runs
+    # away to infinity: at 18 px from the horizon a net-post top maps 200 m up
+    # the court, and a pixel of click error moves it by metres. The method is
+    # not merely imprecise there, it is unusable -- and blaming the clicks would
+    # send the user back to re-click points that were never the problem.
+    reach = np.hypot(*(mapped - bases).T)
+    if (reach > MAX_OFFPLANE_REACH_M).any():
+        worst = float(np.max(reach))
+        tallest = float(heights.max())
+        raise ValueError(
+            f"the camera is too close to {tallest:.2f} m for this to work: a segment top "
+            f"maps {worst:.0f} m up the court, which means it sits within a few pixels of "
+            "the horizon. Film from higher than the net posts by a clear margin, or leave "
+            "the camera unset and lose only the height-dependent measurements"
+        )
 
     # Linear seed, exact when all heights agree: unknowns u = lam, v = lam * G.
     rows, rhs = [], []

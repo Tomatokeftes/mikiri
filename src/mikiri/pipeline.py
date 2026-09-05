@@ -24,7 +24,7 @@ from mikiri.tracking import FrameMeta, PersonTracker
 from mikiri.video import FrameCache, VideoReader, downscale, video_id
 
 #: Bump when the reader or tracker changes so stale cached results are never reused.
-CACHE_VERSION = 2
+CACHE_VERSION = 3  # court-restricted tracking changes results
 
 
 @dataclass
@@ -37,6 +37,10 @@ class RunRequest:
     downscale_longest: int = 1280
     det_every: int = 4
     conf_threshold: float = 0.3
+    #: Court outline in image pixels. When present, people whose feet are not
+    #: on the court are not candidates, which is what keeps a tracker that has
+    #: briefly lost the player off the umpire and the line judges.
+    court_polygon: list[list[float]] | None = None
 
     def key(self, backend_key: str) -> str:
         """Short hash identifying this run for the on-disk cache."""
@@ -49,6 +53,9 @@ class RunRequest:
                 else [round(v, 1) for v in self.select_point],
                 "downscale": self.downscale_longest,
                 "det_every": self.det_every,
+                "court": None
+                if self.court_polygon is None
+                else [[round(v, 1) for v in p] for p in self.court_polygon],
                 "backend": backend_key,
                 "cache_version": CACHE_VERSION,
             },
@@ -196,7 +203,12 @@ def run_tracking(
     if job is not None:
         job.check_cancel()
 
-    tracker = PersonTracker(backend, det_every=req.det_every, conf_thr=req.conf_threshold)
+    tracker = PersonTracker(
+        backend,
+        det_every=req.det_every,
+        conf_thr=req.conf_threshold,
+        court_polygon=None if req.court_polygon is None else np.asarray(req.court_polygon, float),
+    )
     total = max(1, req.end - req.start + 1)
     keypoints = np.zeros((total, N_KEYPOINTS, 3), dtype=np.float32)
     metas: list[FrameMeta] = []
