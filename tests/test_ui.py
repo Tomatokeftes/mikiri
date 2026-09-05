@@ -310,6 +310,8 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         expect(page.locator("#status")).to_contain_text("Saved")
         saved = Path(page.evaluate("JL.S.state.project_path"))
         assert saved.exists()
+        # A saved project is a kept session, and the welcome page lists it.
+        expect(page.locator("#recent-list")).to_contain_text("demo")
         saved.unlink()
 
         # Settings modal shows model status.

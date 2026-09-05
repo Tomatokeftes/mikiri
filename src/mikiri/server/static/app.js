@@ -263,6 +263,15 @@ function renderVideo() {
   // event badge
   const ev = S.state.events.find((x) => x.frame === S.frame);
   if (ev) { ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(6, 6, ctx.measureText(ev.name).width + 14, 24); ctx.fillStyle = COLORS.event; ctx.fillText(ev.name, 13, 23); }
+  // The rally, or the rest, the frame belongs to: the timeline's label for
+  // it, captioned top right so scrubbing a match reads as a match.
+  const caption = S.pose ? timelineCaptionAt(S.frame) : '';
+  if (caption) {
+    ctx.font = '12px sans-serif';
+    const cw = ctx.measureText(caption).width + 14;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(w - cw - 6, 6, cw, 22);
+    ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fillText(caption, w - cw + 1, 21);
+  }
   if (S.state.camera_side === 'unknown' || true) {
     ctx.font = '11px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.65)'; ctx.fillText('2D image-plane angles (side-on tool)', 8, h - 8);
   }
@@ -389,14 +398,18 @@ function timelineBands() {
   return [];
 }
 
-function timelineLabelAt(x) {
-  const g = timelineGeom(); const f = g.f(x);
+function timelineCaptionAt(f) {
   const band = timelineBands().find((b) => f >= b.start && f <= b.end);
   const run = ((S.state.tracking && S.state.tracking.segments) || []).find((r) => f >= r.start && f <= r.end);
   const parts = [];
   if (band) parts.push(band.label);
   if (run && run.state !== 'play') parts.push(run.state.replace('_', ' '));
   return parts.join('; ');
+}
+
+function timelineLabelAt(x) {
+  const g = timelineGeom(); const f = g.f(x);
+  return timelineCaptionAt(f);
 }
 
 function bindTimeline() {
@@ -813,7 +826,7 @@ async function redo() { applyState(await api('POST', `/api/projects/${S.pid}/red
 async function saveProject(saveAs) {
   let path = null;
   if (saveAs) { path = window.prompt('Save project as (full path ending in .mikiri.json):', S.state.project_path || ''); if (!path) return; }
-  try { const st = await api('POST', `/api/projects/${S.pid}/save`, { path }); applyState(st); setStatus(`Saved ${st.saved_path}`); }
+  try { const st = await api('POST', `/api/projects/${S.pid}/save`, { path }); applyState(st); setStatus(`Saved ${st.saved_path}`); renderRecent(); }
   catch (e) { setStatus(e.message, true); }
 }
 
@@ -1792,8 +1805,31 @@ function bindUI() {
   });
 }
 
+// The kept sessions that still have a project file, newest saved first, so
+// coming back to a clip is one click rather than a walk through the disk.
+async function renderRecent() {
+  let rows = [];
+  try { rows = await api('GET', '/api/history'); } catch (e) { rows = []; }
+  const seen = new Set();
+  const recent = rows.filter((r) => r.project_path && !seen.has(r.project_path) && seen.add(r.project_path))
+    .sort((a, b) => String(b.saved_at || '').localeCompare(String(a.saved_at || ''))).slice(0, 8);
+  $('#recent').classList.toggle('hidden', !recent.length);
+  const list = $('#recent-list'); list.innerHTML = '';
+  for (const r of recent) {
+    const li = document.createElement('li');
+    const when = String(r.recorded_at || r.saved_at || '').slice(0, 10);
+    li.innerHTML = `<span class="when">${when}</span><span class="name">${r.name || r.video || 'project'}</span>` +
+      (r.player ? `<span class="who">${r.player}</span>` : '') +
+      (r.n_rallies ? `<span class="muted small-text">${r.n_rallies} rallies</span>` : '') +
+      `<span class="path" title="${r.project_path}">${r.project_path}</span>`;
+    li.addEventListener('click', () => openPath(r.project_path));
+    list.appendChild(li);
+  }
+}
+
 async function init() {
   bindUI(); bindTimeline(); bindVideoCanvas();
+  renderRecent();
   try {
     const list = await api('GET', '/api/projects');
     if (list.length) await setProject(await api('GET', `/api/projects/${list[list.length - 1].id}`));
