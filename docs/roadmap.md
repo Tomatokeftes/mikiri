@@ -20,7 +20,7 @@ move" needs court coordinates, not pixels.
 
 ## Phase 1: court calibration and footwork
 
-**Status: done** (court calibration modal, court map, footwork metrics, `positions.csv` and `court.png`; see `docs/footwork.md`). Phase 1b, tracking the opponent as a second person, is still open.
+**Status: done** (court calibration modal, court map, footwork metrics, `positions.csv` and `court.png`; see `docs/footwork.md`). Phase 1b, tracking the opponent as a second person, is still open and has been promoted: it is the first step of Phase 4 and everything tactical is behind it.
 
 ### Phase 1c: camera geometry and honest error bars
 
@@ -143,11 +143,38 @@ rally structure.
    automatically for both players, which also gives split-step timing for
    free.
 
-## Phase 4: rally and session level
+## Phase 4: rally and session level -- the tactical module
 
-Multiple players tracked, shot classification from racket and shuttle
-(clear, drop, smash, net, lift, drive), rally maps, and session summaries
-across clips. This is where the export pack becomes a database.
+**Status: designed, not started. See [tactical.md](tactical.md), which is now
+the working plan for this phase.**
+
+Multiple players tracked, shot classification, rally maps, and session
+summaries across clips. This is where the export pack becomes a database.
+
+This phase was written early, then argued against in
+[feature-roadmap.md](feature-roadmap.md)'s refusal list once the solo
+biomechanical product came into focus, and is now reinstated with the
+reasoning that was missing the first two times. The short version of that
+reasoning:
+
+* Shot classification was refused on population evidence -- smash, clear and
+  drop share overhead kinematics across players. Within one player they need
+  not, and a per-player classifier can report its own separation and withhold
+  the pairs it fails on. So it is admissible with a measured error rate
+  attached, and inadmissible without one.
+* Multiple-player tracking is the same Phase 1b that has been open since
+  Phase 1, and it is now the first step rather than a hypothetical, because
+  everything tactical sits behind it. Net side from the homography is the
+  primary identity constraint and very nearly solves singles on its own.
+* The missing idea in both earlier passes was that a human can settle what a
+  measurement cannot. That turns the refusal machinery already in
+  `strokes.py` and `shots.py` into a review queue rather than an empty panel.
+
+Doubles is a first-class target of this phase rather than an afterthought,
+which is a constraint on the data model rather than on the order of work:
+events are owned by a *side* of the net, and player attribution is a separate
+field that singles fills in for free. Get that wrong and doubles is a rewrite;
+get it right and it is a phase.
 
 ## Cross-cutting
 
@@ -156,5 +183,16 @@ across clips. This is where the export pack becomes a database.
 - Camera angle matters more for Phase 1 than for jumps: side-on is best for
   angles, but a raised rear camera is best for court position. The
   calibration should say which measurements are trustworthy from which view.
+  With two modules this becomes structural rather than advisory: the
+  biomechanical module wants side-on or rear on one player, the tactical
+  module wants a raised camera behind one end with both players in frame, and
+  `geometry.view_class` already recovers enough to tell the user which module
+  their clip actually supports. Offering both on a clip that supports one is
+  how the app would quietly produce nonsense.
+- Clips are segmented into states -- not badminton, court but no play,
+  warm-up, live rally, interval -- and frames are labelled rather than
+  deleted, so each consumer picks what it needs. On a local CPU pipeline this
+  is also the largest single saving available: a club recording is mostly not
+  play.
 - Every phase ships with a synthetic test (like the synthetic jump clip) and
   a real-footage test that is skipped when the clip is absent.

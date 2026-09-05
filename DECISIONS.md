@@ -3,6 +3,63 @@
 Every non-obvious choice made while building Mikiri, and why. Ordered roughly
 by how much they affect you.
 
+## A second module, and an amendment to the rule that governs both
+
+Mikiri answers "how well did you move". It cannot answer "what did you play and
+did it work", which is the question most players actually ask after a match, and
+which is about shot selection and where points went rather than joint angles.
+So it gains a tactical module: two or four players, rallies, shots, points and
+trends. `docs/tactical.md` is the design; `docs/roadmap.md` Phase 4 always
+planned it, and `docs/feature-roadmap.md` argued against it in between.
+
+That middle document was not wrong so much as aimed elsewhere. Its case against
+shot classification -- smash, clear and drop share overhead kinematics and
+separate on racket face -- rests entirely on cross-player studies, and it was
+applied to an app whose stated premise is the player against themselves. Two
+things break the argument at amateur level. Disguising a drop as a smash is an
+elite skill, so the kinematics that converge at the top do not converge for a
+club player. And a classifier needs a correlate rather than the causal
+variable, which is what makes it a population claim: within one player,
+racket-face choice tracks backswing depth and wrist speed reliably enough,
+while across players it does not.
+
+What actually unlocked it was noticing that withholding had been the only
+enforcement of the app's central rule because there had never been anyone to
+ask. With a person in the loop there is a third outcome between reporting and
+hiding, so the rule becomes "never report what the measurement cannot defend;
+when the user can settle it, ask instead of hiding". `Stroke.evidence` already
+records why a shot is or is not named -- it becomes the queue rather than the
+excuse. The price is that every tactical fact carries how it was established
+(`confirmed`, `inferred`, `auto`) and no headline rests on `auto` alone.
+
+Three consequences that are easy to get wrong later:
+
+* **The review queue is built from contradictions, not from confidence.**
+  Badminton is rigid enough to check itself: contacts alternate between sides,
+  the server's own score decides their service court, the next server won the
+  last rally, scores move by one for one side, and nobody crosses the net. Run
+  the chain and the errors localise themselves. A confidence threshold produces
+  a long queue of items that were fine and misses the confident mistakes, which
+  are the dangerous ones. The same chain identifies the warm-up for free: it is
+  the stretch that looks exactly like play and never closes a rally.
+* **Events are owned by a side of the net, not by a player.** Player
+  attribution is a separate field that singles fills in from court geometry for
+  nothing. This is the only reason doubles is a later phase rather than a later
+  rewrite, and doubles is a real target -- it is also where the app can be
+  strongest, because doubles tactics are formation and rotation, which are
+  court-position questions, and court position is the best measurement we have.
+* **Frames are labelled, never deleted.** Clip segmentation into not-badminton,
+  no-play, warm-up, rally and interval lets each consumer choose: tactics take
+  rallies only, work density needs the rests, the tracker runs across
+  everything at a reduced rate so identity survives, and the warm-up -- useless
+  for tactics -- is the best training data in the clip for a per-player
+  classifier, being repetitive, unpressured and undisguised.
+
+It stays local, offline and free. The comparable commercial product meters
+automatic tracking by the minute and sells a manual tagger as the cheaper path,
+which is a fair reading of where the difficulty actually is; we take the same
+architecture without the meter, and accept a manual cold start as the price.
+
 ## Renamed from JumpLab to Mikiri
 
 The app outgrew its name once movement profiles arrived and footwork, racket

@@ -1,5 +1,15 @@
 # Feature roadmap: what a self-coaching player actually needs
 
+**Scope note.** This page is the roadmap for the *biomechanical* module: one
+tracked player, movement quality, filmed side-on or from behind the baseline.
+Mikiri has since gained a second module answering a different question -- what
+was played and whether it worked -- described in [tactical.md](tactical.md).
+Several refusals near the end of this page were written when the solo
+biomechanical product was the whole app, and are amended in place below where
+the second module changes the reasoning. The two modules share a tracking run
+and a court calibration, and the camera view decides which of them a given clip
+can support.
+
 This page is the output of a research pass over badminton coaching syllabi
 (BWF Level 1 and 2, Shuttle Time, UKCC Level 2), the time-motion and
 performance-norm literature, the motor-learning work on how feedback should
@@ -235,7 +245,9 @@ height are driven by stature and jumping ability, not by technique quality.
 
 `must-have` &middot; `small effort` &middot; `all`
 
-**How.** A short, permanent, non-dismissable panel in the UI and a matching page in the export pack listing exactly what the pipeline cannot observe, each with one line of reason: grip type and grip pressure (no finger keypoints, no racket detection), racket-face angle (needs 3D), forearm pronation/supination (rotation about the forearm's own axis, invisible in 2D), shot type - smash vs clear vs drop (shares overhead kinematics; not separable from pose), shot direction straight vs cross-court, shuttle trajectory and speed, whether the shot went in, and split-step timing against an opponent's contact when filming solo. Grip in particular must be named, because it is the most-taught fault in the governing-body syllabi and a user will assume the tool checked it.
+**How.** A short, permanent, non-dismissable panel in the UI and a matching page in the export pack listing exactly what the pipeline cannot observe, each with one line of reason: grip type and grip pressure (no finger keypoints, no racket detection), racket-face angle (needs 3D), forearm pronation/supination (rotation about the forearm's own axis, invisible in 2D), shuttle trajectory and speed, whether the shot went in or went where it was aimed, and why a rally was lost. Grip in particular must be named, because it is the most-taught fault in the governing-body syllabi and a user will assume the tool checked it.
+
+**Amended for the tactical module.** Shot type, shot direction and opponent-relative split-step timing have moved off this list and onto a conditional one, because a confirmed human label is evidence the panel was written before the app could collect. They belong in a second section - *what Mikiri can only see if you tell it* - listing each with its current provenance and, where a classifier is doing the work, that classifier's own measured separation for this player. A number sitting under `auto` provenance is closer to the first list than the second, and the panel must not let the user forget which.
 
 **Bands.** Not applicable - this feature exists to prevent bands being inferred where none can exist. Context worth printing: grip is the entire content of Shuttle Time Lesson 1 and half of Lesson 2.
 
@@ -256,13 +268,13 @@ height are driven by stature and jumping ability, not by technique quality.
 This list matters as much as the one above. Each entry is something a
 reasonable person would ask for, and each would make the app less trustworthy.
 
-- Split-step timing against the opponent's racket contact. This is the metric the coaching literature actually defines, and we cannot have it: the solo use case has no opponent in frame, and even when one is present they are further from the camera, their keypoints are noisier, and our contact detector's own latency would be added to theirs. A mis-detected opponent contact produces a SYSTEMATIC error, so the player would drill toward a wrong target - worse than reporting nothing. Ship the self-contained reductions instead: presence rate, split-to-first-step latency, stance width, distance from base.
+- Split-step timing against the opponent's racket contact. **Amended: refused for solo clips, reachable on a two-player clip once contacts are confirmed.** The original objection was that a mis-detected opponent contact produces a SYSTEMATIC error, so the player drills toward a wrong target - worse than reporting nothing. That objection is about *detected* contacts, and it holds. What changes is that the tactical module's review queue produces *confirmed* opponent contacts, and a confirmed contact frame carries no systematic latency at all. So the rule becomes: this metric may be computed against opponent contacts whose provenance is `confirmed`, and never against contacts marked `auto`. On a solo clip it remains unavailable, and the self-contained reductions - presence rate, split-to-first-step latency, stance width, distance from base - stay the default everywhere.
 
-- Recovery-pattern appropriateness after a rearcourt shot (BWF Level 2's differentiated recovery table). Same dependency: it needs the opponent's reply timing as the context variable. Revisit only if opponent tracking (Phase 1b) ever lands and proves reliable.
+- Recovery-pattern appropriateness after a rearcourt shot (BWF Level 2's differentiated recovery table). **Amended: unblocked by the tactical module, on the same provenance condition.** The dependency was always the opponent's reply timing as the context variable, and opponent tracking (Phase 1b) is now the first step of the tactical build rather than a hypothetical. Compute it where the opponent's contact is `confirmed`; withhold it where it is `auto`.
 
-- Shot type classification - smash vs clear vs drop. Established as out of reach from pose: they share overhead kinematics and differ in racket face and post-impact shuttle behaviour. A racket-mounted IMU study still lost eleven points on the distinction. Keep strokes.py's honest two-tier design (descriptor always, shot name never asserted).
+- Shot type classification - smash vs clear vs drop. **Amended: no longer refused, under conditions.** The original reasoning stands as far as it goes -- the three share overhead kinematics, differ in racket face and post-impact shuttle behaviour, and a racket-mounted IMU study still lost eleven points on the distinction - but every figure behind it is a *population* claim, drawn from models that had to generalise across players. Applied to a tool whose stated premise is the player against themselves, that was an inconsistency rather than a conclusion. Two things change it. Disguise is an elite skill, so the argument is weakest exactly where this app is aimed: a club player's drop swing is visibly shorter and slower than their smash. And a classifier needs a correlate, not the cause - within one player, racket-face choice correlates with backswing depth, wrist speed and contact height, and it is that correlation, not the physics, that breaks across players. What makes it admissible is that a per-player classifier trained on the user's own confirmed labels can report its own per-*pair* confusion on held-out answers, and name nothing for a pair it cannot separate. See [tactical.md](tactical.md). `strokes.py`'s two-tier design is unchanged and remains the floor: the descriptor is always produced, and a shot name still requires evidence - the evidence may now be the player's own labels rather than only the shuttle.
 
-- Shot direction, straight vs cross-court. Needs the shuttle. Not available and not approximable - a guess here would poison the contact-geometry frame, which currently uses 'toward far-court centre' as an explicit approximation rather than a claim.
+- Shot direction, straight vs cross-court. **Amended: still refused as a measurement, permitted as a confirmed label.** It needs the shuttle, and a guess would poison the contact-geometry frame, which uses 'toward far-court centre' as an explicit approximation rather than a claim - so nothing here may be *inferred*. But direction is trivially answerable by a human watching the clip, and it is one of the cheapest questions the review queue can ask. Where the user has tagged it, use it and mark it `confirmed`; never fill it in automatically, and never feed an unconfirmed direction back into the contact-geometry frame.
 
 - Grip type, grip pressure, racket-face angle, forearm pronation/supination. No finger keypoints, no racket detection, and pronation is a rotation about the forearm's own axis that is invisible in 2D regardless of resolution. These are the most-taught faults in the syllabi, which is exactly why they belong in the 'cannot see' panel rather than in a metric that approximates them.
 
@@ -278,7 +290,7 @@ reasonable person would ask for, and each would make the app less trustworthy.
 
 - Movement-component classification against the BWF pattern tables (chasse vs cross-behind vs running step). Genuinely valuable and genuinely documented, but step segmentation from 2D pose at consumer frame rates is fiddly and cross-behind detection needs to resolve which ankle is nearer the camera. It would over-flag legitimate stylistic variation, which BWF itself warns against. Revisit after the split-step and lunge detectors are validated against hand-labelled footage.
 
-- Shots per rally and two-player shot frequency as headline numbers. They are the best-documented figures in the literature and they are two-player counts that a solo clip cannot produce. Report own-contact frequency with the axis labelled as such, and do not silently double it.
+- Shots per rally and two-player shot frequency as headline numbers. **Amended: available on a two-player clip, still refused on a solo one.** These are the best-documented figures in the literature and they are two-player counts, which is exactly what the tactical module produces. The original instruction survives unchanged for the solo case, and is the thing most likely to be got wrong by accident: on a solo clip report own-contact frequency with the axis labelled as such, and never silently double it.
 
 - Elite values presented as targets. Elite contact height 2.90 m and jump height 53.6 cm are driven by stature and jumping, not technique quality, and elite women's kick-through would be scored as a fault against elite men's two-footed jump. Elite numbers appear only as labelled context; the primary comparator is always the player's own previous session.
 
@@ -303,6 +315,8 @@ reasonable person would ask for, and each would make the app less trustworthy.
 - Round to defensible resolution: contact height to 5 cm, angles to 5 degrees, timings to 20 ms at 60 fps, distances to 0.1 m, percentages to whole numbers. No two-decimal output anywhere in the UI.
 
 - Label every band with its provenance in the UI text, using three fixed labels: 'elite reference' (published, context only, never a target), 'product heuristic' (our threshold, arguable, editable), 'your baseline' (the player's own earlier sessions). A band with no label is a bug.
+
+- Label how every tactical fact was *established*, on a second axis orthogonal to the band labels: 'confirmed' (a human answered it), 'inferred' (derived through the constraint chain from confirmed facts, with no contradiction) or 'auto' (a detector or classifier filled it in, unreviewed). A panel mixing the three says so, and no headline finding may rest on 'auto' alone. This is the tactical analogue of printing the rep count beside every aggregate, and it is not optional for the same reason: it is the only thing separating a measurement from a guess that happens to look tidy.
 
 - Label lab-derived reference values as 3D. A knee angle of 78 degrees from a side-on phone is not the 81.7 +/- 8.6 degrees a motion-capture lab measures; state that projection error of 5-15 degrees is expected and show a band rather than a point value.
 

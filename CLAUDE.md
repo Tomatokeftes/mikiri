@@ -97,6 +97,22 @@ is a regression even if every test passes:
 When adding a metric, decide what would make it undefendable and make the code
 withhold it in that case, with a note saying why.
 
+**The amendment, for the tactical module only.** Withholding was the only
+option because there was nobody to ask. The tactical module
+(`docs/tactical.md`) has somebody -- the person who filmed the clip and played
+the rally -- so the rule gains a third outcome:
+
+> Never report what the measurement cannot defend. When the user can settle it,
+> ask instead of hiding.
+
+Nothing undefendable is still ever printed as fact. What changes is that
+`Stroke.evidence` -- which already records *why* a shot is or is not named --
+feeds a review queue instead of emptying a panel. The cost of this is that
+every tactical fact must carry how it was established (`confirmed` by a human,
+`inferred` through the constraint chain, or `auto` and unreviewed), and no
+headline may rest on `auto` alone. Dropping that provenance is the same class
+of regression as dropping a withholding rule.
+
 ## Conventions
 
 * Docstrings and comments explain *why*, in prose, at the point where the
@@ -134,10 +150,40 @@ Not verified, and the module docstrings say so:
 
 Known gaps:
 
-* Only one player is tracked.
+* Only one player is tracked. This is the blocker for everything tactical, and
+  is now the next piece of work rather than a someday item.
 * `coaching.compare_sessions` turns a list of session summaries into progress
   and is tested, but nothing calls it: there is no way to load an earlier
   session, so the comparator the split-step numbers point at -- the same
   player against themselves over time -- is not reachable from the app.
-* `docs/feature-roadmap.md` has the researched list of what is worth building
-  next, and what is deliberately not.
+* Whole clips are analysed end to end. There is no segmentation into
+  play/not-play, so dead frames both contaminate per-minute figures and
+  dominate the run time of a CPU pipeline.
+
+## Where it is going
+
+Mikiri is becoming two modules over one tracking run and one court
+calibration, and the camera view decides which one a clip can support:
+
+* **Biomechanical** (built): one player, movement quality, side-on or rear.
+  `docs/feature-roadmap.md` is its roadmap and its list of deliberate
+  refusals.
+* **Tactical** (designed, not started): two or four players, shots, rallies,
+  points and trends, from a raised camera behind one end.
+  `docs/tactical.md` is the plan, and `docs/roadmap.md` Phase 4 the context.
+
+Read `docs/tactical.md` before touching `tracking.py`, `rally.py`,
+`strokes.py` or `shots.py` -- it changes what those modules are for. Two
+things in it are load-bearing and easy to break by accident. Events are owned
+by a *side* of the net with player attribution as a separate field, which is
+the only reason doubles is a later phase and not a later rewrite; doubles is a
+real target, not a nicety. And the review queue is built from derived
+contradictions in the rally chain -- contacts alternate, serve-court parity
+follows the server's own score, the next server won the last rally -- not from
+a confidence threshold, because a threshold misses the confident mistakes.
+
+Everything stays local, offline and free. No cloud model, no metered
+inference, no accounts. Where a model is needed at all, it should be small
+enough to read: roughly ten pose features and a logistic regression in numpy
+is the right size for per-player shot classification, and adding a heavier
+dependency for it is a decision to argue for, not a default.
