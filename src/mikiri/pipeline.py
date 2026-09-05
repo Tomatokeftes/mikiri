@@ -340,10 +340,12 @@ def run_tracking(
     stride_mask: np.ndarray | None = None
     stride = 1
     segments_summary: dict | None = None
+    segment_runs: list[dict] = []
     if req.segment:
         progress(-1.0, "Scanning the clip for play")
         seg = segment_clip(scan_motion(reader, req.start, req.end))
         segments_summary = seg.summary()
+        segment_runs = [x.to_dict() for x in seg.segments]
         skip_mask = seg.state_mask(STATE_NOT_BADMINTON)
         fps = float(getattr(reader.info, "fps", 0.0) or 30.0)
         stride = max(1, int(round(fps / IDLE_TRACK_HZ)))
@@ -425,7 +427,10 @@ def run_tracking(
     end = req.start + n - 1 if n else req.start - 1
     extra: dict = {"request": asdict(req)}
     if segments_summary is not None:
-        extra["segments"] = segments_summary
+        # The runs travel with the result, not just the summary: bouts take
+        # their boundaries from them, and recovering them later would mean
+        # decoding the whole clip again.
+        extra["segments"] = {**segments_summary, "runs": segment_runs, "start": req.start}
         extra["skipped_frames"] = int(n_skipped)
     others = [
         PlayerTrack(side=tracker.trackers[k].side, keypoints=keypoints[k], meta=metas[k])
