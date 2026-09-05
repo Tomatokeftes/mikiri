@@ -135,6 +135,9 @@ Not verified, and the module docstrings say so:
 Known gaps:
 
 * Only one player is tracked.
-* Bouts and split steps reach the state payload but have no UI panel.
+* `coaching.compare_sessions` turns a list of session summaries into progress
+  and is tested, but nothing calls it: there is no way to load an earlier
+  session, so the comparator the split-step numbers point at -- the same
+  player against themselves over time -- is not reachable from the app.
 * `docs/feature-roadmap.md` has the researched list of what is worth building
   next, and what is deliberately not.
