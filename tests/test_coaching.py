@@ -717,3 +717,43 @@ def test_a_zero_upper_band_edge_is_a_real_edge():
     assert centre is not None and centre.severity == "work-on"
     assert "deep" in centre.title.lower() or "net" in centre.detail.lower()
     assert BANDS["club"]["coverage_offset_net_m"].hi is not None  # defaults untouched
+
+
+def test_a_clip_trimmed_to_one_bout_gets_no_per_rally_verdict():
+    """One stretch of continuous play is one sample, and its rallies are unknown.
+
+    Real footage found this: a 40 s highlight clip is a single bout with no
+    rests, so dividing its distance by a rally count invents a per-rally figure
+    and then compares it to a per-rally band.
+    """
+    from mikiri.coaching import coach, metric_values
+
+    fw = developing_footwork()
+    trimmed = {"n_bouts": 1, "distance_per_bout_m": 96.0, "mean_bout_s": 40.0,
+               "rest_share": 0.0, "trimmed_to_play": True}
+    values = metric_values(fw, developing_strokes(), trimmed)
+    assert "distance_per_rally_m" not in values
+    assert "mean_rally_s" not in values
+    ids = {a.id for a in coach(fw, developing_strokes(), bouts=trimmed) if a.severity == "work-on"}
+    assert "distance_per_rally" not in ids
+
+    # Several bouts, with the rests still in, is a real distribution.
+    real = {"n_bouts": 5, "distance_per_bout_m": 18.0, "mean_bout_s": 7.5, "rest_share": 0.55}
+    values = metric_values(fw, developing_strokes(), real)
+    assert values["distance_per_rally_m"] == 18.0
+    assert values["mean_rally_s"] == 7.5
+
+
+def test_bouts_beat_whole_clip_totals_for_the_per_rally_figure():
+    """Distance divided by a rally count counts the walking between rallies."""
+    from mikiri.coaching import metric_values
+
+    fw = dict(developing_footwork())
+    fw["distance_m"] = 200.0
+    st = dict(developing_strokes())
+    st["n_rallies"] = 5
+    without = metric_values(fw, st)
+    assert without["distance_per_rally_m"] == pytest.approx(40.0)  # 200 / 5, rests included
+    bouts = {"n_bouts": 5, "distance_per_bout_m": 22.0, "mean_bout_s": 8.0, "rest_share": 0.6}
+    with_bouts = metric_values(fw, st, bouts)
+    assert with_bouts["distance_per_rally_m"] == pytest.approx(22.0)

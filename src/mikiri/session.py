@@ -63,6 +63,7 @@ from mikiri.project import (
     TrackingRun,
 )
 from mikiri.racket import RacketSeries, racket_series
+from mikiri.rally import BoutSeries, segment_bouts
 from mikiri.settings import Settings
 from mikiri.smoothing import apply_corrections, interpolate_joint, smooth_keypoints
 from mikiri.strokes import StrokeSeries, detect_strokes
@@ -570,10 +571,28 @@ class ProjectSession:
             track.metrics,
             stroke_summary(strokes) if strokes is not None else None,
             level=self.project.coach_level,
+            bouts=self.bouts_summary(),
         )
         if limit is not None and limit <= 0:
             return [a.to_dict() for a in advice]
         return [a.to_dict() for a in top_cues(advice)]
+
+    def bouts(self) -> BoutSeries | None:
+        """Bouts of play and the rests between them, or ``None`` without a court.
+
+        Segmenting needs court speed, so it appears with the calibration. It is
+        what turns whole-clip totals into the per-rally figures the reference
+        bands are actually about.
+        """
+        track = self.court_track()
+        if track is None:
+            return None
+        return segment_bouts(track, self.strokes())
+
+    def bouts_summary(self) -> dict | None:
+        """JSON-friendly bout figures, or ``None`` without a court."""
+        b = self.bouts()
+        return None if b is None else b.summary()
 
     def strokes(self) -> StrokeSeries | None:
         """Detected contacts with their descriptors, or ``None`` before tracking.
@@ -1082,6 +1101,7 @@ class ProjectSession:
             "court_camera_error": self.court_camera_error,
             "footwork": (track.metrics if (track := self.court_track()) is not None else None),
             "strokes": (stroke_summary(sv) if (sv := self.strokes()) is not None else None),
+            "bouts": self.bouts_summary(),
             "coaching": self.coaching(),
             "coach_level": p.coach_level,
             "last_export": self.last_export,

@@ -76,42 +76,26 @@ def test_jump_smash_from_behind(clip: Path, out_dir: Path):
 # --- match footage: a static camera behind the court, both players present -------
 
 MATCH_CLIP = ROOT / "demo" / "lindan_rally.mp4"
-# Court calibration for that clip, fitted once by aligning the model to the
-# detected line pixels (reprojection error 14 cm over 14 points) and verified by
-# eye against the painted lines. The two net-post bases were read from the frame;
-# the right doubles sideline is constructed from the right post and the sideline
-# vanishing point, because too little of it is painted in view to detect.
+# Court calibration for that clip: the nine intersections of three detected
+# sidelines (left doubles, left singles, centre) with three detected cross lines
+# (baseline, doubles long service, short service), each line least-squares
+# fitted to its own painted pixels. Reprojection error 0.35 cm, and it lands on
+# every painted line at 0.0 px median -- including the two right-hand sidelines
+# it never saw, which it extrapolates correctly.
+#
+# Hand-clicked points were tried and made it worse: adding the net-post bases
+# read off a zoomed frame took the fit from 0.4 cm to 14 cm, because a post
+# stands on a base plate and the visible bottom of the post is not the floor.
+# Fitted lines beat clicked corners.
 MATCH_COURT_IMAGE = [
-    [168.7, 1102.6],
-    [242.3, 1016.6],
-    [435.1, 791.1],
-    [387.8, 1090.5],
-    [430.6, 1007.0],
-    [543.0, 787.3],
-    [1503.1, 1028.8],
-    [1397.9, 957.5],
-    [1116.4, 766.7],
-    [2721.7, 961.4],
-    [2472.7, 902.5],
-    [1795.7, 742.4],
-    [470.0, 724.0],
-    [1574.0, 690.0],
+    [168.7, 1102.6], [242.3, 1016.6], [435.1, 791.1],
+    [387.8, 1090.5], [430.6, 1007.0], [543.0, 787.3],
+    [1503.1, 1028.8], [1397.9, 957.5], [1116.4, 766.7],
 ]
 MATCH_COURT_WORLD = [
-    [0.0, 0.0],
-    [0.0, 0.76],
-    [0.0, 4.72],
-    [0.46, 0.0],
-    [0.46, 0.76],
-    [0.46, 4.72],
-    [3.05, 0.0],
-    [3.05, 0.76],
-    [3.05, 4.72],
-    [6.10, 0.0],
-    [6.10, 0.76],
-    [6.10, 4.72],
-    [0.0, 6.70],
-    [6.10, 6.70],
+    [0.0, 0.0], [0.0, 0.76], [0.0, 4.72],
+    [0.46, 0.0], [0.46, 0.76], [0.46, 4.72],
+    [3.05, 0.0], [3.05, 0.76], [3.05, 4.72],
 ]
 # The near player's torso in the first frame, for the initial click.
 MATCH_CLICK = (869.0, 600.0)
@@ -144,7 +128,7 @@ def test_tracker_stays_on_the_player_not_the_officials(match_clip: Path):
     s.project.project_path = None
     s.set_trim(0, s.info.n_frames - 1)
     s.set_court("doubles_corners", MATCH_COURT_IMAGE, MATCH_COURT_WORLD, frame=0)
-    assert s.project.court.reprojection_error_m < 0.25
+    assert s.project.court.reprojection_error_m < 0.02
 
     req = s.run_request(MATCH_CLICK)
     assert req.court_polygon is not None, "a calibrated court must restrict tracking"

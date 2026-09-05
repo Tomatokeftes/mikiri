@@ -882,7 +882,9 @@ def _shares(counts) -> dict[str, float]:
 # -- metric values ------------------------------------------------------------
 
 
-def metric_values(footwork: dict | None, strokes: dict | None = None) -> dict[str, float]:
+def metric_values(
+    footwork: dict | None, strokes: dict | None = None, bouts: dict | None = None
+) -> dict[str, float]:
     """Every banded and tracked number, pulled out of the two metric dicts.
 
     Anything that cannot be derived is simply absent from the result rather
@@ -950,7 +952,20 @@ def metric_values(footwork: dict | None, strokes: dict | None = None) -> dict[st
 
     distance = _number(fw.get("distance_m"))
     rallies = _number(st.get("n_rallies"))
-    if distance is not None and rallies is not None and rallies >= 1:
+    bt = bouts if isinstance(bouts, dict) else {}
+    # Prefer the measured bouts. Dividing whole-clip distance by a rally count
+    # counts the walking between rallies as if it were play, which is not the
+    # quantity the published per-rally bands measure.
+    per_bout = _number(bt.get("distance_per_bout_m"))
+    n_bouts = _number(bt.get("n_bouts"))
+    # One bout is one sample, and on a clip already cut to its play there is no
+    # way to tell where one rally ended and the next began. Comparing that
+    # single stretch against a per-rally band compares two different things, so
+    # the metric is withheld rather than reported with a verdict attached.
+    one_bout_no_rests = n_bouts is not None and n_bouts < 2 and bt.get("trimmed_to_play")
+    if per_bout is not None and not one_bout_no_rests:
+        out["distance_per_rally_m"] = per_bout
+    elif per_bout is None and distance is not None and rallies is not None and rallies >= 1:
         out["distance_per_rally_m"] = distance / rallies
 
     height = _shares(st.get("by_height"))
@@ -964,7 +979,13 @@ def metric_values(footwork: dict | None, strokes: dict | None = None) -> dict[st
     if rear_n + front_n > 0:
         out["origin_back_share"] = rear_n / (rear_n + front_n)
 
-    rally_s = _number(st.get("mean_rally_s"))
+    bout_s = _number(bt.get("mean_bout_s"))
+    bout_rest_share = _number(bt.get("rest_share"))
+    if bout_s is not None and not one_bout_no_rests:
+        out["mean_rally_s"] = bout_s
+    if bout_rest_share is not None:
+        out["rest_share"] = bout_rest_share
+    rally_s = _number(st.get("mean_rally_s")) if bout_s is None else None
     if rally_s is not None:
         out["mean_rally_s"] = rally_s
         duration = _number(fw.get("duration_s"))
@@ -1747,6 +1768,7 @@ def coach(
     level: str = DEFAULT_LEVEL,
     trust: dict | None = None,
     overrides: dict | None = None,
+    bouts: dict | None = None,
 ) -> list[Advice]:
     """Turn one session's measurements into ranked coaching advice.
 
@@ -1767,6 +1789,10 @@ def coach(
         overrides: Bands from :func:`load_band_overrides`. Left as ``None`` the
             app-home file is read, so a user edit takes effect without a
             caller change.
+        bouts: Output of :meth:`mikiri.rally.BoutSeries.summary`. When given,
+            the per-rally and rest figures come from the measured bouts rather
+            than from whole-clip totals divided by a stroke count, which is the
+            difference between "distance per rally" and "distance per clip".
 
     Returns:
         Every generated :class:`Advice`, ranked with the things to fix first.
@@ -1783,7 +1809,7 @@ def coach(
         strokes=st,
         level=level if level in BANDS else DEFAULT_LEVEL,
         bands=bands_for(level, effective),
-        values=metric_values(fw, st),
+        values=metric_values(fw, st, bouts),
         trust=quality,
         zone_seconds=dict(zones),
         stroke_zones=dict(stroke_zones),
@@ -1885,6 +1911,7 @@ def session_summary(
     footwork: dict,
     strokes: dict | None = None,
     trust: dict | None = None,
+    bouts: dict | None = None,
 ) -> dict:
     """One session as a JSON-friendly record: counts, cues, values and quality.
 
@@ -1924,7 +1951,7 @@ def session_summary(
         "counts": counts,
         "top_cues": [a.to_dict() for a in cues],
         "advice": [a.to_dict() for a in items],
-        "values": {k: round(float(v), 4) for k, v in metric_values(fw, st).items()},
+        "values": {k: round(float(v), 4) for k, v in metric_values(fw, st, bouts).items()},
         "severities": {a.id: a.severity for a in items},
         "trust": quality.to_dict(),
         "totals": {
