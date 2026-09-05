@@ -139,3 +139,29 @@ def test_calibrated_export_reports_cm(tracked_session: ProjectSession, tmp_path:
     assert 60 < np.median(heights) < 120  # standing hip roughly 90 cm above the floor
     summary = (out / "summary.md").read_text(encoding="utf-8")
     assert "px/cm" in summary and "Hip rise from takeoff to peak" in summary and "cm" in summary
+
+
+def test_a_label_outline_does_not_run_past_the_text_it_outlines():
+    """Found on the exported court map, where it reads as a ghost of the last letters.
+
+    OpenCV's Hershey fonts are stroked rather than filled, so the glyph advance
+    grows with the stroke thickness: the same string is 179 px wide at
+    thickness 1 and 196 px at thickness 3. Drawing a thick dark pass and then a
+    thin light one over it therefore leaves about two characters of the dark
+    pass sticking out of the end.
+    """
+    import cv2
+    import numpy as np
+
+    from mikiri.render import outlined_text
+
+    text = "lindan_rally: footwork track"
+    img = np.full((40, 400, 3), 128, np.uint8)
+    outlined_text(img, text, (8, 24), scale=0.5)
+    width = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0][0]
+    dark = np.argwhere((img < 40).all(axis=2))
+    light = np.argwhere((img > 200).all(axis=2))
+    assert dark.size and light.size
+    # The halo may sit two pixels outside the glyphs, and no further.
+    assert dark[:, 1].max() <= light[:, 1].max() + 2
+    assert dark[:, 1].max() <= 8 + width + 2

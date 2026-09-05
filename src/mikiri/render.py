@@ -88,12 +88,48 @@ def draw_skeleton(
     return img
 
 
+#: Offsets of the dark halo drawn behind a label, in pixels.
+_HALO = ((-1, -1), (-1, 1), (1, -1), (1, 1), (0, -2), (0, 2), (-2, 0), (2, 0))
+
+
+def outlined_text(
+    img: np.ndarray,
+    text: str,
+    org: tuple[int, int],
+    scale: float = 0.5,
+    colour: tuple[int, int, int] = (255, 255, 255),
+    thickness: int = 1,
+) -> None:
+    """Text with a dark halo, readable on any background.
+
+    The halo is the same text drawn at the same thickness a pixel or two out in
+    each direction, not a single thicker pass underneath. OpenCV's glyph
+    advance depends on the stroke thickness -- the Hershey fonts are stroked,
+    not filled -- so a thickness-3 pass is 196 px wide where the thickness-1
+    pass over it is 179 px. Drawn the obvious way, the outline runs about two
+    characters past the end of the text it is supposed to be outlining, which
+    is visible as a dark ghost of the last letters on every court map and every
+    frame of an overlay video.
+    """
+    for dx, dy in _HALO:
+        cv2.putText(
+            img,
+            text,
+            (org[0] + dx, org[1] + dy),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            scale,
+            (0, 0, 0),
+            thickness,
+            cv2.LINE_AA,
+        )
+    cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, colour, thickness, cv2.LINE_AA)
+
+
 def put_label(
     img: np.ndarray, text: str, org: tuple[int, int] = (12, 30), scale: float = 0.7
 ) -> None:
     """White text with a dark outline (readable on any background)."""
-    cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 1, cv2.LINE_AA)
+    outlined_text(img, text, org, scale=scale)
 
 
 def stick_figure(
