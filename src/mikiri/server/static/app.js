@@ -1089,8 +1089,8 @@ function renderReview() {
   $('#review-question').textContent = item.question;
   $('#review-detail').textContent = item.detail;
   $('#review-options').innerHTML = item.options.map((o, i) =>
-    `<button data-i="${i}"><b>${i + 1}</b> ${o.label}</button>`).join(' ')
-    + ' <button data-i="d"><b>d</b> leave it</button>';
+    `<button class="btn small" data-i="${i}"><b>${i + 1}</b> ${o.label}</button>`).join(' ')
+    + ' <button class="btn small" data-i="d"><b>d</b> leave it</button>';
   for (const b of $('#review-options').querySelectorAll('button')) {
     b.addEventListener('click', () => answerReview(b.dataset.i === 'd' ? 'd' : Number(b.dataset.i)));
   }
