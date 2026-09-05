@@ -152,3 +152,73 @@ coverage sits near the centre of their half and is close to circular, with no
 preferred direction. A developing player's is shifted about a metre toward the
 net, stretched front-to-back, and rotated. If your own numbers look like the
 second, the work is recovering to the middle rather than camping forward.
+
+## Split steps and moves
+
+The split step is the first thing a coach looks for and the first thing a club
+player stops doing under pressure. `mikiri.footwork` looks for it, and the
+whole design of that module is about what it is honest to claim.
+
+**The metric is not timing.** The coaching literature defines split-step
+quality as timing against the *opponent's* contact. Mikiri cannot have that:
+the solo use case has no opponent in frame, and even when one is present they
+are further from the camera, their keypoints are noisier, and this app's own
+contact detector would add its latency to theirs. A mis-detected opponent
+contact biases every timing in the same direction, so the player would drill
+toward a wrong target. That is worse than reporting nothing.
+
+What is self-contained, and is what gets reported:
+
+* **presence rate** -- of the moves the player made, how many were preceded by
+  a hop. Splitting on nine moves in fourteen is a different problem from never
+  splitting. Withheld below eight moves, where a percentage is a coin flip.
+* **split-to-first-step latency** -- how long after landing the player actually
+  set off. Long latencies mean the split came too early, which is the same
+  fault as not splitting at all.
+
+Both are measured against the player's *own* moves, so they need one tracked
+player and no shuttle.
+
+### Two things that had to be got right
+
+**The signal is detrended.** Reusing the jump detector's raw ankle height finds
+two hops in forty seconds of elite badminton. As the player moves up and down
+the court, perspective walks his feet through 20 to 40 per cent of his own
+image height -- ten times a split step -- so the signal is dominated by where he
+is standing. Mikiri subtracts a running median of the ankle height over about a
+second and divides by the player's pixel height in that same frame. The drift
+is slow and survives the median; the hop is fast and does not. Dividing per
+frame rather than by a clip-wide constant handles the player being half the
+size at the far baseline.
+
+**A move is a burst of acceleration, not a run of fast frames.** Counting runs
+above a walking pace finds three moves in that same rally, because an elite
+player in a rally is almost never below the threshold. Mikiri finds the
+prominent peaks in court speed and walks back to the onset each accelerated
+away from, which is where a split step belongs. On the demo rally that is 35
+moves against 26 detected contacts.
+
+### What this is worth
+
+**It has not been validated against labelled footage.** What it detects is a
+brief two-footed rise before a move. A split step is one of those; so is the
+push-off that recovers from a net shot, and inspecting real detections turns up
+both. So read the presence rate as a *lower bound on preparation of some kind*
+rather than a count of textbook split steps: it will miss the flattest splits
+and credit some recoveries. It is useful against the same player's earlier
+sessions, which is the primary comparator anyway, and it is not comparable to
+any published figure.
+
+The height of the hop is not reported at all. A split step lifts the feet a few
+centimetres, which at the far end of a 1080p court is a handful of pixels
+against two or three pixels of keypoint jitter. Presence is detectable; height
+is not.
+
+Validating this properly needs a few hundred hand-labelled frames, and is the
+obvious next piece of work.
+
+## Rallies
+
+Footwork totals are only comparable with published values when the rests are
+taken out of them. See [rally.md](rally.md) for how the clip is cut into bouts
+of play, and why work density is sometimes withheld.

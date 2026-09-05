@@ -1,6 +1,6 @@
 # Mikiri
 
-Mikiri (見切り, "reading the shuttle") is a local video analysis app for badminton, formerly JumpLab. Today it covers jumps, lunges, split steps and recovery; footwork, racket and shuttle tracking are the next steps (see docs/roadmap.md).
+Mikiri (見切り, "reading the shuttle") is a local video analysis app for badminton, formerly JumpLab. It covers jumps, lunges and recovery; court position and footwork; rallies and split steps; racket and stroke description; and coaching advice built on all of it. What is still to come is in [docs/feature-roadmap.md](docs/feature-roadmap.md).
 
 Local video biomechanics for badminton movements. Load a phone clip, track the
 athlete with RTMPose on the CPU, scrub frame by frame with a skeleton overlay,
@@ -186,6 +186,25 @@ so Mikiri checks the recovered camera view and declines to name rather than
 name it wrong. Film from the side for shot names, from behind and high for
 footwork. See [docs/shuttle.md](docs/shuttle.md).
 
+### Rallies and split steps
+
+A clip is not a rally, so Mikiri cuts it into **bouts** of continuous work and
+reports the rests separately: rally length, distance per rally, metres per
+minute in play, shots per rally, and -- only when the clip still contains its
+rests -- work density and effective playing time. That last pair is withheld on
+footage already trimmed to the rallies, where it would measure the editing
+rather than the player. [docs/rally.md](docs/rally.md).
+
+Inside the bouts it looks for **split steps**: of the moves the player made,
+how many were prepared by a hop, and how long after landing the first step
+came. It does not attempt split-step *timing* against the opponent, which needs
+an opponent this app may not be tracking, and it is honest that what it detects
+is a preparatory hop of some kind rather than a certified split step. The
+reasoning, and what the number is worth, is in
+[docs/footwork.md](docs/footwork.md).
+
+![The Rallies panel on a short clip, refusing the figures it cannot support](docs/screenshots/09_rallies.png)
+
 ## Filming guidelines
 
 There are two different set-ups here, and they pull in opposite directions.
@@ -306,6 +325,11 @@ pytest -m slow                        # real RTMPose pipeline on the demo clip a
 any clip (trim, click the athlete, accept events, screenshot); it produced the
 real-footage screenshot above.
 
+`pytest` with no arguments runs all three and is the check to run before
+committing; the UI test rewrites the screenshots in `docs/screenshots`, so
+discard that churn unless the interface actually changed.
+
 Layout: `src/mikiri` (package), `src/mikiri/server` (FastAPI + static
 front end), `tests`, `docs`, `demo`. Every non-obvious choice is written up in
-[DECISIONS.md](DECISIONS.md).
+[DECISIONS.md](DECISIONS.md), and [CLAUDE.md](CLAUDE.md) is the orientation for
+anyone (or anything) picking the codebase up cold.

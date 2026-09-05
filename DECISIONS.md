@@ -378,9 +378,97 @@ height or two points, segment angles, and `mikiri batch FOLDER` for CLI
 processing (tracks the largest person, accepts the automatic events, exports a
 pack and saves a project per clip).
 
+## The camera is recovered from the net posts, and error is propagated
+
+Four court corners give a floor homography and nothing else: they cannot say
+how high anything is, and they silently misplace anything that is not on the
+floor. An ankle keypoint sits 7.5 cm up, which the homography pushes away from
+the camera by `z * d / (h - z)` -- 92 cm at the far baseline from a 1.6 m
+tripod, systematic rather than random, so it never averages out. Two more
+clicks fix it: the net posts are 1.55 m verticals standing at court points
+already known, so their tops pin down the camera's height and position. That
+also buys jump clearance and stroke contact height in metres.
+
+It fails in one specific way, and the app says so rather than blaming the
+clicks: a vertical's top crosses the ground plane's horizon exactly when its
+height equals the camera's, so posts filmed from about 1.55 m map arbitrarily
+far up the court. `MAX_OFFPLANE_REACH_M` catches that and the message names the
+cause. The court calibration survives a failed recovery.
+
+Accuracy is propagated rather than asserted. Keypoint and click covariance go
+through the homography's Jacobian into a per-frame ellipse, drawn at 95%
+(`NSIGMA_95 = 2.4477` for two dimensions -- a 1-sigma ellipse covers 39%, not
+68%, which was a bug once). The heat map is blurred by that same covariance, so
+the far court is drawn as the smear it is. Path-length uncertainty divides by
+the smoothing window rather than treating every frame as independent, which had
+inflated it by the frame rate.
+
+## Tracking is restricted to the court
+
+On real match footage the tracker lost the player after eight seconds and spent
+the remaining thirty locked onto a seated line judge: large, still, and just
+off the court. Detections are now rejected unless their *feet* fall inside the
+calibrated court polygon (with a margin). On that clip it took the player from
+24% to 100% of frames on his own half. The polygon is part of the run request
+and therefore part of the pipeline cache key.
+
+## Strokes are described; shots are only named on evidence
+
+Smash, clear and drop share nearly identical overhead kinematics and separate
+on racket-face angle and what the shuttle does afterwards, neither of which a
+single 30 fps camera sees from the body alone. So a contact always gets a
+descriptor it can defend -- contact height, forehand or backhand, court zone --
+and a *name* only when the shuttle search recovers a launch after that contact.
+
+Naming needs one more thing, found by adversarial review: the launch is
+measured in the image, and from behind the baseline -- the recommended footwork
+set-up -- a smash foreshortens until it reads as a drop. Every band was reading
+an image-plane angle as if it were the world launch. Naming is now gated on
+`view_class` and refuses unless the camera is side-on.
+
+## Bouts before any per-rally figure
+
+A clip is not a rally, and dividing a whole-clip total by nothing produced a
+"96 m per rally" coaching cue, roughly ten times any published value. The clip
+is now cut into bouts of work (speed above a walking pace, or a detected
+contact), short gaps closed before short bouts are dropped, and the in-play
+aggregates are computed from those. Work density and effective playing time are
+withheld when the clip was already trimmed to its rallies, where they would
+measure the editing. See [docs/rally.md](docs/rally.md).
+
+## Split steps: presence, not timing, and honestly labelled
+
+The literature's metric is timing against the opponent's contact, which needs
+an opponent this app may not be tracking and whose detection error would bias
+every timing the same way. What is self-contained is presence against the
+player's *own* moves, plus split-to-first-step latency.
+
+Two rewrites were needed for that to mean anything on court footage. Raw ankle
+height is dominated by perspective -- crossing the court moves the feet through
+a large fraction of a body height without leaving the floor -- so the signal is
+detrended by a running median and divided by the per-frame body height. And a
+move is a prominent speed *peak*, not a run of fast frames: an elite player is
+above any walking threshold almost continuously, and run-based detection found
+three moves in a forty-second rally where peak-based finds thirty-five.
+
+The detector is not validated against labelled footage and says so in its own
+docstring: a brief two-footed rise before a move is a split step, but so is a
+recovery push-off. The rate is a lower bound on preparation of some kind.
+
+## Coaching says at most three things, with the evidence attached
+
+Advice is capped at three cues because a list of twelve is a list of none.
+Every cue carries the value, the band it missed, where that band comes from
+(published figure or stated heuristic), and a confidence that includes the
+measurement uncertainty. A data-quality cue fires when the measurement itself
+is not good enough to conclude from, and it is never dropped in favour of a
+technical one. Bands are user-editable in `coaching.json`.
+
 ## Things deliberately not done
 
 * No GPU paths: ONNX Runtime CPU only, as requested.
 * No telemetry, analytics or update checks.
-* No attempt at 3D or camera calibration beyond a pixel scale; the UI and
-  `summary.md` say so plainly.
+* No full 3D reconstruction and no intrinsic calibration. The camera's height
+  and position are recovered on the court plane from the net posts, which is
+  what the floor measurements need; everything off that plane is still a
+  single-camera 2D estimate, and the UI and `summary.md` say so plainly.
