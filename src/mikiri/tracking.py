@@ -133,6 +133,12 @@ class FrameMeta:
     detected: bool
     mean_score: float
     lost: bool
+    #: True when the frame was never shown to the model, because the clip
+    #: segmentation said it was not play. Distinct from ``lost``: a lost frame
+    #: is one the tracker looked at and failed on, and a skipped one carries no
+    #: claim about whether a player was there. Nothing downstream may read a
+    #: skipped frame as evidence of absence.
+    skipped: bool = False
 
     def to_dict(self) -> dict:
         """Plain dict."""

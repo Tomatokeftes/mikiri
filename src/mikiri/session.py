@@ -1039,6 +1039,7 @@ class ProjectSession:
             det_every=self.settings.det_every,
             conf_threshold=self.settings.conf_threshold,
             court_polygon=self.court_polygon(),
+            segment=self.settings.segment_clip,
         )
 
     def court_polygon(self, margin_m: float = 1.0) -> list[list[float]] | None:

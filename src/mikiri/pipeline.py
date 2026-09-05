@@ -19,12 +19,22 @@ from mikiri.jobs import Job
 from mikiri.keypoints import N_KEYPOINTS
 from mikiri.paths import cache_dir
 from mikiri.pose.base import PoseBackend, get_backend
+from mikiri.segments import STATE_NOT_BADMINTON, scan_motion, segment_clip
 from mikiri.settings import Settings
 from mikiri.tracking import FrameMeta, PersonTracker
 from mikiri.video import FrameCache, VideoReader, downscale, video_id
 
 #: Bump when the reader or tracker changes so stale cached results are never reused.
-CACHE_VERSION = 3  # court-restricted tracking changes results
+CACHE_VERSION = 4  # segmentation skips frames, so keypoint arrays differ
+
+#: How often to run the model through a stretch the segmentation called idle,
+#: in hertz. Not zero, because identity is far cheaper to keep than to recover:
+#: dropping the tracker for a forty-second rest and re-acquiring afterwards
+#: risks coming back on the wrong person, which is the failure this app has
+#: already been bitten by once. Fast enough that a walk is still resolved --
+#: a walk cycle is about a second -- so the court track through a rest stays
+#: honest and :mod:`mikiri.rally` can still tell walking from playing.
+IDLE_TRACK_HZ = 4.0
 
 
 @dataclass
@@ -41,6 +51,12 @@ class RunRequest:
     #: on the court are not candidates, which is what keeps a tracker that has
     #: briefly lost the player off the umpire and the line judges.
     court_polygon: list[list[float]] | None = None
+    #: Scan the clip first and spend the model only where there is something to
+    #: see: every frame of play, a few a second through the rests, and none at
+    #: all on frames that are not this court. Costs one extra decode pass and
+    #: saves most of the model time on a recording that is mostly dead air.
+    #: Turning it off tracks every frame, which is what happened before.
+    segment: bool = True
 
     def key(self, backend_key: str) -> str:
         """Short hash identifying this run for the on-disk cache."""
@@ -56,6 +72,7 @@ class RunRequest:
                 "court": None
                 if self.court_polygon is None
                 else [[round(v, 1) for v in p] for p in self.court_polygon],
+                "segment": self.segment,
                 "backend": backend_key,
                 "cache_version": CACHE_VERSION,
             },
@@ -186,6 +203,19 @@ def run_tracking(
 ) -> TrackingResult:
     """Track one person from ``req.start`` to ``req.end`` inclusive.
 
+    With ``req.segment`` set the clip is scanned first (see
+    :mod:`mikiri.segments`) and the model is spent where there is something to
+    see: every frame of play, :data:`IDLE_TRACK_HZ` frames a second through the
+    rests so the tracker never loses its person, and none at all on frames that
+    are not this court. Skipped frames keep their place in the keypoint array
+    with zero confidence, which every consumer already treats as no pose, and
+    their :class:`~mikiri.tracking.FrameMeta` is marked ``skipped`` so nothing
+    reads them as evidence that the player was absent.
+
+    The scan is a second decode pass over the range. That is worth it only
+    because decoding is cheap beside inference; if that ever stops being true,
+    this is the trade to revisit.
+
     Progress and cancellation go through ``job`` when given. Returns fewer
     frames than requested if the video ends early.
     """
@@ -197,6 +227,22 @@ def run_tracking(
 
     def model_progress(message: str, fraction: float) -> None:
         progress(-1.0 if fraction < 0 else 0.05 * fraction, message)
+
+    skip_mask: np.ndarray | None = None
+    stride_mask: np.ndarray | None = None
+    stride = 1
+    segments_summary: dict | None = None
+    if req.segment:
+        progress(-1.0, "Scanning the clip for play")
+        seg = segment_clip(scan_motion(reader, req.start, req.end))
+        segments_summary = seg.summary()
+        skip_mask = seg.state_mask(STATE_NOT_BADMINTON)
+        play = seg.analysable_mask()
+        stride_mask = ~play & ~skip_mask
+        fps = float(getattr(reader.info, "fps", 0.0) or 30.0)
+        stride = max(1, int(round(fps / IDLE_TRACK_HZ)))
+        if job is not None:
+            job.check_cancel()
 
     progress(-1.0, "Loading pose model")
     backend.load(progress=model_progress)
@@ -214,11 +260,31 @@ def run_tracking(
     metas: list[FrameMeta] = []
     n = 0
     first = True
+    last_tracked = -(10**9)
+    n_skipped = 0
+
+    def _state_at(mask: np.ndarray | None, i: int) -> bool:
+        return mask is not None and i < mask.size and bool(mask[i])
+
     for i, (idx, frame) in enumerate(reader.iter_range(req.start, req.end)):
         if job is not None:
             job.check_cancel()
+        # Cache every frame regardless: the user scrubs the whole clip, and a
+        # JPEG costs nothing beside an inference.
         if frame_cache is not None and not frame_cache.has(idx):
             frame_cache.put(idx, frame)
+
+        # The first frame always runs, whatever the segmentation says: it is
+        # where the user clicked and where the tracker takes its identity.
+        if not first:
+            elsewhere = _state_at(skip_mask, i)
+            resting = _state_at(stride_mask, i) and (i - last_tracked) < stride
+            if elsewhere or resting:
+                metas.append(FrameMeta(idx, None, False, 0.0, False, skipped=True))
+                n = i + 1
+                n_skipped += 1
+                continue
+
         small, scale = downscale(frame, req.downscale_longest)
         if first:
             click = None
@@ -234,11 +300,16 @@ def run_tracking(
                 meta.bbox = [v / scale for v in meta.bbox]
         keypoints[i] = kp
         metas.append(meta)
+        last_tracked = i
         n = i + 1
         progress(0.05 + 0.95 * n / total, f"Tracking frame {idx} ({n}/{total})")
 
     keypoints = keypoints[:n]
     end = req.start + n - 1 if n else req.start - 1
+    extra: dict = {"request": asdict(req)}
+    if segments_summary is not None:
+        extra["segments"] = segments_summary
+        extra["skipped_frames"] = int(n_skipped)
     return TrackingResult(
         start=req.start,
         end=end,
@@ -247,5 +318,5 @@ def run_tracking(
         backend=backend.name,
         model=backend.model_description,
         seconds=round(time.time() - t0, 2),
-        extra={"request": asdict(req)},
+        extra=extra,
     )

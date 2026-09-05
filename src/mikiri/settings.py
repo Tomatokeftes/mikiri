@@ -39,6 +39,13 @@ class Settings(BaseModel):
         default=4, ge=1, le=60, description="Run the person detector every N frames."
     )
     conf_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
+    segment_clip: bool = Field(
+        default=True,
+        description=(
+            "Scan the clip first and spend the pose model only where there is something "
+            "to see. Turn off to track every frame, which is slower and never worse."
+        ),
+    )
     frame_cache_longest: int = Field(default=1280, ge=256, le=4096)
     jpeg_quality: int = Field(default=85, ge=40, le=100)
     open_browser: bool = True

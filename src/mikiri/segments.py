@@ -38,6 +38,16 @@ sudden change across most of the frame marks every one of those boundaries far
 more reliably than any motion threshold. Both paths run here, and neither is
 assumed.
 
+**The thresholds are set for club footage, not for a regulated match.** Almost
+nothing this app sees is an officiated game, so the numbers in the Laws are
+context rather than calibration: a club rally is shorter than a match rally, a
+club rest is longer and much more variable, and recreational movement is less
+explosive, which drags the busy end of the motion distribution down with it.
+Every duration here is therefore looser than the equivalent figure for match
+play, and where a rule and observed club behaviour disagree the club behaviour
+wins. All of them are arguments to :func:`segment_clip`, so a caller analysing
+a real match can tighten them.
+
 **This is a prefilter, not the final word, and it is biased on purpose.** The
 authority on where a rally starts is the serve, and the authority on which
 stretch is warm-up is whether the rally chain ever closes -- both of which live
@@ -92,10 +102,13 @@ CUT_CHANGED_FRACTION = 0.5
 #: busiest part of the frame, which is what "is anyone playing" means.
 MOTION_PERCENTILE = 99.0
 #: Where the play threshold sits between the quiet and busy percentiles of a
-#: clip's own motion. Below the midpoint on purpose: idle is a tight cluster
-#: just above zero while play has a long tail, so a midpoint cut classifies the
-#: slower passages of a rally -- a high clear coming down -- as idle.
-PLAY_LEVEL = 0.35
+#: clip's own motion. Well below the midpoint on purpose, for two reasons.
+#: Idle is a tight cluster just above zero while play has a long tail, so a
+#: midpoint cut classifies the slower passages of a rally -- a high clear
+#: coming down -- as idle. And the busy end of a club clip sits lower than a
+#: match's, because a recreational rally is less explosive, so a threshold
+#: taken as a fraction of it has to be lower again to catch real play.
+PLAY_LEVEL = 0.28
 #: Percentiles used as the quiet and busy ends of the clip's motion. Not the
 #: minimum and maximum, which are one frame each and are set by a dropped frame
 #: at one end and somebody walking past the lens at the other.
@@ -106,19 +119,26 @@ BUSY_PERCENTILE = 90.0
 #: two, and any threshold would be cutting noise in half.
 MIN_CONTRAST = 0.25
 #: Pauses shorter than this stay inside a stretch of play. A rally contains
-#: lulls -- a high lift, a shuttle drifting out -- and cutting on them would
-#: turn one rally into three.
-MERGE_GAP_S = 1.5
-#: A stretch of play shorter than this is not a rally. Matches the reasoning
-#: behind :data:`mikiri.rally.MIN_BOUT_S`: a couple of steps toward a shuttle
-#: on the floor is movement, not play.
-MIN_PLAY_S = 2.0
+#: lulls -- a high lift, a shuttle drifting out, a moment of hesitation -- and
+#: cutting on them turns one rally into three. Generous, because merging keeps
+#: frames and the cost of merging two rallies into one is a miscounted rally
+#: while the cost of splitting one is a deleted one.
+MERGE_GAP_S = 2.5
+#: A stretch of play shorter than this is not a rally. Lower than
+#: :data:`mikiri.rally.MIN_BOUT_S` on purpose: club rallies are short, a
+#: three-shot exchange is over in a couple of seconds, and this threshold
+#: *drops* frames, so it is the one place in the module where being wrong is
+#: expensive. Set it where a real rally cannot fall below it.
+MIN_PLAY_S = 1.5
 #: An idle stretch at least this long is an interval rather than the gap
-#: between two rallies. Anchored on the Laws: the shortest scheduled break is
-#: 60 s at 11 points, and the change of ends between games is longer still, so
-#: a threshold below both catches every real break. Ordinary between-rally
-#: dead time is a few seconds to twenty.
-INTERVAL_S = 45.0
+#: between two rallies. The Laws would suggest something near 60 s -- the
+#: shortest scheduled break is 60 s at 11 points -- but almost nothing this app
+#: sees is a regulated match. On club footage a minute of standing about is
+#: ordinary rhythm: picking shuttles up, arguing the score, getting a drink,
+#: waiting for the next pair. Two minutes is where it stops being rhythm and
+#: starts meaning somebody walked off. The cost of being wrong here is only a
+#: label, since nothing downstream drops frames on it.
+INTERVAL_S = 120.0
 #: Two cuts closer together than this are treated as one. A single bright
 #: frame, a flash or a dropped frame otherwise reads as a cut straight back,
 #: producing a camera shot one frame long.
