@@ -548,37 +548,42 @@ def test_labelling_real_contacts_produces_a_report_and_names_only_what_separates
     """The classifier's plumbing on real footage, with pseudo-labels.
 
     There is no ground truth for shot types on this clip, so the labels here
-    are derived from the contact height class -- overheads called clears,
-    the rest lifts -- which the classifier also sees as a feature. That makes
-    separation trivial and says nothing about the model's worth; what it
-    proves is that labels reach the model through the session, the report
-    comes back with the pair it rests on, and only unlabelled contacts get a
-    classifier name, each carrying the pair in its evidence. The session is
-    restored afterwards.
+    are assigned by turns -- clear, lift, clear, lift -- to the near player's
+    first twelve contacts. They carry no information about the swings, so the
+    pair may well fail to separate, and that is fine: what this proves is that
+    labels reach the model through the session, the report comes back with the
+    pair it rests on, and every unlabelled contact is either left at its
+    descriptor with the failing pair in its evidence or named with the pair it
+    rests on. Nothing here says the model is any good. The session is restored
+    afterwards.
     """
     s = match_session
     subject, _ = s.chain_strokes()
     start = s.pose_start
-    overhead = [c for c in subject.strokes if c.height_class == "overhead"]
-    lower = [c for c in subject.strokes if c.height_class != "overhead"]
-    if len(overhead) < 6 or len(lower) < 6:
-        pytest.skip("not enough contacts of both heights on this clip to label")
+    contacts = subject.strokes[:12]
+    if len(contacts) < 12:
+        pytest.skip("not enough near contacts on this clip to label")
     try:
-        for c in overhead[:6]:
-            s.answer_review("label_shot", c.frame + start, "near", value="clear")
-        for c in lower[:6]:
-            s.answer_review("label_shot", c.frame + start, "near", value="lift")
+        for k, c in enumerate(contacts):
+            s.answer_review("label_shot", c.frame + start, "near", value=("clear", "lift")[k % 2])
         report = s.classifier_report()["near"]
         assert report["n_labelled"] == 12
         assert report["eligible"] == ["clear", "lift"]
-        assert report["pairs"][0]["n"] == 12
+        pair = report["pairs"][0]
+        assert pair["n"] == 12 and {pair["a"], pair["b"]} == {"clear", "lift"}
         named, _ = s.chain_strokes()
-        labelled = {c.frame for c in overhead[:6]} | {c.frame for c in lower[:6]}
+        labelled = {c.frame for c in contacts}
         for c in named.strokes:
             if c.frame in labelled:
-                assert c.evidence == "labelled by you"
+                assert c.evidence == "labelled by you" and c.shot in ("clear", "lift")
             elif c.shot is not None:
+                assert pair["separable"], "a name may only rest on a pair that separates"
                 assert c.evidence.startswith("named from your 12 labelled contacts")
+            elif c.evidence.startswith("looks most like"):
+                assert not pair["separable"]
+        # Every unlabelled contact was either named or withheld, and the report
+        # accounts for each; how the split falls depends on the pair.
+        assert report["named"] + report["withheld"] == len(named.strokes) - len(labelled)
         tagging = s.state()["tagging"]
         assert tagging["n_labelled"] == 12
         assert any(r["how"] == "labelled" for r in tagging["contacts"])
