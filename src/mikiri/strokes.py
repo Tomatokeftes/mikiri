@@ -40,6 +40,7 @@ per-stroke confidence is for.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -67,6 +68,18 @@ MIN_PEAK_SPEED_BH = 1.1
 #: A peak must also stand this far above the surrounding trough, in the same
 #: units, which is what separates a swing from general court movement.
 MIN_PEAK_PROMINENCE_BH = 0.7
+#: Speed a swing must reach to be *recovered* between two contacts by the other
+#: player, in body heights per second. Lower than :data:`MIN_PEAK_SPEED_BH` on
+#: purpose and with no prominence test, because the situation supplies what
+#: the signal lacks: contacts alternate, so two in a row by one player mean the
+#: other hit between them, and the question is only where. Measured on the
+#: Lin Dan clip, where the far player's swing is small and foreshortened and
+#: his signal never drops far enough between hits to pass the prominence bar:
+#: every one of the fourteen same-side pairs had an opposite-side local
+#: maximum between them, the weakest at 0.75. The near player's signal in a
+#: pause, where nothing is a swing, sits at 0.71 at the 90th percentile, so
+#: this is the lowest floor that clears it.
+RECOVERY_MIN_SPEED_BH = 0.75
 #: Half-width of the window described around a contact, seconds.
 STROKE_WINDOW_S = 0.5
 
@@ -95,6 +108,10 @@ class Stroke:
     shot: str | None = None  # only when evidence beyond the body supports it
     shot_confidence: float = 0.0
     evidence: str = ""  # why the shot is or is not named
+    #: True when this contact was not detected but inferred from the other
+    #: player's contacts either side of it; see :func:`recover_alternation`.
+    #: Weaker evidence than a detection, and the chain says so.
+    recovered: bool = False
 
     def descriptor(self) -> str:
         """The always-defensible label, e.g. ``"overhead forehand from rearcourt"``."""
@@ -116,6 +133,7 @@ class Stroke:
             "zone": self.zone,
             "descriptor": self.descriptor(),
             "label": self.label(),
+            "recovered": bool(self.recovered),
             "racket_speed_bh": round(float(self.racket_speed_bh), 2),
             "racket_speed_mps": None
             if self.racket_speed_mps is None
@@ -421,54 +439,231 @@ def detect_strokes(
     if n == 0 or not np.isfinite(sig).any():
         return series
 
-    bh = body_height_px(kp, conf_thr)
     for i in _peaks(sig, fps, min_speed_bh, min_prominence_bh):
         frame = int(i)
-        height_class, hc_conf = _height_class(kp[frame], racket_hand, conf_thr)
-        side, side_conf = _side(kp[frame], racket_hand, conf_thr)
-        pos = None
-        airborne = False
-        if track is not None and frame < track.positions.shape[0]:
-            p = track.positions[frame]
-            if np.isfinite(p).all():
-                pos = p
-            airborne = bool(track.airborne[frame])
-        speed_bh = 0.0
-        speed_mps = None
-        if racket is not None and frame < racket.speed_bh.shape[0]:
-            v = racket.speed_bh[frame]
-            speed_bh = float(v) if np.isfinite(v) else 0.0
-            if racket.speed_mps is not None and np.isfinite(racket.speed_mps[frame]):
-                speed_mps = float(racket.speed_mps[frame])
-
-        contact_m, contact_bh = _contact_height(
-            kp, racket, frame, bh, homography, camera, pos, racket_hand, conf_thr
-        )
-        # Confidence in the detection itself: how far the peak stood out,
-        # tempered by whether the descriptive joints were actually visible.
+        # Confidence in the detection itself: how far the peak stood out.
+        # describe_contact tempers it by whether the descriptive joints were
+        # actually visible.
         peak = float(sig[frame]) if np.isfinite(sig[frame]) else 0.0
         detect_conf = float(np.clip((peak - min_speed_bh) / max(min_speed_bh, 1e-6), 0.0, 1.0))
         series.strokes.append(
-            Stroke(
-                frame=frame,
-                confidence=round(0.5 + 0.5 * detect_conf, 3),
-                height_class=height_class,
-                side=side,
-                zone=_zone(pos),
-                racket_speed_bh=speed_bh,
-                racket_speed_mps=speed_mps,
-                contact_height_m=contact_m,
-                contact_height_bh=contact_bh,
-                court_position_m=None if pos is None else [float(pos[0]), float(pos[1])],
-                airborne=airborne,
-                evidence="no shuttle evidence: descriptor only",
+            describe_contact(
+                kp,
+                frame,
+                racket_hand,
+                conf_thr,
+                track=track,
+                racket=racket,
+                homography=homography,
+                camera=camera,
+                confidence=0.5 + 0.5 * detect_conf,
             )
         )
-        # Keep the weakest descriptive confidence visible on the stroke.
-        series.strokes[-1].confidence = round(
-            min(series.strokes[-1].confidence, 0.5 + 0.5 * max(hc_conf, side_conf)), 3
-        )
     return series
+
+
+def describe_contact(
+    keypoints: np.ndarray,
+    frame: int,
+    racket_hand: str,
+    conf_thr: float,
+    track=None,
+    racket: RacketSeries | None = None,
+    homography: np.ndarray | None = None,
+    camera=None,
+    confidence: float = 0.5,
+    evidence: str = "no shuttle evidence: descriptor only",
+    recovered: bool = False,
+) -> Stroke:
+    """Describe a contact at ``frame`` as far as the evidence honestly allows.
+
+    The descriptor -- contact height class, forehand or backhand, court zone --
+    is a coarse geometric fact about the body at that frame and does not care
+    how the frame was chosen, so a detected peak and a contact recovered from
+    the other player's rhythm are described by the same code.
+
+    Args:
+        keypoints: ``(n, 26, 3)`` effective keypoints.
+        frame: The contact frame, an index into ``keypoints``.
+        racket_hand: ``"right"`` or ``"left"``.
+        conf_thr: Minimum keypoint confidence.
+        track: Optional :class:`~mikiri.court.CourtTrack` for the court zone.
+        racket: Optional racket-head series, for the speed at contact.
+        homography: Image-to-court homography, needed for contact height.
+        camera: Optional camera geometry; with it the height is in metres.
+        confidence: How sure the caller is that a stroke happened here at
+            all; tempered here by whether the descriptive joints were seen.
+        evidence: Why the shot is or is not named.
+        recovered: Whether this contact was inferred rather than detected.
+
+    Returns:
+        A :class:`Stroke` with no shot name.
+    """
+    kp = np.asarray(keypoints, dtype=float)
+    frame = int(frame)
+    bh = body_height_px(kp, conf_thr)
+    height_class, hc_conf = _height_class(kp[frame], racket_hand, conf_thr)
+    side, side_conf = _side(kp[frame], racket_hand, conf_thr)
+    pos = None
+    airborne = False
+    if track is not None and frame < track.positions.shape[0]:
+        p = track.positions[frame]
+        if np.isfinite(p).all():
+            pos = p
+        airborne = bool(track.airborne[frame])
+    speed_bh = 0.0
+    speed_mps = None
+    if racket is not None and frame < racket.speed_bh.shape[0]:
+        v = racket.speed_bh[frame]
+        speed_bh = float(v) if np.isfinite(v) else 0.0
+        if racket.speed_mps is not None and np.isfinite(racket.speed_mps[frame]):
+            speed_mps = float(racket.speed_mps[frame])
+    contact_m, contact_bh = _contact_height(
+        kp, racket, frame, bh, homography, camera, pos, racket_hand, conf_thr
+    )
+    # Keep the weakest descriptive confidence visible on the stroke.
+    confidence = min(float(confidence), 0.5 + 0.5 * max(hc_conf, side_conf))
+    return Stroke(
+        frame=frame,
+        confidence=round(confidence, 3),
+        height_class=height_class,
+        side=side,
+        zone=_zone(pos),
+        racket_speed_bh=speed_bh,
+        racket_speed_mps=speed_mps,
+        contact_height_m=contact_m,
+        contact_height_bh=contact_bh,
+        court_position_m=None if pos is None else [float(pos[0]), float(pos[1])],
+        airborne=airborne,
+        evidence=evidence,
+        recovered=recovered,
+    )
+
+
+def best_peak_between(
+    sig: np.ndarray,
+    a: int,
+    b: int,
+    min_speed: float,
+    keep_clear_of: Sequence[int] = (),
+    gap_frames: int = 0,
+) -> int | None:
+    """The strongest local maximum of ``sig`` strictly between frames ``a`` and ``b``.
+
+    No prominence test: the caller already knows a hit belongs in this window
+    and is asking where, which is a different question from whether. A
+    candidate still has to be a genuine local maximum -- the flanks of a bigger
+    peak just outside the window do not count -- and must keep the usual
+    refractory distance from the contacts this player already has.
+
+    Args:
+        sig: A swing signal, ``nan`` allowed.
+        a: Frame of the earlier contact; the window opens after it.
+        b: Frame of the later contact; the window closes before it.
+        min_speed: Floor a candidate must reach.
+        keep_clear_of: Frames of this player's existing contacts.
+        gap_frames: Refractory distance from those, in frames.
+
+    Returns:
+        The frame of the best candidate, or ``None`` when nothing qualifies.
+    """
+    sig = np.asarray(sig, dtype=float)
+    lo, hi = int(a) + 1, int(b)
+    if hi - lo < 3 or lo < 1 or hi > sig.shape[0] - 1:
+        return None
+    best: int | None = None
+    for i in range(lo, hi):
+        v = sig[i]
+        if not np.isfinite(v) or v < min_speed:
+            continue
+        if not (v >= sig[i - 1] and v >= sig[i + 1]):
+            continue
+        if any(abs(i - c) < gap_frames for c in keep_clear_of):
+            continue
+        if best is None or v > sig[best]:
+            best = i
+    return best
+
+
+def recover_alternation(
+    first: StrokeSeries,
+    second: StrokeSeries,
+    keypoints: tuple[np.ndarray, np.ndarray],
+    fps: float,
+    racket_hands: tuple[str, str],
+    conf_thr: float,
+    tracks: tuple[object, object] = (None, None),
+    min_speed: float = RECOVERY_MIN_SPEED_BH,
+) -> tuple[StrokeSeries, StrokeSeries]:
+    """Recover the contacts that two players' rhythm says the detector missed.
+
+    Contacts alternate between the two players in a rally, so two in a row by
+    one of them mean the other hit between those two frames. The detector may
+    have missed it -- on a small, foreshortened player the swing signal often
+    stays elevated between hits and never clears the prominence bar -- but it
+    usually still peaks there. This looks for that peak in the window the
+    other player's pair defines, with :data:`RECOVERY_MIN_SPEED_BH` as the only
+    bar, and inserts a contact marked ``recovered`` so that everything
+    downstream knows it rests on weaker evidence than a detection. Where no
+    peak reaches the floor nothing is inserted and the pair stays a question.
+
+    Recovery can only ever split a same-side pair, never create one, so a
+    single pass over the merged sequence is complete.
+
+    Args:
+        first: One player's detected strokes, with their swing signal.
+        second: The other player's.
+        keypoints: The two players' effective keypoints, in the same order.
+        fps: Frames per second.
+        racket_hands: The two players' racket hands, in the same order.
+        conf_thr: Minimum keypoint confidence.
+        tracks: The two players' court tracks, for the zone, or ``None``.
+        min_speed: Floor a recovered swing must reach.
+
+    Returns:
+        New series for the two players, each with its recoveries inserted in
+        frame order. The inputs are not modified.
+    """
+    series = (first, second)
+    gap = max(1, math.ceil(MIN_STROKE_GAP_S * fps))
+    merged = sorted(
+        [(0, s) for s in first.strokes] + [(1, s) for s in second.strokes],
+        key=lambda t: t[1].frame,
+    )
+    added: tuple[list[Stroke], list[Stroke]] = ([], [])
+    for (who_a, x), (who_b, y) in zip(merged[:-1], merged[1:]):
+        if who_a != who_b:
+            continue
+        other = 1 - who_a
+        sig = np.asarray(series[other].signal, dtype=float)
+        if sig.size == 0:
+            continue
+        existing = [s.frame for s in series[other].strokes] + [s.frame for s in added[other]]
+        f = best_peak_between(sig, x.frame, y.frame, min_speed, existing, gap)
+        if f is None:
+            continue
+        added[other].append(
+            describe_contact(
+                keypoints[other],
+                f,
+                racket_hands[other],
+                conf_thr,
+                track=tracks[other],
+                confidence=0.5,
+                evidence=(
+                    f"recovered, not detected: the other player hit at {x.frame / fps:.1f} s "
+                    f"and {y.frame / fps:.1f} s, so a contact belongs between them, and the "
+                    f"swing signal peaks here at {sig[f]:.2f} body heights per second, "
+                    f"under the detection bar of {MIN_PEAK_SPEED_BH}"
+                ),
+                recovered=True,
+            )
+        )
+    out = []
+    for k in (0, 1):
+        strokes = sorted(list(series[k].strokes) + added[k], key=lambda s: s.frame)
+        out.append(StrokeSeries(strokes=strokes, signal=series[k].signal, fps=series[k].fps))
+    return out[0], out[1]
 
 
 def _contact_height(

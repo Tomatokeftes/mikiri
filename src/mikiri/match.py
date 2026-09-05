@@ -107,6 +107,10 @@ ISSUE_SERVICE_COURT = "service_court"
 ISSUE_RECEIVER_COURT = "receiver_court"
 ISSUE_NO_CONTACTS = "no_contacts"
 ISSUE_OPEN_OUTCOME = "open_outcome"
+#: A contact the detector did not find but the other player's rhythm requires,
+#: inserted with the swing signal's own weak peak as its evidence. Raised so
+#: the queue can confirm or reject it: it rests on less than a detection.
+ISSUE_RECOVERED_CONTACT = "recovered_contact"
 
 
 def other_side(side: str) -> str:
@@ -538,6 +542,7 @@ def build_chain(
     for r in chain.rallies:
         _find_serve(r, by_side, confirmations, fps)
         _check_alternation(r, fps)
+        _flag_recovered(r, fps)
     _derive_winners(chain, confirmations, fps)
     _run_scores(chain, score_start)
     return chain
@@ -637,6 +642,34 @@ def _check_alternation(r: Rally, fps: float) -> None:
                 "means the detector missed one on the other side or found one that "
                 "was not there.",
                 side=cur.side,
+            )
+        )
+
+
+def _flag_recovered(r: Rally, fps: float) -> None:
+    """A recovered contact is a question, not a detection.
+
+    It was inserted because the other side hit twice in a row and the swing
+    signal peaks between those two hits, below the detection bar. That is a
+    good reason to believe it and a worse one than seeing it, so the chain
+    keeps it at ``auto`` and asks.
+    """
+    for c in r.contacts:
+        if not getattr(c.stroke, "recovered", False):
+            continue
+        other = other_side(c.side)
+        r.issues.append(
+            Issue(
+                ISSUE_RECOVERED_CONTACT,
+                r.index,
+                c.frame,
+                f"A {c.side}-side contact at {_seconds(c.frame, fps)} was not detected but "
+                f"inferred: the {other} side hit either side of it, so a contact belongs "
+                "between, and the swing there is below the detection bar. Is it a real hit?",
+                c.stroke.evidence
+                or "Contacts alternate between the sides of the net, so two by one side "
+                "mean the other side hit between them.",
+                side=c.side,
             )
         )
 

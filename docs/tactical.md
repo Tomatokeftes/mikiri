@@ -367,9 +367,13 @@ The amended rule opens doors; it does not open all of them.
    the alternation check generating the first review items. *Done with step
    2, because the serve chain needed it:* the other player's contacts come
    from the same detector, and the alternation check produces the
-   double-contact questions. Still open here: the other player's racket
-   hand is assumed right, and no contact can yet be added or removed by
-   hand, which is the queue's job.
+   double-contact questions. The hits a small, foreshortened player's signal
+   is too flat to clear the detector with are recovered from the alternation
+   rule itself, marked as recovered and raised as their own questions
+   (`recovered_contact`); see `docs/match.md`. Still open here: the other
+   player's racket hand is assumed right -- wrong for the far player on the
+   benchmark, and correcting it did not help -- and no contact can yet be
+   added or removed by hand, which is the queue's job.
 4. **The review queue**, which is where this becomes a product rather than a
    pipeline.
 5. **Shot naming** through the three sources, with per-pair confusion reporting.

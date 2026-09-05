@@ -274,20 +274,27 @@ def test_the_rally_chain_reads_winners_off_the_next_serve_and_asks_for_the_last(
     What it must still do underneath that is find contacts on both sides --
     the far player is small and often behind the near one -- and keep the
     double-contact questions to a minority, which is the first measure of
-    whether the two detectors agree. Measured when the points were cut apart:
-    19 near and 27 far contacts, 19 pairs by one side in a row. Slightly
-    fewer than the 22/28/21 seen when the clip was one bout, because contacts
-    falling in the gaps between points are no longer inside a rally. The
-    bound below is set so that getting worse fails and getting better does
-    not.
+    whether the two detectors agree.
+
+    Measured in three stages on this clip. With the points cut apart: 19 near
+    and 27 far contacts, 19 pairs by one side in a row. After a wrist that
+    vanishes and reappears stopped reading as a swing: 19 and 14, with 14
+    pairs -- the far false contacts gone, the far misses exposed. After the
+    alternation rule started recovering the hits a small, foreshortened
+    player's signal is too flat to clear the detector with: 21 and 21, six
+    pairs, nine recovered contacts raised as their own questions, six of them
+    real by eye. The bounds below are set so that getting worse fails and
+    getting better does not.
     """
     s = match_session
     m = s.state()["match"]
     assert m is not None and m["n_rallies"] == 4, m and m.get("note")
     near, far = m["contacts"]["near"], m["contacts"]["far"]
     assert near > 15, near
-    assert far > 8, far
-    assert 0.5 < near / far < 2.0, (near, far)
+    assert far > 12, far
+    # An alternating rally gives each side the same number of hits, give or
+    # take the serve and the last shot. Before recovery this was 19 to 14.
+    assert abs(near - far) <= 4, (near, far)
 
     # Three winners are readable because a serve follows them, and the score
     # walks along with them from a start it does not claim to know.
@@ -302,7 +309,12 @@ def test_the_rally_chain_reads_winners_off_the_next_serve_and_asks_for_the_last(
     assert kinds.count("open_outcome") == 1, "only the last rally has nothing after it"
     assert "no_contacts" not in kinds
     doubles = kinds.count("double_contact")
-    assert doubles <= 0.5 * (near + far), (doubles, near, far)
+    recovered = kinds.count("recovered_contact")
+    assert doubles <= 8, (doubles, near, far)
+    # Recovery is doing work, and it is asking rather than asserting: every
+    # recovered contact is a question the queue can settle.
+    assert 5 <= recovered <= 12, recovered
+    assert doubles + recovered <= 0.5 * (near + far), (doubles, recovered, near, far)
 
 
 def test_moves_are_counted_per_trip_to_a_corner_not_per_run_of_fast_frames(match_session):

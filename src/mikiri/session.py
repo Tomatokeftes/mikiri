@@ -73,7 +73,7 @@ from mikiri.rally import BoutSeries, segment_bouts
 from mikiri.segments import STATE_PLAY
 from mikiri.settings import Settings
 from mikiri.smoothing import apply_corrections, interpolate_joint, smooth_keypoints
-from mikiri.strokes import StrokeSeries, detect_strokes
+from mikiri.strokes import StrokeSeries, detect_strokes, recover_alternation
 from mikiri.strokes import summarise as stroke_summary
 from mikiri.tracking import SIDE_FAR
 from mikiri.video import FrameCache, VideoInfo, VideoReader, fit_size, probe_video
@@ -144,6 +144,7 @@ class ProjectSession:
         self._others: list[OtherPlayer] | None = None
         self._other_tracks: list[CourtTrack | None] | None = None
         self._other_strokes: list[StrokeSeries | None] | None = None
+        self._chain_strokes: tuple[StrokeSeries | None, list[StrokeSeries | None]] | None = None
         self._match: MatchChain | None = None
         self.last_export: dict | None = None
         #: Why camera recovery from the net posts failed, if it did. The court
@@ -360,6 +361,7 @@ class ProjectSession:
         self._footwork = None
         self._other_tracks = None
         self._other_strokes = None
+        self._chain_strokes = None
         self._match = None
 
     def raw_keypoints(self) -> np.ndarray | None:
@@ -821,6 +823,39 @@ class ProjectSession:
         self._other_strokes = out
         return out
 
+    def chain_strokes(self) -> tuple[StrokeSeries | None, list[StrokeSeries | None]]:
+        """The contacts the rally chain runs over: detected, plus recovered.
+
+        :meth:`strokes` and :meth:`other_strokes` are what the detector found,
+        and they are what the biomechanical figures use. The chain knows one
+        thing more -- that contacts alternate between the players -- and
+        :func:`mikiri.strokes.recover_alternation` uses it to find the hits a
+        small, foreshortened player's signal was too flat to clear the
+        detector with. Recovered contacts are marked, carry their weak
+        evidence, and are raised as questions by the chain. The subject's
+        footwork numbers never see them.
+        """
+        if self._chain_strokes is not None:
+            return self._chain_strokes
+        subject = self.strokes()
+        others = list(self.other_strokes())
+        eff = self.effective_keypoints()
+        if subject is not None and eff is not None:
+            for k, (o, track, series) in enumerate(zip(self.others(), self.other_tracks(), others)):
+                if series is None or track is None:
+                    continue
+                subject, others[k] = recover_alternation(
+                    subject,
+                    series,
+                    (eff[0], o.keypoints),
+                    self.info.fps,
+                    (self.project.racket_hand, "right"),
+                    self.project.conf_threshold,
+                    (self.court_track(), track),
+                )
+        self._chain_strokes = (subject, others)
+        return self._chain_strokes
+
     def rallies(self) -> BoutSeries | None:
         """Bouts of play by *either* side: the rallies the chain runs over.
 
@@ -836,10 +871,9 @@ class ProjectSession:
         track = self.court_track()
         if track is None:
             return None
-        others = [
-            (t, s) for t, s in zip(self.other_tracks(), self.other_strokes()) if t is not None
-        ]
-        return segment_bouts(track, self.strokes(), play_mask=self.play_mask(), others=others)
+        subject, other_series = self.chain_strokes()
+        others = [(t, s) for t, s in zip(self.other_tracks(), other_series) if t is not None]
+        return segment_bouts(track, subject, play_mask=self.play_mask(), others=others)
 
     def match(self) -> MatchChain | None:
         """The rally chain, or ``None`` without a court and a player on each side."""
@@ -849,9 +883,10 @@ class ProjectSession:
         rallies = self.rallies()
         if track is None or rallies is None or self.subject_side is None:
             return None
-        players = [SidePlayer(self.subject_side, 0, self.strokes(), track)]
+        subject, other_series = self.chain_strokes()
+        players = [SidePlayer(self.subject_side, 0, subject, track)]
         for k, (o, ot, os) in enumerate(
-            zip(self.others(), self.other_tracks(), self.other_strokes()), start=1
+            zip(self.others(), self.other_tracks(), other_series), start=1
         ):
             if o.side is not None and ot is not None:
                 players.append(SidePlayer(o.side, k, os, ot))

@@ -12,6 +12,8 @@
       "fps": 29.97,
       "frames": 1199,
       "duration_s": 40.0,
+      "racket_hands": {"near": "right", "far": "left"},
+      "racket_hands_note": "Read by eye from full-resolution crops at the contacts on 2026-09-05: the near player's racket goes up on his right (frames 101, 202, 343); the far player holds it in the hand on camera-right seen from the front, his left (frames 148, 395, 425, 455). The far player is the left-hander, Lin Dan. Detecting the far player as a left-hander did not raise his contact count (16 -> 13): his misses are prominence failures on a small, foreshortened swing, not the wrong arm.",
       "multi_point": true,
       "multi_point_note": "Described as a single rally until 2026-09-05, and it is not one. This is a 40 s crop of lindan_source, whose between-point intervals are already cut, so it holds four points separated by two to six seconds of walking back and serving -- visible at frames 640 to 740, where both players stand at rest. Clip segmentation finds four stretches of play (9.4, 10.5, 3.3 and 5.9 s) and bouts take their boundaries from it.",
       "guards": [

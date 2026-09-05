@@ -183,9 +183,20 @@ Known gaps:
   clip gets the subject alone. Doubles is not: a side holds one tracker, and
   telling partners apart within a side needs appearance and continuity that
   nothing here has. The other player's contacts are detected with the racket
-  hand assumed right, and their movement and contacts extend the rallies
-  the chain runs over (`session.rallies()`); the footwork figures and the
-  bouts panel are still the subject's alone, on purpose. No contact can yet
+  hand assumed right. On `lindan_rally` that assumption is wrong -- the far
+  player is the left-hander, read by eye from full-resolution crops and
+  recorded in the manifest -- and correcting it did not help: his contact
+  count fell from 16 to 13. His misses are prominence failures on a small,
+  foreshortened swing whose signal never drops far enough between hits, not
+  the wrong arm. The alternation rule now recovers those hits
+  (`strokes.recover_alternation`): contacts come out 21 a side and the
+  double-contact questions fall from fourteen to six, with nine recovered
+  contacts raised as their own questions, six of them real by eye. The three
+  that are not coincide with the other player mid-swing -- a timing error on
+  that side -- and no signal-level rule separated them when tried, so they
+  stay questions. Their movement and contacts extend the rallies the chain runs
+  over (`session.rallies()`); the footwork figures and the bouts panel are
+  still the subject's alone, on purpose. No contact can yet
   be added, moved or removed by hand, on either side, and the questions the
   chain raises are listed but not yet asked one at a time: that is the
   review queue, step 4.

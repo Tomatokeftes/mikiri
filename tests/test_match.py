@@ -410,3 +410,31 @@ def test_the_summary_is_json_ready_and_carries_provenance_on_every_fact():
         for name in ("server", "service_court", "receiver_court", "winner", "score_before"):
             assert set(r[name]) == {"value", "how", "evidence"}
     assert [i["kind"] for i in summary["issues"]] == [ISSUE_OPEN_OUTCOME]
+
+
+def test_a_recovered_contact_is_asked_about_instead_of_the_pair_it_explains():
+    """A recovered contact splits the double it explains, and becomes the question.
+
+    It rests on the other side's rhythm plus a weak swing, which is a good
+    reason to believe it and a worse one than seeing it. So the chain keeps
+    it at auto and asks about it, rather than asking about the pair.
+    """
+    from mikiri.match import ISSUE_RECOVERED_CONTACT
+
+    bouts, players = scripted(CONSISTENT)
+    far = players[1].strokes
+    assert far is not None
+    dropped = far.strokes.pop(1)
+    recovered = _stroke(dropped.frame)
+    recovered.recovered = True
+    recovered.confidence = 0.5
+    recovered.evidence = "recovered, not detected: a test"
+    far.strokes.insert(1, recovered)
+
+    chain = build_chain(bouts, players, FPS)
+    assert _issues(chain, ISSUE_DOUBLE_CONTACT) == []
+    got = _issues(chain, ISSUE_RECOVERED_CONTACT)
+    assert len(got) == 1
+    assert got[0].frame == dropped.frame and got[0].side == players[1].side
+    assert "not detected but inferred" in got[0].question
+    assert got[0].detail == recovered.evidence

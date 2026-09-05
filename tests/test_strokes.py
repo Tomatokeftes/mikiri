@@ -599,3 +599,63 @@ def test_side_is_unknown_inside_the_dead_band():
     ):
         kp[KP["right_wrist"], 0] = midline + t * half
         assert _side(kp, "right", 0.3)[0] == expect, t
+
+
+# --- recovering what the other player's rhythm requires ---------------------------
+
+
+def test_best_peak_between_picks_the_highest_local_maximum_above_the_floor():
+    """No prominence test, but a genuine maximum, inside an open window."""
+    from mikiri.strokes import best_peak_between
+
+    sig = np.full(100, 0.3)
+    sig[40:43] = [0.9, 1.0, 0.9]  # a real bump
+    sig[60] = 0.8  # a smaller one
+    sig[70] = 0.5  # under the floor
+    assert best_peak_between(sig, 20, 80, 0.75) == 41
+    assert best_peak_between(sig, 45, 80, 0.75) == 60
+    assert best_peak_between(sig, 62, 80, 0.75) is None
+    # The window is open at both ends: the flanking contacts are not candidates.
+    assert best_peak_between(sig, 41, 42, 0.75) is None
+    # And it keeps the refractory distance from the player's own contacts.
+    assert best_peak_between(sig, 20, 80, 0.75, keep_clear_of=[43], gap_frames=5) == 60
+
+
+def test_a_hit_the_other_players_rhythm_requires_is_recovered_with_its_evidence():
+    """Guards the far-player misses on the Lin Dan clip.
+
+    Two contacts in a row by one player mean the other hit between them. On a
+    small, foreshortened player the swing is there but never clears the
+    prominence bar, so the detector says nothing. Given the window, the peak
+    is enough -- and the result is marked as inferred, not detected.
+    """
+    from mikiri.strokes import recover_alternation
+
+    n = 120
+    a_kp = _add_swing(_add_swing(_pose(n), at=30), at=90)
+    a = detect_strokes(a_kp, FPS)
+    assert len(a.strokes) == 2
+    weak = np.full(n, 0.2)
+    weak[58:63] = [0.6, 0.85, 0.95, 0.85, 0.6]  # a swing under the detection bar
+    b = StrokeSeries(strokes=[], signal=weak, fps=FPS)
+
+    a2, b2 = recover_alternation(a, b, (a_kp, _pose(n)), FPS, ("right", "right"), 0.3)
+    assert [s.frame for s in a2.strokes] == [s.frame for s in a.strokes]
+    assert len(b2.strokes) == 1
+    got = b2.strokes[0]
+    assert got.frame == 60 and got.recovered
+    assert "recovered" in got.evidence and "0.95" in got.evidence
+    assert got.confidence <= 0.5
+    assert b.strokes == [], "the input series is not modified"
+
+
+def test_nothing_is_recovered_when_the_other_signal_is_flat():
+    """The pair stays a question rather than getting an invented answer."""
+    from mikiri.strokes import recover_alternation
+
+    n = 120
+    a_kp = _add_swing(_add_swing(_pose(n), at=30), at=90)
+    a = detect_strokes(a_kp, FPS)
+    b = StrokeSeries(strokes=[], signal=np.full(n, 0.2), fps=FPS)
+    _, b2 = recover_alternation(a, b, (a_kp, _pose(n)), FPS, ("right", "right"), 0.3)
+    assert b2.strokes == []

@@ -105,6 +105,22 @@ rather than one at every serve after.
   and the receiver's court, which must be diagonally opposite the server's --
   in each player's own frame, the court of the same name. Neither catches all
   of them. The ones that slip through are exactly why the queue exists.
+* **A missed contact.** Two in a row by one side mean the other side hit
+  between them, and on a small, foreshortened player the swing the detector's
+  prominence bar rejected usually still peaks there: his signal never drops
+  far enough between hits to clear the bar, but it does rise. So
+  `strokes.recover_alternation` looks for that peak in the window the pair
+  defines, with a floor of 0.75 body heights per second and no prominence
+  test, and inserts the contact marked as recovered. It stays `auto`, and the
+  chain asks about it (`recovered_contact`) instead of about the pair. On the
+  Lin Dan clip this took the double-contact questions from fourteen to six and
+  the contacts to 21 a side, which is what an alternating rally has to give.
+  Of the nine recoveries, six are real hits by eye and three are not; in each
+  of the three the *pair's* side was itself mid-swing at that frame, so the
+  double was a timing error on that side -- a wind-up or a wrist dropout at
+  the peak -- rather than a missed hit on the other. No signal-level rule
+  separated the two cases when one was tried, so they are left to the queue:
+  a recovered contact is a proposed answer with a frame, not a fact.
 
 ## Sides own events, players are an attribution
 
