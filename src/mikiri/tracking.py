@@ -33,6 +33,7 @@ from dataclasses import asdict, dataclass
 
 import cv2
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from mikiri.court import COURT_LENGTH, DOUBLES_WIDTH, NET_Y, court_to_image
 from mikiri.keypoints import KP, N_KEYPOINTS, keypoints_bbox
@@ -309,6 +310,10 @@ class FrameMeta:
     #: claim about whether a player was there. Nothing downstream may read a
     #: skipped frame as evidence of absence.
     skipped: bool = False
+    #: True when a partner's box lay over this one, so which of the two this
+    #: pose belongs to rests on continuity alone. Doubles only; nothing that
+    #: attributes a contact to one partner may do so on such a frame.
+    ambiguous: bool = False
 
     def to_dict(self) -> dict:
         """Plain dict."""
@@ -357,6 +362,10 @@ class PersonTracker:
         self.last_det_idx: int | None = None
         self.last_score: float = 1.0
         self.n_lost = 0
+        #: Where the box's centre was on the previous confident frame, so a
+        #: partner tracker can be told where this one is heading when the
+        #: two boxes lie over each other and position alone says nothing.
+        self.prev_centre: np.ndarray | None = None
 
     def start(
         self, frame: np.ndarray, click: tuple[float, float] | None = None, frame_index: int = 0
@@ -403,7 +412,17 @@ class PersonTracker:
         self.last_det_idx = frame_index
         self.last_score = 1.0
         self.n_lost = 0
+        self.prev_centre = None
         return target
+
+    def predicted_centre(self) -> np.ndarray | None:
+        """Where the box's centre should be next, by constant velocity, or ``None`` boxless."""
+        if self.bbox is None:
+            return None
+        centre = _center(self.bbox)
+        if self.prev_centre is None:
+            return centre
+        return centre + (centre - self.prev_centre)
 
     def _on_court(self, people: list[Detection]) -> list[Detection]:
         """Drop anyone whose feet are not on the court, unless that leaves nobody.
@@ -550,6 +569,7 @@ class PersonTracker:
                     or (candidate[3] - candidate[1]) >= 0.4 * (self.bbox[3] - self.bbox[1])
                 )
                 if plausible:
+                    self.prev_centre = None if self.bbox is None else _center(self.bbox)
                     self.bbox = candidate
             self.n_lost = 0
         else:
@@ -588,16 +608,34 @@ class PersonTracker:
         return self.absorb(self.pick(result.people, w, h), w, h, frame_index, detected)
 
 
+#: Overlap at which two partners' boxes are one box for the purpose of
+#: telling them apart: above it a pose in either belongs to either.
+AMBIGUOUS_IOU = 0.5
+#: Cost of a pairing the assignment must not make.
+_FORBIDDEN = 1e6
+
+
 class PlayersTracker:
     """One :class:`PersonTracker` per player, sharing each detector and pose call.
 
     The subject -- the clicked person, or the largest -- is tracker 0 and is
-    always present. Every other side of the net in ``sides`` gets a tracker of
-    its own, seeded with the largest person standing on that side, which is
-    what singles needs; doubles will seed two per side and tell them apart
-    within it. A side nobody stands on in the first frame still gets a tracker,
-    which finds its player when one appears, because a player who walks on
-    late is the normal case on a raw recording.
+    always present. Every side of the net in ``sides`` gets ``per_side``
+    trackers, the subject counting toward its own side's quota, each seeded
+    with the largest person on that side not already claimed. A side nobody
+    stands on in the first frame still gets its trackers, which find their
+    players when they appear, because a player who walks on late is the
+    normal case on a raw recording.
+
+    Within a side the trackers are assigned their detections jointly, so two
+    of them can never hold the same person, and by continuity -- overlap with
+    the box each had, and distance from where each was heading -- because
+    partners cross and swap halves constantly and the side constraint says
+    nothing about which of them is which. When two partners' boxes lie over
+    each other the frame is marked ambiguous on both, and nothing downstream
+    attributes a contact to either of them on it. Appearance is not used yet:
+    partners in matching kit are exactly the case where it would not help,
+    and the ambiguity flag is the honest answer until something better is
+    measured.
 
     Sharing the calls matters on a CPU: the detector is the expensive stage,
     and RTMPose takes all the boxes of one frame in one call.
@@ -608,11 +646,13 @@ class PlayersTracker:
         backend: PoseBackend,
         homography: np.ndarray | None = None,
         sides: tuple[str, ...] = SIDES,
+        per_side: int = 1,
         **tracker_kwargs: object,
     ) -> None:
         self.backend = backend
         self.homography = None if homography is None else np.asarray(homography, dtype=float)
         self.sides = tuple(sides)
+        self.per_side = max(1, int(per_side))
         self.kwargs = dict(tracker_kwargs)
         self.trackers: list[PersonTracker] = []
 
@@ -640,26 +680,128 @@ class PlayersTracker:
             # click, or feet on the horizon -- because "the other side" has no
             # meaning until the subject has one.
             return chosen
+        claimed = [] if subject.bbox is None else [subject.bbox]
         for side in self.sides:
-            if side == subject.side:
-                continue
-            other = self._new(side)
-            chosen.append(other.start_from(people, None, frame.shape, frame_index))
-            self.trackers.append(other)
+            need = self.per_side - (1 if side == subject.side else 0)
+            for _ in range(max(0, need)):
+                other = self._new(side)
+                # The next largest person on the side who is not already
+                # somebody's: a partner is never the same box twice.
+                free = [
+                    d
+                    for d in people
+                    if not any(iou(np.asarray(d.bbox)[:4], b) > AMBIGUOUS_IOU for b in claimed)
+                ]
+                chosen.append(other.start_from(free, None, frame.shape, frame_index))
+                if other.bbox is not None:
+                    claimed.append(other.bbox)
+                self.trackers.append(other)
         return chosen
+
+    def _groups(self) -> list[list[int]]:
+        """Tracker indices grouped by side; a tracker without a side is a group of one."""
+        groups: dict[str, list[int]] = {}
+        alone: list[list[int]] = []
+        for k, t in enumerate(self.trackers):
+            if t.side is None:
+                alone.append([k])
+            else:
+                groups.setdefault(t.side, []).append(k)
+        return list(groups.values()) + alone
+
+    def _assign(
+        self, trackers: list[PersonTracker], dets: list[Detection], width: int, height: int
+    ) -> list[Detection | None]:
+        """Give each tracker of one side its own detection, or none.
+
+        A tracker with a box pays for the overlap it loses and for the
+        distance between where it was heading and where the detection is;
+        a boxless one takes what is left, preferring someone between the
+        lines and larger. Pairings that neither overlap nor lie within the
+        distance a player moves between detections are never made.
+        """
+        if not dets or not trackers:
+            return [None] * len(trackers)
+        cost = np.full((len(trackers), len(dets)), _FORBIDDEN, dtype=float)
+        max_area = max(d.area() for d in dets) or 1.0
+        geometry = trackers[0].geometry
+        for i, t in enumerate(trackers):
+            for j, d in enumerate(dets):
+                box = np.asarray(d.bbox, dtype=float)[:4]
+                if t.bbox is None:
+                    inside = geometry is None or geometry.inside_lines(foot_point(box))
+                    cost[i, j] = 2.0 + (0.0 if inside else 0.5) + (1.0 - d.area() / max_area)
+                    continue
+                overlap = iou(box, t.bbox)
+                heading = t.predicted_centre()
+                dist = float(np.hypot(*(d.center() - heading))) if heading is not None else 0.0
+                limit = max(0.75 * _diag(t.bbox), 0.25 * height)
+                if overlap < t.match_iou and dist >= limit:
+                    continue
+                cost[i, j] = (1.0 - overlap) + dist / limit
+        rows, cols = linear_sum_assignment(cost)
+        out: list[Detection | None] = [None] * len(trackers)
+        for i, j in zip(rows, cols):
+            if cost[i, j] < _FORBIDDEN:
+                out[i] = dets[j]
+        return out
+
+    def _redetect_group(
+        self,
+        trackers: list[PersonTracker],
+        people: list[Detection],
+        width: int,
+        height: int,
+        frame_index: int,
+    ) -> list[bool]:
+        """Re-anchor every tracker of one side on its own detection."""
+        candidates = trackers[0]._candidates(people)
+        hits = []
+        for t, d in zip(trackers, self._assign(trackers, candidates, width, height)):
+            t.last_det_idx = frame_index
+            box = sanitize_bbox(d.bbox, width, height) if d is not None else None
+            if box is not None:
+                t.bbox = box
+            hits.append(box is not None)
+        return hits
 
     def step(self, frame: np.ndarray, frame_index: int) -> list[tuple[np.ndarray, FrameMeta]]:
         """Estimate every target's keypoints in ``frame``, in tracker order."""
         h, w = frame.shape[:2]
-        detected = [False] * len(self.trackers)
+        n = len(self.trackers)
+        detected = [False] * n
+        groups = self._groups()
         if any(t.due(frame_index) for t in self.trackers):
             people = self.backend.detect_people(frame, frame_index=frame_index)
-            for k, t in enumerate(self.trackers):
-                detected[k] = t.redetect(people, w, h, frame_index)
+            for group in groups:
+                if len(group) == 1:
+                    k = group[0]
+                    detected[k] = self.trackers[k].redetect(people, w, h, frame_index)
+                else:
+                    members = [self.trackers[k] for k in group]
+                    hits = self._redetect_group(members, people, w, h, frame_index)
+                    for k, hit in zip(group, hits):
+                        detected[k] = hit
         boxes = [t.bbox for t in self.trackers if t.bbox is not None]
         result = self.backend.estimate(frame, boxes or None, frame_index=frame_index)
-        out = []
-        for k, t in enumerate(self.trackers):
-            person = t.pick(result.people, w, h)
-            out.append(t.absorb(person, w, h, frame_index, detected[k]))
-        return out
+        out: list[tuple[np.ndarray, FrameMeta] | None] = [None] * n
+        for group in groups:
+            if len(group) == 1:
+                k = group[0]
+                t = self.trackers[k]
+                out[k] = t.absorb(t.pick(result.people, w, h), w, h, frame_index, detected[k])
+                continue
+            members = [self.trackers[k] for k in group]
+            people = members[0]._on_side(result.people)
+            picks = self._assign(members, people, w, h)
+            for k, t, person in zip(group, members, picks):
+                out[k] = t.absorb(person, w, h, frame_index, detected[k])
+            # Partners whose boxes lie over one another cannot be told apart
+            # by where they are; say so on both, this frame.
+            for a in range(len(members)):
+                for b in range(a + 1, len(members)):
+                    ba, bb = members[a].bbox, members[b].bbox
+                    if ba is not None and bb is not None and iou(ba, bb) > AMBIGUOUS_IOU:
+                        out[group[a]][1].ambiguous = True
+                        out[group[b]][1].ambiguous = True
+        return [pair for pair in out if pair is not None]

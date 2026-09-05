@@ -642,7 +642,7 @@ function renderAll() {
   if (!S.state) return;
   renderInfo(); renderTrim(); renderEvents(); renderOptions();
   renderVideo(); renderTimeline(); renderPlots(); renderCourt();
-  renderStrokes(); renderRallies(); renderMatch(); renderReview(); renderTactics(); renderTrends(); renderCoaching(); renderCameraView();
+  renderStrokes(); renderRallies(); renderMatch(); renderReview(); renderTactics(); renderDoubles(); renderTrends(); renderCoaching(); renderCameraView();
 }
 
 async function refreshTabs() {
@@ -779,6 +779,8 @@ async function openRunModal() {
   // The other player is told apart by which side of the net they stand on, so without a court there is nothing to track them by.
   const hasCourt = !!(S.state.court && S.state.court.image_points && S.state.court.image_points.length >= 4);
   const both = $('#run-both'); both.disabled = !hasCourt; both.checked = hasCourt;
+  const doubles = $('#run-doubles'); doubles.disabled = !hasCourt; doubles.checked = false;
+  both.onchange = () => { doubles.disabled = !both.checked; if (!both.checked) doubles.checked = false; };
   $('#run-both-hint').textContent = hasCourt ? 'The other player is told apart by which side of the net they stand on.' : 'Needs the court calibration: the other player is told apart by which side of the net they stand on.';
   try {
     const ms = await api('GET', '/api/models/status');
@@ -806,7 +808,7 @@ async function startRun(selectPoint) {
   $('#job-box').classList.remove('hidden'); $('#run-cancel-job').classList.remove('hidden'); $('#run-largest').disabled = true;
   $('#select-canvas').onclick = null;
   try {
-    const { job_id } = await api('POST', `/api/projects/${S.pid}/run`, { select_point: selectPoint, players: $('#run-both').checked ? 2 : 1 });
+    const { job_id } = await api('POST', `/api/projects/${S.pid}/run`, { select_point: selectPoint, players: $('#run-both').checked ? ($('#run-doubles').checked ? 4 : 2) : 1 });
     $('#run-cancel-job').onclick = () => api('POST', `/api/jobs/${job_id}/cancel`);
     const job = await pollJob(job_id, (j) => {
       const bar = $('#job-progress');
@@ -1161,6 +1163,40 @@ function renderTactics() {
   if (!t.score_is_absolute) notes.push('Points are those won in this clip; the score at its start is not known.');
   notes.push('Not measured: ' + (t.not_measured || []).join('; ') + '.');
   $('#tactics-note').textContent = notes.join(' ');
+}
+
+// Formation, for each side with two tracked partners: the shape shares,
+// the seam between the partners, and how the pair answered its own shots.
+// Shares are withheld under the module's minimums, with the note saying so.
+function renderDoubles() {
+  const panel = $('#doubles-panel');
+  const d = S.state && S.state.doubles;
+  const has = !!(d && d.sides && Object.keys(d.sides).length);
+  panel.classList.toggle('hidden', !has);
+  if (!has) return;
+  const kv = (k, v) => `<span class="k">${k}</span><span>${v}</span>`;
+  const pct = (x) => `${Math.round(100 * x)}%`;
+  const blocks = [];
+  for (const [side, s] of Object.entries(d.sides)) {
+    const label = side === d.you ? `${side} (you)` : side;
+    const lines = [];
+    if (s.note && !s.counts) { blocks.push(`<div class="panel-title">${label}</div><div class="footwork">${kv('', s.note)}</div>`); continue; }
+    lines.push(kv('located', `${s.located_s} s of ${s.play_s} s of play`));
+    if (s.shares) lines.push(kv('shape', Object.entries(s.shares).map(([k, v]) => `${k} ${pct(v)}`).join(', ')));
+    else lines.push(kv('shape', `${Object.entries(s.counts || {}).map(([k, v]) => `${k} ${v}`).join(', ')} frames <span class="muted small-text">${s.note || ''}</span>`));
+    if (s.separation_median_m != null) lines.push(kv('apart', `${s.separation_median_m} m median; within 1.5 m of each other ${pct(s.crowded_share || 0)} of the time`));
+    const r = s.response || {};
+    lines.push(kv('own shots', `${r.n_judged || 0} judged (${(r.by_basis || {}).name || 0} by name, ${(r.by_basis || {}).height || 0} by contact height), ${r.n_unjudged || 0} not`));
+    if (r.wrong_shape_share != null) {
+      lines.push(kv('wrong shape after', `${pct(r.wrong_shape_share)} of the time <span class="muted small-text">(${r.how || 'withheld'})</span>`));
+      if (r.rotation_median_s != null) lines.push(kv('time to right shape', `${r.rotation_median_s} s median, reached after ${r.reached} of ${r.n_judged}`));
+    } else if (r.note) {
+      lines.push(kv('', `<span class="muted small-text">${r.note}</span>`));
+    }
+    blocks.push(`<div class="panel-title">${label}</div><div class="footwork">${lines.join('')}</div>`);
+  }
+  $('#doubles-sides').innerHTML = blocks.join('');
+  $('#doubles-note').textContent = 'After a lift the pair should be side-by-side, after a downward shot front-and-back; the direction comes from the shot name where there is one and from an underarm contact otherwise. Not measured: ' + (d.not_measured || []).join('; ') + '.';
 }
 
 // Over time: this clip against the same player's kept sessions. A metric

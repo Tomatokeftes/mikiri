@@ -407,7 +407,13 @@ The amended rule opens doors; it does not open all of them.
    panel, with the coaching comparator's movement figures under them.
 7. **Doubles**: player attribution within a side, then the formation pack,
    which needs no classifier and may well land before singles shot naming is
-   any good.
+   any good. *Started:* two trackers a side, assigned their detections
+   jointly and by continuity, with the frames where partners overlap marked
+   ambiguous; partners' swings at one shuttle folded into one contact for
+   the side; and the formation pack -- shape shares, the seam, and the
+   pair's answer to its own shots -- in `doubles.py` and a Formation panel
+   (`docs/doubles.md`). Attribution within a side is not done, and nothing
+   has seen real doubles footage yet.
 
 Steps 1 to 3 are shared infrastructure. Step 7 is a phase, not a rewrite,
 provided the data model of the first three treats the side as the owner of

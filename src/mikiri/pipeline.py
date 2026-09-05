@@ -89,10 +89,11 @@ class RunRequest:
     #: which is the identity constraint for both the subject and anyone else
     #: tracked. ``None`` without a calibration.
     homography: list[list[float]] | None = None
-    #: How many people to track: one, the subject alone, or two, the subject
-    #: and whoever stands on the other side of the net. Two needs the
-    #: homography, because the other player is identified by side and nothing
-    #: else, and the pipeline refuses rather than guessing.
+    #: How many people to track: one, the subject alone; two, the subject and
+    #: whoever stands on the other side of the net; or four, two on each side
+    #: for doubles. More than one needs the homography, because the others
+    #: are identified by side and nothing else, and the pipeline refuses
+    #: rather than guessing.
     players: int = 1
 
     def key(self, backend_key: str) -> str:
@@ -484,6 +485,7 @@ def _build_tracker(backend: PoseBackend, req: RunRequest, scale: float) -> Playe
         backend,
         homography=homography,
         sides=SIDES if req.players > 1 else (),
+        per_side=2 if req.players >= 4 else 1,
         det_every=req.det_every,
         conf_thr=req.conf_threshold,
         court_polygon=polygon,

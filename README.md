@@ -38,8 +38,11 @@ The browser opens at `http://127.0.0.1:8765`. Then:
    person"). The first run downloads the models (about 150 MB) and tells you
    where from. Progress bar and Cancel are in the dialog. Once the court is
    calibrated the dialog also offers the player at the other end: they are
-   told apart by which side of the net they stand on, drawn in grey on the
-   video and on the court map, and nothing is measured from them yet.
+   told apart by which side of the net they stand on and drawn in grey on
+   the video and the court map, and their contacts feed the rally chain. For
+   doubles tick "Two players on each side": partners are told apart by
+   continuity, and the frames where they overlap are marked rather than
+   guessed.
 4. **Scrub**: <kbd>Left</kbd>/<kbd>Right</kbd> one frame,
    <kbd>Shift</kbd>+arrows ten frames, <kbd>Space</kbd> play/pause at 0.1x to
    1x. Click any plot or the timeline to jump.
@@ -220,6 +223,27 @@ diagonally opposite. Where the rules are broken it asks a question instead of
 stating a result, and every fact it does state says whether you confirmed it,
 the rules derived it, or a detector guessed it. A result is never stated on
 guesses alone. [docs/match.md](docs/match.md).
+
+### What was played, and over time
+
+From the chain, a Tactics panel gives rally lengths and, per side, the shot
+mix, the points split by who hit last, and the serve; a percentage is shown
+only above a minimum count, and every figure says how it was known. Saving
+the project keeps the session, grouped by the player label in the project
+options, and the Over time panel reads the open clip against the same
+player's earlier ones -- the tactical figures and the movement figures the
+coaching module follows -- withholding a trend that rests on one session.
+[docs/tactics.md](docs/tactics.md).
+
+### Doubles
+
+With two players tracked on a side, a Formation panel gives the shape the
+pair holds -- side-by-side, front-and-back, or between -- from the line
+between the partners, the distance between them, and whether the pair took
+the right shape after its own shots: side-by-side after a lift,
+front-and-back after a downward shot. It needs no idea of which partner is
+which, and no shot is attributed to one partner yet. Nothing here has seen
+real doubles footage; [docs/doubles.md](docs/doubles.md) says what has.
 
 ## Filming guidelines
 

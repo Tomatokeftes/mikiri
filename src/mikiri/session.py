@@ -37,6 +37,7 @@ from mikiri.court import (
     preset_points,
     recover_camera,
 )
+from mikiri.doubles import doubles_summary
 from mikiri.events import EventSuggestion, flight_time_s
 from mikiri.export import ExportInputs, ExportOptions, export_pack
 from mikiri.footwork import FootworkSeries, analyse_split_steps
@@ -65,6 +66,7 @@ from mikiri.match import (
     MatchChain,
     SidePlayer,
     build_chain,
+    gather_contacts,
     review_items,
 )
 from mikiri.movements import (
@@ -879,7 +881,10 @@ class ProjectSession:
         subject = self.strokes()
         others = list(self.other_strokes())
         eff = self.effective_keypoints()
-        if subject is not None and eff is not None:
+        # Recovery reasons from one player on each side taking turns. With a
+        # partner on either side a missing hit may be the partner's, so the
+        # rule has nothing to say and recovery is left out of doubles.
+        if subject is not None and eff is not None and len(others) == 1:
             for k, (o, track, series) in enumerate(zip(self.others(), self.other_tracks(), others)):
                 if series is None or track is None:
                     continue
@@ -1054,14 +1059,16 @@ class ProjectSession:
         others = [(t, s) for t, s in zip(self.other_tracks(), other_series) if t is not None]
         return segment_bouts(track, subject, play_mask=self.play_mask(), others=others)
 
-    def match(self) -> MatchChain | None:
-        """The rally chain, or ``None`` without a court and a player on each side."""
-        if self._match is not None:
-            return self._match
+    def side_players(self) -> list[SidePlayer]:
+        """Every tracked player as the chain sees them, the subject first.
+
+        Empty without a court or a side for the subject; a player without a
+        side or a track is left out, since the chain has nothing to hang
+        them on.
+        """
         track = self.court_track()
-        rallies = self.rallies()
-        if track is None or rallies is None or self.subject_side is None:
-            return None
+        if track is None or self.subject_side is None:
+            return []
         subject, other_series = self.chain_strokes()
         players = [SidePlayer(self.subject_side, 0, subject, track)]
         for k, (o, ot, os) in enumerate(
@@ -1069,7 +1076,36 @@ class ProjectSession:
         ):
             if o.side is not None and ot is not None:
                 players.append(SidePlayer(o.side, k, os, ot))
-        if len({p.side for p in players}) < 2:
+        return players
+
+    def doubles(self) -> dict | None:
+        """Formation and its fit to the pair's own shots, for each side with two tracks.
+
+        ``None`` unless the run tracked two people on at least one side. The
+        contacts are the chain's -- partners' swings at one shuttle already
+        merged into one contact for the side -- and the frames are the pose
+        array's.
+        """
+        players = self.side_players()
+        if not players:
+            return None
+        sides: dict[str, list] = {}
+        for p in players:
+            sides.setdefault(p.side, []).append(p.track)
+        if all(len(t) < 2 for t in sides.values()):
+            return None
+        contacts = gather_contacts(players, self.info.fps)
+        return doubles_summary(
+            sides, contacts, self.info.fps, play_mask=self.play_mask(), you=self.subject_side
+        )
+
+    def match(self) -> MatchChain | None:
+        """The rally chain, or ``None`` without a court and a player on each side."""
+        if self._match is not None:
+            return self._match
+        rallies = self.rallies()
+        players = self.side_players()
+        if rallies is None or not players or len({p.side for p in players}) < 2:
             return None
         review = self.project.match_review
         start = self.pose_start
@@ -1645,6 +1681,8 @@ class ProjectSession:
         player is identified by side and by nothing else.
         """
         H = self.homography()
+        if players not in (1, 2, 4):
+            raise ValueError("players must be 1, 2 (singles) or 4 (doubles)")
         if players > 1 and H is None:
             raise ValueError(
                 "calibrate the court before tracking both players: the other player is "
@@ -1765,6 +1803,7 @@ class ProjectSession:
             "review": self.review_queue(),
             "tagging": self.tagging(),
             "tactics": self.tactics(),
+            "doubles": self.doubles(),
             "trends": self.trends(),
             "player": p.player,
             "split_steps": self.footwork_summary(),
@@ -1948,6 +1987,7 @@ class ProjectSession:
             split_steps=self.footwork_summary(),
             match=self.match_summary(),
             tactics=self.tactics(),
+            doubles=self.doubles(),
         )
 
         def progress(frac: float, msg: str) -> None:

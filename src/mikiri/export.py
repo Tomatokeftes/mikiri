@@ -75,6 +75,8 @@ class ExportInputs:
     match: dict | None = None
     #: What each side played and whether it worked, from :mod:`mikiri.tactics`.
     tactics: dict | None = None
+    #: Formation per side with two tracked partners, from :mod:`mikiri.doubles`.
+    doubles: dict | None = None
 
 
 def _pct(x: float | None) -> str:
@@ -151,6 +153,63 @@ def _tactics_lines(t: dict) -> list[str]:
             + (f"; {sv['note']}" if sv.get("note") else "")
             + f" | {sv.get('how') or 'withheld'} |"
         )
+        lines.append("")
+    return lines
+
+
+def _doubles_lines(d: dict) -> list[str]:
+    """The formation section: shape shares, the seam, and the answer to the pair's own shots."""
+    lines = ["## Formation", ""]
+    lines.append(
+        "The shape of a pair is the angle of the line between the partners: within thirty "
+        "degrees of the net is side-by-side, beyond sixty is front-and-back, and between is "
+        "the shape held while rotating. After a lift the pair should be side-by-side, after a "
+        "downward shot front-and-back; a shot whose direction is not known is counted and "
+        "not judged. Not measured: " + "; ".join(d.get("not_measured", [])) + "."
+    )
+    lines.append("")
+    for side, s in (d.get("sides") or {}).items():
+        who = f"{side.capitalize()} side" + (" (you)" if side == d.get("you") else "")
+        lines.append(f"### {who}")
+        lines.append("")
+        if "note" in s and "counts" not in s:
+            lines.append(s["note"])
+            lines.append("")
+            continue
+        lines.append("| Measure | Value |")
+        lines.append("|---|---|")
+        lines.append(f"| Located play | {s.get('located_s', 0)} s of {s.get('play_s', 0)} s |")
+        shares = s.get("shares")
+        if shares:
+            shown = ", ".join(f"{k} {round(100 * v)}%" for k, v in shares.items())
+        else:
+            shown = (
+                _counts(s.get("counts")) + " frames" + (f"; {s['note']}" if s.get("note") else "")
+            )
+        lines.append(f"| Shape | {shown} |")
+        if s.get("separation_median_m") is not None:
+            lines.append(
+                f"| Distance between partners, median | {s['separation_median_m']} m; within "
+                f"{1.5:g} m of each other {round(100 * s.get('crowded_share', 0))}% of the time |"
+            )
+        r = s.get("response") or {}
+        judged = (
+            f"{r.get('n_judged', 0)} judged ({r.get('by_basis', {}).get('name', 0)} by shot name, "
+            f"{r.get('by_basis', {}).get('height', 0)} by contact height), {r.get('n_unjudged', 0)} not"
+        )
+        lines.append(f"| Own shots | {judged} |")
+        if r.get("wrong_shape_share") is not None:
+            lines.append(
+                f"| Time in the wrong shape after own shot | {round(100 * r['wrong_shape_share'])}% "
+                f"({r.get('how') or 'withheld'}) |"
+            )
+            if r.get("rotation_median_s") is not None:
+                lines.append(
+                    f"| Time to reach the right shape, median | {r['rotation_median_s']} s, reached "
+                    f"after {r.get('reached', 0)} of {r.get('n_judged', 0)} |"
+                )
+        elif r.get("note"):
+            lines.append(f"| Time in the wrong shape after own shot | {r['note']} |")
         lines.append("")
     return lines
 
@@ -592,6 +651,8 @@ def write_summary(
             lines.append("")
     if inp.tactics and inp.tactics.get("n_rallies"):
         lines.extend(_tactics_lines(inp.tactics))
+    if inp.doubles and inp.doubles.get("sides"):
+        lines.extend(_doubles_lines(inp.doubles))
     if inp.split_steps and inp.split_steps.get("n_moves"):
         sp = inp.split_steps
         lines.append("## Split steps")

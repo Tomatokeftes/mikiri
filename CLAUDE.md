@@ -75,6 +75,7 @@ Notes that will otherwise cost time:
 | `classify.py` | naming shots from the player's own labels, and the per-pair held-out accuracy each name is allowed to rest on |
 | `tactics.py` | what each side played and whether it worked: rally lengths, shot mix, points by who hit last, the serve; shares withheld below a minimum count; the same figures across a player's kept sessions |
 | `history.py` | the sessions a player has kept, written when a project is saved, grouped by a player label |
+| `doubles.py` | formation of a pair from the two partners' court tracks, and whether it fits the shot the pair just played |
 | `footwork.py` | split steps and the moves they prepare |
 | `strokes.py` | swing detection and the two-tier stroke description |
 | `shuttle.py`, `shots.py` | classical shuttle search after each contact, and shot naming gated on it |
@@ -181,11 +182,15 @@ Not verified, and the module docstrings say so:
 
 Known gaps:
 
-* Two players are tracked, one per side of the net, and only with a court:
-  the other player is identified by side and nothing else, so an uncalibrated
-  clip gets the subject alone. Doubles is not: a side holds one tracker, and
-  telling partners apart within a side needs appearance and continuity that
-  nothing here has. The other player's contacts are detected with the racket
+* Up to four players are tracked, one or two per side of the net, and only
+  with a court: the others are identified by side and nothing else, so an
+  uncalibrated clip gets the subject alone. Two per side is doubles
+  (`docs/doubles.md`): partners are told apart by continuity alone, the
+  frames where their boxes overlap are marked ambiguous, no shot is
+  attributed to one partner, and no real doubles footage has been through
+  it -- the four-player path is exercised on scripted people only. The
+  formation figures need no identity and are the doubles deliverable so far.
+  The other player's contacts are detected with the racket
   hand assumed right. On `lindan_rally` that assumption is wrong -- the far
   player is the left-hander, read by eye from full-resolution crops and
   recorded in the manifest -- and correcting it did not help: his contact

@@ -466,8 +466,26 @@ def _position_at(track: CourtTrack | None, frame: int) -> tuple[float, float] | 
     return float(p[0]), float(p[1])
 
 
-def gather_contacts(players: Sequence[SidePlayer]) -> list[Contact]:
-    """Every player's strokes as side-owned contacts, in frame order."""
+#: Two partners' contacts closer than this are one hit of the shuttle: one
+#: of them struck it and the other swung at it, or was seen to. About a
+#: third of a second, under the shortest rally exchange the detector times.
+PARTNER_WINDOW_S = 0.35
+
+
+def gather_contacts(
+    players: Sequence[SidePlayer],
+    fps: float | None = None,
+    partner_window_s: float = PARTNER_WINDOW_S,
+) -> list[Contact]:
+    """Every player's strokes as side-owned contacts, in frame order.
+
+    In doubles two partners can both swing at one shuttle; the side made one
+    contact, and the chain must not read a second. Contacts by different
+    players of the same side within ``partner_window_s`` of each other are
+    therefore one contact, kept for the player with the more confident
+    swing. The same player twice in a row is left alone: that is the
+    double-contact question the chain asks.
+    """
     out: list[Contact] = []
     for p in players:
         if p.strokes is None:
@@ -484,7 +502,23 @@ def gather_contacts(players: Sequence[SidePlayer]) -> list[Contact]:
                 )
             )
     out.sort(key=lambda c: (c.frame, c.side))
-    return out
+    if fps is None or len({p.player for p in players}) <= len({p.side for p in players}):
+        return out
+    window = int(round(partner_window_s * fps))
+    merged: list[Contact] = []
+    for c in out:
+        last = merged[-1] if merged else None
+        if (
+            last is not None
+            and last.side == c.side
+            and last.player != c.player
+            and c.frame - last.frame <= window
+        ):
+            if c.stroke.confidence > last.stroke.confidence:
+                merged[-1] = c
+            continue
+        merged.append(c)
+    return merged
 
 
 def _seconds(frame: int, fps: float) -> str:
@@ -536,7 +570,7 @@ def build_chain(
         if allowed is None or c.value not in allowed:
             raise ValueError(f"cannot confirm {c.field!r} as {c.value!r}")
 
-    contacts = gather_contacts(players)
+    contacts = gather_contacts(players, fps)
     by_side: dict[str, list[SidePlayer]] = {s: [] for s in SIDES}
     for p in players:
         by_side.setdefault(p.side, []).append(p)

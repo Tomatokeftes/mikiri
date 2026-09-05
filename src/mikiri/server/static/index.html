@@ -171,6 +171,12 @@
         <p class="muted small-text" id="tactics-note"></p>
       </div>
 
+      <div class="panel hidden" id="doubles-panel">
+        <div class="panel-title">Formation <span class="muted small-text">the shape each pair holds, and whether it fits the shot the pair just played</span></div>
+        <div id="doubles-sides"></div>
+        <p class="muted small-text" id="doubles-note"></p>
+      </div>
+
       <div class="panel hidden" id="trends-panel">
         <div class="panel-title">Over time <span class="muted small-text">this clip against the same player's kept sessions; a session is kept when you save the project</span>
           <span class="spacer"></span>
@@ -254,6 +260,7 @@
     <p class="muted small-text" id="run-hint">Click the athlete to track. Default: the largest person.</p>
     <div class="select-wrap"><canvas id="select-canvas"></canvas></div>
     <label class="chk"><input type="checkbox" id="run-both"> Also track the player at the other end of the court</label>
+    <label class="chk"><input type="checkbox" id="run-doubles"> Two players on each side (doubles)</label>
     <div id="run-both-hint" class="muted small-text"></div>
     <div id="run-model-status" class="muted small-text"></div>
     <div id="job-box" class="hidden">
