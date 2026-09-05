@@ -641,7 +641,7 @@ function renderAll() {
   if (!S.state) return;
   renderInfo(); renderTrim(); renderEvents(); renderOptions();
   renderVideo(); renderTimeline(); renderPlots(); renderCourt();
-  renderStrokes(); renderRallies(); renderMatch(); renderReview(); renderCoaching(); renderCameraView();
+  renderStrokes(); renderRallies(); renderMatch(); renderReview(); renderTactics(); renderCoaching(); renderCameraView();
 }
 
 async function refreshTabs() {
@@ -1117,6 +1117,49 @@ function renderReview() {
   for (const b of $('#review-options').querySelectorAll('button')) {
     b.addEventListener('click', () => answerReview(b.dataset.i === 'd' ? 'd' : Number(b.dataset.i)));
   }
+}
+
+// The tactical summary: what each side played and whether it worked. Counts
+// are always shown; shares only above the minimum the module withholds
+// under, with the note saying which; every block names how it was known.
+function renderTactics() {
+  const panel = $('#tactics-panel');
+  const t = S.state && S.state.tactics;
+  const has = !!(t && t.n_rallies);
+  panel.classList.toggle('hidden', !has);
+  if (!has) return;
+  const kv = (k, v) => `<span class="k">${k}</span><span>${v}</span>`;
+  const pct = (x) => `${Math.round(100 * x)}%`;
+  const how = (h) => h ? ` <span class="muted small-text">(${h})</span>` : ' <span class="muted small-text">(withheld)</span>';
+  const counts = (obj) => Object.entries(obj || {}).map(([k, v]) => `${k} ${v}`).join(', ') || 'none';
+  const r = t.rallies || {};
+  const rows = [];
+  rows.push(kv('rallies', `${r.n}; median ${r.shots_median} shots (spread ${r.shots_iqr}), ${r.seconds_median} s (spread ${r.seconds_iqr})`));
+  rows.push(kv('by length', Object.entries(r.buckets || {}).map(([b, n]) => `${b}: ${n}`).join(', ')));
+  if (r.long_share != null) rows.push(kv('11+ shots', pct(r.long_share)));
+  $('#tactics-rallies').innerHTML = rows.join('');
+  const you = S.state.tracking && S.state.tracking.side;
+  const blocks = [];
+  for (const [side, s] of Object.entries(t.sides || {})) {
+    const label = side === you ? `${side} (you)` : side;
+    const sh = s.shots || {}, p = s.points || {}, sv = s.serve || {};
+    const lines = [];
+    lines.push(kv('shots', `${sh.contacts} contacts, ${sh.named} named${sh.unnamed ? `, ${sh.unnamed} unnamed` : ''}`));
+    lines.push(kv('mix', (sh.mix_share ? Object.entries(sh.mix_share).map(([k, v]) => `${k} ${pct(v)} (${sh.mix[k]})`).join(', ') : counts(sh.mix)) + how(sh.how)));
+    if (sh.note) lines.push(kv('', `<span class="muted small-text">${sh.note}</span>`));
+    lines.push(kv('points', `won ${p.won} (own winners ${p.won_by_own_winner}, opponent errors ${p.won_by_opponent_error}), lost ${p.lost} (own errors ${p.lost_by_own_error}, opponent winners ${p.lost_to_opponent_winner})${p.undecided ? `; ${p.undecided} undecided` : ''}` + how(p.how)));
+    lines.push(kv('winners by shot', counts(p.winners_by_shot)));
+    lines.push(kv('errors by shot', counts(p.errors_by_shot)));
+    if (p.unnamed_endings) lines.push(kv('', `<span class="muted small-text">${p.unnamed_endings} point-ending shots unnamed; label them to see which</span>`));
+    lines.push(kv('serve', `${sv.served} served, ${sv.won_serving} won${sv.won_serving_share != null ? ` (${pct(sv.won_serving_share)})` : ''}` + how(sv.how)));
+    if (sv.note) lines.push(kv('', `<span class="muted small-text">${sv.note}</span>`));
+    blocks.push(`<div class="panel-title">${label}</div><div class="footwork">${lines.join('')}</div>`);
+  }
+  $('#tactics-sides').innerHTML = blocks.join('');
+  const notes = [];
+  if (!t.score_is_absolute) notes.push('Points are those won in this clip; the score at its start is not known.');
+  notes.push('Not measured: ' + (t.not_measured || []).join('; ') + '.');
+  $('#tactics-note').textContent = notes.join(' ');
 }
 
 // The tagger: the labelling pass the per-player classifier trains on. It walks

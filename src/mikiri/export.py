@@ -73,6 +73,86 @@ class ExportInputs:
     split_steps: dict | None = None
     #: The rally chain's summary, when both players were tracked.
     match: dict | None = None
+    #: What each side played and whether it worked, from :mod:`mikiri.tactics`.
+    tactics: dict | None = None
+
+
+def _pct(x: float | None) -> str:
+    return "" if x is None else f" ({round(100 * x)}%)"
+
+
+def _counts(counts: dict | None) -> str:
+    return ", ".join(f"{k} {v}" for k, v in (counts or {}).items()) or "none"
+
+
+def _tactics_lines(t: dict) -> list[str]:
+    """The tactics section: counts always, shares where the module allowed them."""
+    lines = ["## What was played, and whether it worked", ""]
+    lines.append(
+        "Points are split by who hit last, which is the one attribution the footage can "
+        "defend: a rally that ended on a side's own shot is that side's winner or error, "
+        "the rest went the other way. Shares are withheld below a minimum count, and each "
+        "block says how it was known. Not measured: " + "; ".join(t.get("not_measured", [])) + "."
+    )
+    lines.append("")
+    r = t.get("rallies") or {}
+    lines.append("| Rallies | Value |")
+    lines.append("|---|---|")
+    lines.append(f"| Counted | {r.get('n', 0)} |")
+    if r.get("shots_median") is not None:
+        lines.append(
+            f"| Shots per rally, median (spread) | {r['shots_median']} ({r['shots_iqr']}) |"
+        )
+        lines.append(
+            f"| Seconds per rally, median (spread) | {r['seconds_median']} ({r['seconds_iqr']}) |"
+        )
+        lines.append(f"| By length | {_counts(r.get('buckets'))} |")
+    if r.get("long_share") is not None:
+        lines.append(f"| Rallies of 11 shots or more | {round(100 * r['long_share'])}% |")
+    elif r.get("note"):
+        lines.append(f"| Rallies of 11 shots or more | {r['note']} |")
+    lines.append("")
+    for side, s in (t.get("sides") or {}).items():
+        sh, p, sv = s.get("shots") or {}, s.get("points") or {}, s.get("serve") or {}
+        lines.append(f"### {side.capitalize()} side")
+        lines.append("")
+        lines.append("| Measure | Value | How |")
+        lines.append("|---|---|---|")
+        lines.append(
+            f"| Contacts named | {sh.get('named', 0)} of {sh.get('contacts', 0)} | "
+            f"{_counts(sh.get('named_by'))} |"
+        )
+        mix = sh.get("mix_share")
+        if mix:
+            shown = ", ".join(f"{k} {round(100 * v)}% ({sh['mix'][k]})" for k, v in mix.items())
+        else:
+            shown = _counts(sh.get("mix")) + (f"; {sh['note']}" if sh.get("note") else "")
+        lines.append(f"| Shot mix | {shown} | {sh.get('how') or 'withheld'} |")
+        lines.append(
+            f"| Points won | {p.get('won', 0)}: own winners {p.get('won_by_own_winner', 0)}, "
+            f"opponent errors {p.get('won_by_opponent_error', 0)} | {p.get('how') or 'withheld'} |"
+        )
+        lines.append(
+            f"| Points lost | {p.get('lost', 0)}: own errors {p.get('lost_by_own_error', 0)}, "
+            f"opponent winners {p.get('lost_to_opponent_winner', 0)} | {p.get('how') or 'withheld'} |"
+        )
+        lines.append(f"| Winners by shot | {_counts(p.get('winners_by_shot'))} | |")
+        lines.append(f"| Errors by shot | {_counts(p.get('errors_by_shot'))} | |")
+        lines.append(
+            f"| Point-ending shots by court zone | {_counts(p.get('endings_by_zone'))} | |"
+        )
+        if p.get("unnamed_endings"):
+            lines.append(f"| Point-ending shots without a name | {p['unnamed_endings']} | |")
+        if p.get("undecided"):
+            lines.append(f"| Rallies with no winner known | {p['undecided']} | |")
+        lines.append(
+            f"| Serving | won {sv.get('won_serving', 0)} of {sv.get('served', 0)}"
+            f"{_pct(sv.get('won_serving_share'))}"
+            + (f"; {sv['note']}" if sv.get("note") else "")
+            + f" | {sv.get('how') or 'withheld'} |"
+        )
+        lines.append("")
+    return lines
 
 
 def _safe(name: str) -> str:
@@ -510,6 +590,8 @@ def write_summary(
             for i in m["issues"]:
                 lines.append(f"* {i['question']}")
             lines.append("")
+    if inp.tactics and inp.tactics.get("n_rallies"):
+        lines.extend(_tactics_lines(inp.tactics))
     if inp.split_steps and inp.split_steps.get("n_moves"):
         sp = inp.split_steps
         lines.append("## Split steps")

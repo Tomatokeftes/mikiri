@@ -73,6 +73,7 @@ Notes that will otherwise cost time:
 | `rally.py` | bouts of play and the rests between them |
 | `match.py` | the rally chain: serves, outcomes and scores from the five constraints, every fact with its provenance, contradictions as questions |
 | `classify.py` | naming shots from the player's own labels, and the per-pair held-out accuracy each name is allowed to rest on |
+| `tactics.py` | what each side played and whether it worked: rally lengths, shot mix, points by who hit last, the serve; shares withheld below a minimum count |
 | `footwork.py` | split steps and the moves they prepare |
 | `strokes.py` | swing detection and the two-tier stroke description |
 | `shuttle.py`, `shots.py` | classical shuttle search after each contact, and shot naming gated on it |

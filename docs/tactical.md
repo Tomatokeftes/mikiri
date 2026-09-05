@@ -396,7 +396,14 @@ The amended rule opens doors; it does not open all of them.
    `docs/classifier.md`. Still open: no real clip here has shot labels yet,
    so the feature set is validated on synthetic swings only.
 6. **Analytics and trends**, which are straightforward once the events are
-   trustworthy, and are where the visible value sits.
+   trustworthy, and are where the visible value sits. *Started:* `tactics.py`
+   gives the per-clip half -- rally lengths and their distribution, and per
+   side the shot mix, the points split by who hit last with the ending shot
+   named where it can be, and the serve -- every figure with its provenance
+   and every share withheld below a minimum count (`docs/tactics.md`). The
+   trends half, the same figures across a player's sessions, waits on
+   sessions being stored, which is also what `coaching.compare_sessions` has
+   been waiting for.
 7. **Doubles**: player attribution within a side, then the formation pack,
    which needs no classifier and may well land before singles shot naming is
    any good.

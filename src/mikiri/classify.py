@@ -40,6 +40,9 @@ import numpy as np
 from mikiri.keypoints import KP, body_height_px
 from mikiri.strokes import SHOT_NAMES, StrokeSeries
 
+#: Evidence string a labelled contact carries: the one provenance that is a
+#: person's word rather than a model's, which the tactics summary counts on.
+LABELLED_EVIDENCE = "labelled by you"
 #: Labels a shot type needs before the classifier will predict it at all.
 #: Fewer than this and the held-out test of the pairs it belongs to rests on
 #: a handful of examples; the roadmap refuses a stroke aggregate under eight
@@ -319,7 +322,7 @@ def name_shots_from_labels(
             continue
         s.shot = shot
         s.shot_confidence = 1.0
-        s.evidence = "labelled by you"
+        s.evidence = LABELLED_EVIDENCE
         train_x.append(contact_features(s, keypoints, fps, racket_hand, conf_thr, track, sig))
         train_y.append(shot)
     report["n_labelled"] = len(train_y)

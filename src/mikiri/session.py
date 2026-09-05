@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from mikiri.angles import ANGLE_NAMES, POSITION_NAMES, SEGMENT_NAMES, AngleTable, compute_angles
-from mikiri.classify import TAGGABLE_SHOTS, name_shots_from_labels
+from mikiri.classify import LABELLED_EVIDENCE, TAGGABLE_SHOTS, name_shots_from_labels
 from mikiri.coaching import coach as coach_advice
 from mikiri.coaching import top_cues
 from mikiri.court import (
@@ -99,6 +99,7 @@ from mikiri.strokes import (
     recover_alternation,
 )
 from mikiri.strokes import summarise as stroke_summary
+from mikiri.tactics import tactics_summary
 from mikiri.tracking import SIDE_FAR
 from mikiri.video import FrameCache, VideoInfo, VideoReader, fit_size, probe_video
 
@@ -949,6 +950,10 @@ class ProjectSession:
         self._chain_strokes = (subject, others)
         return self._chain_strokes
 
+    def tactics(self) -> dict:
+        """What was played and whether it worked, from the chain, with provenance."""
+        return tactics_summary(self.match(), self.info.fps)
+
     def classifier_report(self) -> dict[str, dict]:
         """Per side: what the labels can name and the per-pair accuracy it rests on."""
         self.chain_strokes()
@@ -998,7 +1003,7 @@ class ProjectSession:
                         "descriptor": s.descriptor(),
                         "shot": s.shot,
                         "how": "labelled"
-                        if s.evidence == "labelled by you"
+                        if s.evidence == LABELLED_EVIDENCE
                         else ("classifier" if s.shot else None),
                         "confidence": s.shot_confidence,
                     }
@@ -1743,6 +1748,7 @@ class ProjectSession:
             "match": self.match_summary(),
             "review": self.review_queue(),
             "tagging": self.tagging(),
+            "tactics": self.tactics(),
             "split_steps": self.footwork_summary(),
             "coaching": self.coaching(),
             "coach_level": p.coach_level,
@@ -1868,6 +1874,7 @@ class ProjectSession:
             bouts=self.bouts_summary(),
             split_steps=self.footwork_summary(),
             match=self.match_summary(),
+            tactics=self.tactics(),
         )
 
         def progress(frac: float, msg: str) -> None:
