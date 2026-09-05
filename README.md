@@ -43,6 +43,10 @@ The browser opens at `http://127.0.0.1:8765`. Then:
    doubles tick "Two players on each side": partners are told apart by
    continuity, and the frames where they overlap are marked rather than
    guessed.
+   The line under the transport says what to do next -- track, calibrate the
+   court, track the other end, answer the review, save -- and the right-hand
+   column is four pages: **Movement**, **Match**, **Over time** and
+   **Project**. A page that has nothing yet says what would fill it.
 4. **Scrub**: <kbd>Left</kbd>/<kbd>Right</kbd> one frame,
    <kbd>Shift</kbd>+arrows ten frames, <kbd>Space</kbd> play/pause at 0.1x to
    1x. Click any plot or the timeline to jump.

@@ -16,14 +16,19 @@
   <button id="save-btn" class="btn" disabled>Save</button>
   <button id="export-btn" class="btn" disabled>Export pack</button>
   <button id="compare-btn" class="btn" disabled>Compare</button>
+  <button id="keys-btn" class="btn" title="Keyboard shortcuts (?)">Keys</button>
   <button id="settings-btn" class="btn">Settings</button>
 </header>
 
 <main id="main" class="no-project">
   <section id="welcome">
     <h1>Load a clip to begin</h1>
-    <p>Film side-on, 4 to 5 m back, camera at hip to chest height, 120 fps or more.
-       Mikiri measures angles in the image plane: it is a single-camera 2D tool.</p>
+    <p>Open a clip and run tracking on the player: angles, events, an assessment and coaching follow.
+       Calibrate the court, four clicks on its corners, for footwork in metres and rallies; track the
+       player at the other end as well for serves, outcomes and the score.</p>
+    <p class="muted small-text">For technique, film side-on, 4 to 5 m back, camera at hip to chest height, 120 fps or more.
+       For the match figures, film from a raised camera behind one end. Mikiri measures in the image
+       plane and on the court plane: it is a single-camera tool and says so where that limits it.</p>
     <div class="welcome-actions">
       <button class="btn primary" id="welcome-open">Open video</button>
       <button class="btn" id="welcome-open-project">Open project</button>
@@ -78,7 +83,14 @@
         <input id="trim-out" type="number" min="0" value="0">
         <span id="trim-summary" class="muted"></span>
         <span class="spacer"></span>
+        <button class="btn" id="court-setup-btn" title="Four clicks on the court corners: footwork in metres, rallies and the match figures">Court calibration</button>
         <button class="btn primary" id="run-btn">Run tracking</button>
+      </div>
+      <div id="next-step" class="next-step hidden">
+        <span class="next-label">Next</span>
+        <span id="next-step-text"></span>
+        <button class="btn small primary" id="next-step-btn"></button>
+        <button class="btn small" id="next-step-dismiss" title="Hide this for this project">Hide</button>
       </div>
       <div id="edit-panel" class="panel hidden">
         <div class="panel-title">Keypoint correction</div>
@@ -107,6 +119,13 @@
     </div>
 
     <div id="side-column">
+      <div id="side-tabs" class="side-tabs" role="tablist">
+        <button class="side-tab active" data-page="movement" id="side-tab-movement" title="Angles, events, footwork and coaching for the tracked player">Movement</button>
+        <button class="side-tab" data-page="match" id="side-tab-match" title="Contacts, rallies, serves, outcomes and what was played">Match <span class="count" id="side-count-match"></span></button>
+        <button class="side-tab" data-page="time" id="side-tab-time" title="This clip against the same player's kept sessions">Over time <span class="count" id="side-count-time"></span></button>
+        <button class="side-tab" data-page="project" id="side-tab-project" title="Camera side, racket hand, notes, how the clip was tracked">Project</button>
+      </div>
+      <div class="tab-page" data-page="movement">
       <div class="panel">
         <div class="panel-title">Events <span class="muted small-text">(mark on the current frame)</span>
           <span class="spacer"></span>
@@ -124,15 +143,12 @@
         <ul id="events-list" class="events-list"></ul>
         <div id="metrics" class="metrics"></div>
       </div>
-
       <div class="panel" id="assessment-panel">
         <div class="panel-title">Assessment <span class="muted small-text" id="assessment-sub">against the movement's reference bands</span></div>
         <table id="assessment-table" class="assessment"></table>
         <div id="assessment-cues" class="muted small-text"></div>
       </div>
-
       <div id="camera-view" class="view-badge"></div>
-
       <div class="panel hidden" id="court-panel">
         <div class="panel-title">Court <span class="muted small-text" id="court-sub">footwork in court metres</span></div>
         <div class="court-row">
@@ -140,14 +156,36 @@
           <div id="footwork-metrics" class="footwork"></div>
         </div>
       </div>
-
       <div class="panel hidden" id="rally-panel">
         <div class="panel-title">Rallies <span class="muted small-text" id="rally-sub">bouts of play; click one to seek</span></div>
         <div id="rally-summary" class="footwork"></div>
         <ul id="rally-list" class="events-list"></ul>
         <p class="muted small-text" id="rally-note"></p>
       </div>
-
+      <div class="panel hidden" id="coaching-panel">
+        <div class="panel-title">Coaching <span class="muted small-text">what the numbers suggest working on</span>
+          <span class="spacer"></span>
+          <label class="small-text">Level <select id="coach-level">
+            <option value="beginner">beginner</option>
+            <option value="club" selected>club</option>
+            <option value="national">national</option>
+            <option value="elite">elite</option>
+          </select></label>
+        </div>
+        <div id="coaching-list"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Angles <span class="muted small-text">image-plane, degrees; click a plot to seek</span>
+          <span class="spacer"></span>
+          <button class="btn small" id="calib-btn">Scale calibration</button>
+          <button class="btn small" id="court-btn">Court calibration</button>
+        </div>
+        <div id="angle-toggles" class="toggle-row"></div>
+        <div id="plots" class="plots"></div>
+        <div id="current-values" class="current-values"></div>
+      </div>
+      </div>
+      <div class="tab-page hidden" data-page="match">
       <div class="panel hidden" id="review-panel">
         <div class="panel-title">Review <span class="muted small-text" id="review-progress"></span> <button class="btn small" id="tag-toggle" title="Label what shot each contact was (t)">Tag shots</button> <button class="btn small" id="review-undo" title="Take back the last answer (u)" disabled>Undo</button></div>
         <p id="review-question"></p>
@@ -163,30 +201,6 @@
         <p class="muted small-text" id="match-note"></p>
         <ul id="match-issues" class="events-list"></ul>
       </div>
-
-      <div class="panel hidden" id="tactics-panel">
-        <div class="panel-title">Tactics <span class="muted small-text">what each side played and whether it worked; every figure carries how it was known</span></div>
-        <div id="tactics-rallies" class="footwork"></div>
-        <div id="tactics-sides"></div>
-        <p class="muted small-text" id="tactics-note"></p>
-      </div>
-
-      <div class="panel hidden" id="doubles-panel">
-        <div class="panel-title">Formation <span class="muted small-text">the shape each pair holds, and whether it fits the shot the pair just played</span></div>
-        <div id="doubles-sides"></div>
-        <p class="muted small-text" id="doubles-note"></p>
-      </div>
-
-      <div class="panel hidden" id="trends-panel">
-        <div class="panel-title">Over time <span class="muted small-text">this clip against the same player's kept sessions; a session is kept when you save the project</span>
-          <span class="spacer"></span>
-          <label class="small-text">Player <input id="player" type="text" placeholder="you" size="12"></label>
-        </div>
-        <div id="trends-sessions" class="footwork"></div>
-        <div id="trends-metrics" class="footwork"></div>
-        <p class="muted small-text" id="trends-note"></p>
-      </div>
-
       <div class="panel hidden" id="strokes-panel">
         <div class="panel-title">Strokes <span class="muted small-text" id="strokes-sub">detected contacts; click one to seek</span>
           <span class="spacer"></span>
@@ -196,30 +210,32 @@
         <ul id="strokes-list" class="events-list"></ul>
         <p class="muted small-text" id="strokes-note"></p>
       </div>
-
-      <div class="panel hidden" id="coaching-panel">
-        <div class="panel-title">Coaching <span class="muted small-text">what the numbers suggest working on</span>
-          <span class="spacer"></span>
-          <label class="small-text">Level <select id="coach-level">
-            <option value="beginner">beginner</option>
-            <option value="club" selected>club</option>
-            <option value="national">national</option>
-            <option value="elite">elite</option>
-          </select></label>
-        </div>
-        <div id="coaching-list"></div>
+      <div class="panel hidden" id="tactics-panel">
+        <div class="panel-title">Tactics <span class="muted small-text">what each side played and whether it worked; every figure carries how it was known</span></div>
+        <div id="tactics-rallies" class="footwork"></div>
+        <div id="tactics-sides"></div>
+        <p class="muted small-text" id="tactics-note"></p>
       </div>
-
-      <div class="panel">
-        <div class="panel-title">Angles <span class="muted small-text">image-plane, degrees; click a plot to seek</span>
-          <span class="spacer"></span>
-          <button class="btn small" id="calib-btn">Scale calibration</button>
-          <button class="btn small" id="court-btn">Court calibration</button>
-        </div>
-        <div id="angle-toggles" class="toggle-row"></div>
-        <div id="plots" class="plots"></div>
-        <div id="current-values" class="current-values"></div>
+      <div class="panel hidden" id="doubles-panel">
+        <div class="panel-title">Formation <span class="muted small-text">the shape each pair holds, and whether it fits the shot the pair just played</span></div>
+        <div id="doubles-sides"></div>
+        <p class="muted small-text" id="doubles-note"></p>
       </div>
+        <p class="muted small-text tab-empty" id="match-empty">Nothing here yet. Contacts appear once the clip is tracked and the court calibrated; serves, outcomes and the score need the player at the other end tracked too (Run tracking, tick the other end).</p>
+      </div>
+      <div class="tab-page hidden" data-page="time">
+      <div class="panel hidden" id="trends-panel">
+        <div class="panel-title">Over time <span class="muted small-text">against the same player's kept sessions; saving the project keeps a session</span>
+          <span class="spacer"></span>
+          <label class="small-text">Player <input id="player" type="text" placeholder="you" size="12"></label>
+        </div>
+        <div id="trends-sessions" class="footwork"></div>
+        <div id="trends-metrics" class="footwork"></div>
+        <p class="muted small-text" id="trends-note"></p>
+      </div>
+        <p class="muted small-text tab-empty" id="time-empty">Nothing here yet. Track the clip and save the project: a saved session is kept, and the next clip of the same player is read against it here.</p>
+      </div>
+      <div class="tab-page hidden" data-page="project">
       <div class="panel options">
         <div class="panel-title">Project options</div>
         <div class="row">
@@ -232,6 +248,7 @@
         </div>
         <div class="row"><label class="grow">Notes <input id="notes" type="text" placeholder="notes go into summary.md"></label></div>
         <div id="tracking-info" class="muted small-text"></div>
+      </div>
       </div>
     </div>
   </section>
@@ -351,6 +368,29 @@
       <button class="btn" data-close>Cancel</button>
       <button class="btn primary" id="court-start">Start clicking</button>
     </div>
+  </div>
+
+  <div class="modal hidden" id="modal-keys">
+    <div class="modal-title">Keyboard</div>
+    <table class="keys">
+      <tr><td><kbd>Space</kbd></td><td>play / pause</td></tr>
+      <tr><td><kbd>Left</kbd> <kbd>Right</kbd></td><td>one frame; with <kbd>Shift</kbd>, ten</td></tr>
+      <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>start / end of the trimmed range</td></tr>
+      <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>previous / next event</td></tr>
+      <tr><td><kbd>I</kbd> <kbd>O</kbd></td><td>set the in / out point on this frame</td></tr>
+      <tr><td><kbd>E</kbd></td><td>edit keypoints on / off</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>undo / redo a keypoint edit or event</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>save the project</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>close a dialog, or abandon a calibration click sequence</td></tr>
+      <tr><td colspan="2" class="muted small-text">In the Review panel, on the Match tab:</td></tr>
+      <tr><td><kbd>1</kbd> to <kbd>9</kbd></td><td>answer the question with that option</td></tr>
+      <tr><td><kbd>D</kbd></td><td>leave the question</td></tr>
+      <tr><td><kbd>U</kbd></td><td>take the last answer back</td></tr>
+      <tr><td><kbd>T</kbd></td><td>tag shots on / off; while tagging, <kbd>1</kbd> to <kbd>9</kbd> label and <kbd>S</kbd> skips</td></tr>
+      <tr><td><kbd>?</kbd></td><td>this list</td></tr>
+    </table>
+    <p class="muted small-text">Click a plot, the timeline, a rally, a contact or a stroke to seek to it.</p>
+    <div class="modal-actions"><button class="btn" data-close>Close</button></div>
   </div>
 
   <div class="modal hidden" id="modal-compare">

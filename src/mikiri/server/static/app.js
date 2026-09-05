@@ -22,6 +22,7 @@ const S = {
   series: new Set(DEFAULT_SERIES), plots: [],
   compare: null, calibPick: null, courtPick: null, settings: null, suggestions: null,
   timelineDrag: null, selectFrame: null, selectPeople: [],
+  sidePage: 'movement', hideStepFor: null,
 };
 
 // ---------------------------------------------------------------- utilities
@@ -643,6 +644,67 @@ function renderAll() {
   renderInfo(); renderTrim(); renderEvents(); renderOptions();
   renderVideo(); renderTimeline(); renderPlots(); renderCourt();
   renderStrokes(); renderRallies(); renderMatch(); renderReview(); renderTactics(); renderDoubles(); renderTrends(); renderCoaching(); renderCameraView();
+  renderSideTabs(); renderNextStep();
+}
+
+// ---------------------------------------------------------------- side pages
+
+const SIDE_PAGES = ['movement', 'match', 'time', 'project'];
+
+// A page has content when any panel on it is showing; the tab for an empty
+// page is dimmed and the page explains what would fill it.
+function pageHasContent(page) {
+  const el = $(`.tab-page[data-page="${page}"]`);
+  return [...el.children].some((c) => (c.classList.contains('panel') || c.classList.contains('view-badge')) && !c.classList.contains('hidden') && !(c.classList.contains('view-badge') && !c.textContent));
+}
+
+function showSidePage(page, remember = true) {
+  if (!SIDE_PAGES.includes(page)) page = 'movement';
+  S.sidePage = page;
+  if (remember) { try { localStorage.setItem('mikiri.sidePage', page); } catch (e) { /* private mode */ } }
+  for (const p of SIDE_PAGES) {
+    $(`.tab-page[data-page="${p}"]`).classList.toggle('hidden', p !== page);
+    $(`#side-tab-${p}`).classList.toggle('active', p === page);
+  }
+  // Canvases drawn while their page was display:none measured zero wide.
+  if (page === 'movement' && S.state) { renderPlots(); renderCourt(); }
+}
+
+function renderSideTabs() {
+  const q = S.state.review, t = S.state.trends;
+  const counts = { match: q && q.n_open ? String(q.n_open) : '', time: t && t.n_sessions > 1 ? String(t.n_sessions) : '' };
+  for (const page of SIDE_PAGES) {
+    const has = pageHasContent(page);
+    $(`#side-tab-${page}`).classList.toggle('empty', !has);
+    const c = $(`#side-count-${page}`); if (c) c.textContent = counts[page] || '';
+    const empty = $(`.tab-page[data-page="${page}"] .tab-empty`); if (empty) empty.classList.toggle('hidden', has);
+  }
+  showSidePage(S.sidePage, false);
+}
+
+// What to do next, from what the project has: one line and one button, in
+// the order the analysis is built -- tracking, the court, the other player,
+// the review, the save -- and gone when there is nothing left to suggest.
+function nextStep() {
+  const st = S.state;
+  if (!st || S.hideStepFor === S.pid) return null;
+  const court = st.court && st.court.image_points && st.court.image_points.length >= 4;
+  const players = st.players || [];
+  const q = st.review;
+  if (!st.has_pose) return { text: 'Set the in and out points, then run tracking on the player you want measured.', btn: 'Run tracking', act: openRunModal };
+  if (!court) return { text: 'Calibrate the court, four clicks on its corners, for footwork in metres, rallies and the match figures. Skip it for a clip that does not show the court.', btn: 'Court calibration', act: openCourtModal };
+  if (players.length < 2) return { text: 'Track the player at the other end too: that is what lets serves, outcomes and the score be read off the rally chain.', btn: 'Run tracking', act: openRunModal };
+  if (q && q.n_open) return { text: `${q.n_open} question${q.n_open === 1 ? '' : 's'} the rally chain could not settle ${q.n_open === 1 ? 'is' : 'are'} waiting in Review; a keypress answers each.`, btn: 'Open Review', act: () => showSidePage('match') };
+  if (!st.project_path) return { text: 'Save the project to keep this session; the next clip of the same player is read against it in Over time.', btn: 'Save', act: () => saveProject(false) };
+  return null;
+}
+
+function renderNextStep() {
+  const s = nextStep();
+  $('#next-step').classList.toggle('hidden', !s);
+  if (!s) return;
+  $('#next-step-text').textContent = s.text;
+  const b = $('#next-step-btn'); b.textContent = s.btn; b.onclick = s.act;
 }
 
 async function refreshTabs() {
@@ -1577,6 +1639,11 @@ function bindUI() {
   $('#compare-off').addEventListener('click', () => { S.compare = null; closeModals(); renderAll(); });
   $('#calib-btn').addEventListener('click', () => showModal('#modal-calib'));
   $('#court-btn').addEventListener('click', openCourtModal);
+  $('#court-setup-btn').addEventListener('click', openCourtModal);
+  $('#keys-btn').addEventListener('click', () => showModal('#modal-keys'));
+  $('#next-step-dismiss').addEventListener('click', () => { S.hideStepFor = S.pid; renderNextStep(); });
+  $$('.side-tab').forEach((t) => t.addEventListener('click', () => showSidePage(t.dataset.page)));
+  try { S.sidePage = localStorage.getItem('mikiri.sidePage') || 'movement'; } catch (e) { /* private mode */ }
   $('#court-start').addEventListener('click', startCourtPick);
   $('#court-clear').addEventListener('click', async () => { applyState(await api('DELETE', `/api/projects/${S.pid}/court`)); await loadPose(); closeModals(); renderAll(); });
   $('#show-court').addEventListener('change', renderVideo);
@@ -1639,7 +1706,7 @@ function bindUI() {
     }
     // The review queue answers by number, and leaves a question with d. Only
     // while a question is showing, so the keys mean nothing otherwise.
-    const reviewShowing = !$('#review-panel').classList.contains('hidden') && !e.ctrlKey && !e.metaKey;
+    const reviewShowing = !$('#review-panel').classList.contains('hidden') && S.sidePage === 'match' && !e.ctrlKey && !e.metaKey;
     if (reviewShowing && (e.key === 't' || e.key === 'T') && !$('#tag-toggle').classList.contains('hidden')) {
       $('#tag-toggle').click(); e.preventDefault(); return;
     }
@@ -1668,6 +1735,7 @@ function bindUI() {
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveProject(false); }
     else if (e.key === 'e' || e.key === 'E') { $('#edit-toggle').checked = !$('#edit-toggle').checked; $('#edit-toggle').dispatchEvent(new Event('change')); }
+    else if (e.key === '?') showModal('#modal-keys');
   });
 }
 

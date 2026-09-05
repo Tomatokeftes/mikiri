@@ -88,6 +88,9 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         expect(page.locator("#video-info")).to_contain_text("30.000 fps")
         page.wait_for_timeout(600)
         page.screenshot(path=str(SCREENSHOTS / "01_loaded.png"))
+        # The next-step line walks a new user through the flow: tracking first.
+        expect(page.locator("#next-step")).to_contain_text("run tracking")
+        expect(page.locator("#side-tab-match")).to_have_class("side-tab empty")
 
         # Trim with the numeric inputs.
         page.fill("#trim-in", "5")
@@ -104,6 +107,7 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         expect(page.locator("#modal-root")).to_be_hidden(timeout=180000)
         expect(page.locator("#status")).to_contain_text("Tracking done")
         expect(page.locator("#tracking-info")).to_contain_text("Tracked frames 5-110")
+        expect(page.locator("#next-step")).to_contain_text("Calibrate the court")
         page.wait_for_timeout(600)
         page.screenshot(path=str(SCREENSHOTS / "03_tracked.png"))
 
@@ -249,21 +253,40 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         expect(page.locator("#rally-panel")).to_be_visible()
         expect(page.locator("#rally-summary")).to_contain_text("bouts", timeout=10000)
         expect(page.locator("#rally-list")).to_contain_text("bout 1")
+        # With the court in, the next step is the player at the other end.
+        expect(page.locator("#next-step")).to_contain_text("other end")
 
-        # Detected contacts: the demo clip's swing shows up in the panel with a
-        # speed and a court zone. The exact height class is asserted in
-        # tests/test_strokes.py against ground truth, not here - it sits near a
-        # classification boundary on this clip and would make the UI test brittle.
+        # Detected contacts live on the Match page: the demo clip's swing shows
+        # up there with a speed and a court zone. The exact height class is
+        # asserted in tests/test_strokes.py against ground truth, not here - it
+        # sits near a classification boundary on this clip and would make the
+        # UI test brittle.
+        expect(page.locator("#side-tab-match")).not_to_have_class("side-tab empty")
+        page.click("#side-tab-match")
         expect(page.locator("#strokes-panel")).to_be_visible()
         expect(page.locator("#strokes-list")).to_contain_text("bh/s", timeout=10000)
         expect(page.locator("#strokes-list")).to_contain_text("stroke", timeout=10000)
         expect(page.locator("#strokes-note")).to_contain_text("shuttle")
+        expect(page.locator("#match-empty")).to_be_hidden()
+        page.wait_for_timeout(300)
+        page.screenshot(path=str(SCREENSHOTS / "10_match_page.png"))
+        page.click("#side-tab-time")
+        expect(page.locator("#trends-panel")).to_be_visible()
+        expect(page.locator("#trends-note")).to_contain_text("session only")
+        page.click("#side-tab-movement")
+        expect(page.locator("#strokes-panel")).to_be_hidden()
         page.locator("#court-panel").scroll_into_view_if_needed()
         page.wait_for_timeout(300)
         page.screenshot(path=str(SCREENSHOTS / "08_court.png"))
         page.locator("#rally-panel").scroll_into_view_if_needed()
         page.wait_for_timeout(200)
         page.locator("#rally-panel").screenshot(path=str(SCREENSHOTS / "09_rallies.png"))
+
+        # The keys list opens from the top bar and from the question mark.
+        page.click("#keys-btn")
+        expect(page.locator("#modal-keys")).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(page.locator("#modal-keys")).to_be_hidden()
 
         # Export without videos into a temp folder.
         out = tmp_path / "ui_pack"
