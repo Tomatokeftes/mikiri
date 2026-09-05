@@ -286,6 +286,13 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         page.wait_for_timeout(200)
         page.locator("#rally-panel").screenshot(path=str(SCREENSHOTS / "09_rallies.png"))
 
+        # A panel folds to its title and unfolds again; the table under it goes and comes back.
+        page.click("#assessment-panel > .panel-title > .fold")
+        expect(page.locator("#assessment-table")).to_be_hidden()
+        assert "assessment-panel" in page.evaluate("localStorage.getItem('mikiri.folded')")
+        page.click("#assessment-panel > .panel-title > .fold")
+        expect(page.locator("#assessment-table")).to_be_visible()
+
         # The keys list opens from the top bar and from the question mark.
         page.click("#keys-btn")
         expect(page.locator("#modal-keys")).to_be_visible()

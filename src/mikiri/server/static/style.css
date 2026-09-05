@@ -204,3 +204,13 @@ kbd { background: var(--bg3); border: 1px solid var(--border); border-radius: 3p
 .recent-list li .path { color: var(--muted); font-size: 11px; margin-left: auto; flex: 0 1 40%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* The rally under the cursor, captioned on the video while scrubbing. */
+
+/* Every panel folds to its title from the small button in front of it, and
+   stays folded across projects, so a page shows what the user reads. */
+.panel-title .fold { width: 18px; height: 18px; padding: 0; font-size: 12px; line-height: 16px; border-radius: 4px; color: var(--muted); }
+.panel.folded > :not(.panel-title) { display: none !important; }
+.panel.folded > .panel-title { margin-bottom: 0; }
+.panel.folded > .panel-title > :not(.fold):not(.ttl) { display: none; }
+
+/* A dropped file opens like an upload. */
+#welcome.dropping { outline: 2px dashed var(--accent); outline-offset: -12px; }

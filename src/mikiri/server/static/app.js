@@ -713,6 +713,39 @@ function renderAll() {
   renderSideTabs(); renderNextStep();
 }
 
+// ---------------------------------------------------------------- folding
+
+function foldedPanels() {
+  try { return new Set(JSON.parse(localStorage.getItem('mikiri.folded') || '[]')); } catch (e) { return new Set(); }
+}
+
+function setFolded(panel, key, folded) {
+  panel.classList.toggle('folded', folded);
+  const btn = panel.querySelector(':scope > .panel-title > .fold');
+  if (btn) { btn.textContent = folded ? '+' : '-'; btn.title = folded ? 'Unfold this panel' : 'Fold this panel to its title'; }
+  const set = foldedPanels();
+  if (folded) set.add(key); else set.delete(key);
+  try { localStorage.setItem('mikiri.folded', JSON.stringify([...set])); } catch (e) { /* private mode */ }
+}
+
+// A fold button in front of every panel title. The title's own text is
+// wrapped so it stays visible when the rest of the title row is hidden.
+function bindFolding() {
+  const folded = foldedPanels();
+  for (const title of $$('.panel > .panel-title')) {
+    const panel = title.parentElement;
+    const text = title.firstChild;
+    if (!text || text.nodeType !== Node.TEXT_NODE) continue;
+    const key = panel.id || text.textContent.trim();
+    const ttl = document.createElement('span'); ttl.className = 'ttl'; ttl.textContent = text.textContent.trim();
+    title.replaceChild(ttl, text);
+    const btn = document.createElement('button'); btn.className = 'btn small fold'; btn.type = 'button';
+    btn.addEventListener('click', (e) => { e.stopPropagation(); setFolded(panel, key, !panel.classList.contains('folded')); if (S.state) { renderPlots(); renderCourt(); } });
+    title.prepend(btn);
+    setFolded(panel, key, folded.has(key));
+  }
+}
+
 // ---------------------------------------------------------------- side pages
 
 const SIDE_PAGES = ['movement', 'match', 'time', 'project'];
@@ -1709,6 +1742,10 @@ function bindUI() {
   $('#keys-btn').addEventListener('click', () => showModal('#modal-keys'));
   $('#next-step-dismiss').addEventListener('click', () => { S.hideStepFor = S.pid; renderNextStep(); });
   $$('.side-tab').forEach((t) => t.addEventListener('click', () => showSidePage(t.dataset.page)));
+  // A video dropped anywhere on the page opens the way an upload does.
+  window.addEventListener('dragover', (e) => { e.preventDefault(); $('#welcome').classList.add('dropping'); });
+  window.addEventListener('dragleave', () => $('#welcome').classList.remove('dropping'));
+  window.addEventListener('drop', (e) => { e.preventDefault(); $('#welcome').classList.remove('dropping'); const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) uploadFile(f); });
   try { S.sidePage = localStorage.getItem('mikiri.sidePage') || 'movement'; } catch (e) { /* private mode */ }
   $('#court-start').addEventListener('click', startCourtPick);
   $('#court-clear').addEventListener('click', async () => { applyState(await api('DELETE', `/api/projects/${S.pid}/court`)); await loadPose(); closeModals(); renderAll(); });
@@ -1828,7 +1865,7 @@ async function renderRecent() {
 }
 
 async function init() {
-  bindUI(); bindTimeline(); bindVideoCanvas();
+  bindUI(); bindTimeline(); bindVideoCanvas(); bindFolding();
   renderRecent();
   try {
     const list = await api('GET', '/api/projects');
