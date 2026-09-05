@@ -21,7 +21,12 @@ from pydantic import BaseModel, Field
 
 from mikiri import __version__
 from mikiri.angles import ANGLE_NAMES, POSITION_NAMES, SEGMENT_NAMES, AngleTable
-from mikiri.court import CourtTrack, draw_court
+from mikiri.court import (
+    CourtTrack,
+    compute_homography,
+    court_uncertainty_grid,
+    draw_court,
+)
 from mikiri.events import flight_time_s
 from mikiri.ffmpeg import FFmpegWriter
 from mikiri.keypoints import KEYPOINT_NAMES, N_KEYPOINTS
@@ -604,6 +609,17 @@ def export_pack(
             "court position of the player per frame (metres), speed, airborne and measured flags"
         )
         base = inp.track.metrics.get("base_m")
+        # The same map the app draws, uncertainty included. Without the
+        # covariance the heat map falls back to a fixed 25 cm footprint and the
+        # far court looks as sharp as the near court, which is the one thing
+        # this picture must not say.
+        grid = None
+        if p.court is not None and p.court.is_valid():
+            try:
+                H, _ = compute_homography(p.court.image_points, p.court.court_points)
+                grid = court_uncertainty_grid(H, p.court)
+            except ValueError:
+                grid = None
         cv2.imwrite(
             str(out / "court.png"),
             draw_court(
@@ -612,9 +628,14 @@ def export_pack(
                 size=900,
                 base=None if base is None else (base[0], base[1]),
                 label=f"{p.name}: footwork track",
+                cov=inp.track.cov,
+                uncertainty=grid,
             ),
         )
-        files["court.png"] = "top-down court map with the footwork track and heat map"
+        files["court.png"] = (
+            "top-down court map: footwork track, heat map blurred by the measured position "
+            "uncertainty, and 95% error ellipses across the court"
+        )
 
     if inp.strokes is not None and inp.strokes.strokes:
         start = inp.project.tracking.start if inp.project.tracking else 0

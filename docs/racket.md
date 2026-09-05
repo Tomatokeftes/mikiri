@@ -42,7 +42,8 @@ is printed next to it. "Racket" in the toolbar toggles it.
 
 An object detector can replace the estimate where it sees the racket, and
 the code accepts per-frame detections for that purpose. The COCO-trained
-YOLOX-s model was tried on the three clips in `demo/`: it detects players in
+YOLOX-s model was tried on the three real clips then in `demo/` (now
+`benchmarks/`): it detects players in
 every frame but the racket ("tennis racket" class) in only about a third of
 the frames where one is visible, and it never detects the shuttle. That is
 not reliable enough to ship as a default, so the detector remains a hook for

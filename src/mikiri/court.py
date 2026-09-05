@@ -35,6 +35,7 @@ from mikiri.geometry import (
     position_covariance,
 )
 from mikiri.keypoints import KP
+from mikiri.render import outlined_text
 from mikiri.smoothing import fill_gaps, savgol
 
 COURT_LENGTH = 13.40
@@ -794,24 +795,9 @@ def draw_court(
             )
         if worst > 0:
             note = f"95% position error, worst {worst * 100:.0f} cm"
-            cv2.putText(
-                img, note, (8, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 0, 0), 3, cv2.LINE_AA
-            )
-            cv2.putText(
-                img,
-                note,
-                (8, h - 8),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.36,
-                (90, 230, 255),
-                1,
-                cv2.LINE_AA,
-            )
+            outlined_text(img, note, (8, h - 8), scale=0.36, colour=(90, 230, 255))
     if label:
-        cv2.putText(img, label, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(
-            img, label, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA
-        )
+        outlined_text(img, label, (8, 18), scale=0.5)
     return img
 
 

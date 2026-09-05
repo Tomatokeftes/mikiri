@@ -50,13 +50,14 @@ The browser opens at `http://127.0.0.1:8765`. Then:
    writes `<video>.mikiri.json` next to the clip; opening the clip again
    restores everything.
 
-The `demo/` folder holds three clips: `demo.mp4` is a synthetic jump used by
-the tests (`mikiri make-demo` regenerates it), `20260611_220344.mp4` is a
-2 minute phone recording of jump smashes filmed from behind-diagonal, and
-`Screen_Recording_20260412_123956_OneDrive.mp4` is a screen recording of a
-match seen from behind. Both real clips contain other players: use the
-"Track largest person" default or click the athlete in the Run dialog, and
-expect to flip "Swap L/R" for footage from behind.
+`demo/` holds one clip: `demo.mp4`, a synthetic jump the tests use, which
+`mikiri make-demo` regenerates. Real footage lives in `benchmarks/` and is
+described by `benchmarks/clips.json` -- a phone recording of jump smashes from
+behind-diagonal, a screen recording of a match seen from behind, a side-on
+smash and a Lin Dan rally. The videos themselves are never committed; see
+[benchmarks/README.md](benchmarks/README.md). Real clips contain other players:
+use the "Track largest person" default or click the athlete in the Run dialog,
+and expect to flip "Swap L/R" for footage from behind.
 
 ![Real footage: jump smash tracked from behind](docs/screenshots/real/tracked.png)
 
@@ -323,13 +324,17 @@ pytest -m slow                        # real RTMPose pipeline on the demo clip a
 
 `scripts/real_clip_screenshots.py` drives a running server with Playwright on
 any clip (trim, click the athlete, accept events, screenshot); it produced the
-real-footage screenshot above.
+real-footage screenshot above. `scripts/render_benchmark.py <clip id>` renders
+a benchmark clip with the analysis drawn on it -- skeleton, the top-down court,
+the bout, the contacts and the split steps -- which is the quickest way to see
+whether a number is describing what actually happened.
 
 `pytest` with no arguments runs all three and is the check to run before
 committing; the UI test rewrites the screenshots in `docs/screenshots`, so
 discard that churn unless the interface actually changed.
 
 Layout: `src/mikiri` (package), `src/mikiri/server` (FastAPI + static
-front end), `tests`, `docs`, `demo`. Every non-obvious choice is written up in
+front end), `tests`, `docs`, `demo` (the synthetic clip), `benchmarks` (real
+footage and what each clip is for). Every non-obvious choice is written up in
 [DECISIONS.md](DECISIONS.md), and [CLAUDE.md](CLAUDE.md) is the orientation for
 anyone (or anything) picking the codebase up cold.
