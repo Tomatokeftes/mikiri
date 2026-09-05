@@ -155,3 +155,27 @@ def test_saving_a_tracked_project_keeps_it_and_the_state_reads_it_back(
     forget(s.project.id)
     s.invalidate_trends()
     assert s.state()["trends"]["n_sessions"] == 1, "the open session still counts"
+
+
+def test_the_movement_comparator_reads_the_kept_coaching_summaries():
+    """Guards the comparator staying without a caller now that its data is kept."""
+    from mikiri.coaching import coach, session_summary
+    from test_coaching import developing_footwork, developing_strokes, elite_footwork, elite_strokes
+
+    fw1, st1 = developing_footwork(), developing_strokes()
+    fw2, st2 = elite_footwork(), elite_strokes()
+    a = {
+        **_record(NEAR_WINS, "a", "2026-01-01"),
+        "coaching": session_summary(coach(fw1, st1, "club", overrides={}), fw1, st1),
+    }
+    b = {
+        **_record(NEAR_WINS, "b", "2026-01-02"),
+        "coaching": session_summary(coach(fw2, st2, "club", overrides={}), fw2, st2),
+    }
+    t = trends([a, b])
+    c = t["coaching"]
+    assert c["n_sessions"] == 2 and c["metrics"]["coverage_eccentricity"]["direction"] == "improved"
+    assert "coverage_spread" in c["resolved"]
+    assert trends([a, {**b, "coaching": None}])["coaching"] is None, (
+        "one summary is nothing to compare"
+    )

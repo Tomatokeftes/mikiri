@@ -33,6 +33,7 @@ from collections import Counter
 import numpy as np
 
 from mikiri.classify import LABELLED_EVIDENCE
+from mikiri.coaching import compare_sessions
 from mikiri.match import AUTO, CONFIRMED, MatchChain, Rally, other_side, weakest
 from mikiri.tracking import SIDES
 
@@ -357,8 +358,10 @@ def trends(records: list[dict]) -> dict:
     Returns:
         A JSON-friendly dict: ``sessions`` in order, ``metrics`` keyed by id
         with first, last, delta, direction, the series and its provenance,
-        ``withheld`` for the metrics that could not be followed, and
-        ``notes``.
+        ``withheld`` for the metrics that could not be followed, ``coaching``
+        with the movement comparator's view of the same sessions (see
+        :func:`mikiri.coaching.compare_sessions`) or ``None`` when no session
+        had court numbers, and ``notes``.
     """
     rows = sorted(records, key=lambda r: str(r.get("recorded_at", "")))
     out: dict = {
@@ -380,6 +383,11 @@ def trends(records: list[dict]) -> dict:
                 "current": bool(r.get("current")),
             }
         )
+    # The movement side of the same sessions: split steps, coverage and the
+    # rest, compared by the coaching module's own rules. It carries its own
+    # notes, so they are not repeated here.
+    kept_coaching = [r["coaching"] for r in rows if isinstance(r.get("coaching"), dict)]
+    out["coaching"] = compare_sessions(kept_coaching) if len(kept_coaching) >= 2 else None
     if not rows:
         out["notes"].append("no sessions kept yet: saving a tracked project keeps it")
         return out

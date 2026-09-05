@@ -404,8 +404,7 @@ The amended rule opens doors; it does not open all of them.
    trends half followed: saving a project keeps the session (`history.py`),
    sessions are grouped by a player label, and `tactics.trends` reads the
    same figures across them with the same withholding, shown in an Over time
-   panel. The coaching comparator's numbers are kept in each record but not
-   yet shown beside them.
+   panel, with the coaching comparator's movement figures under them.
 7. **Doubles**: player attribution within a side, then the formation pack,
    which needs no classifier and may well land before singles shot naming is
    any good.

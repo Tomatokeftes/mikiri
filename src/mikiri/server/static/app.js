@@ -1187,8 +1187,30 @@ function renderTrends() {
   const byReason = new Map();
   for (const w of t.withheld || []) byReason.set(w.reason, [...(byReason.get(w.reason) || []), w.label]);
   for (const [reason, labels] of byReason) rows.push(kv('withheld', `<span class="muted small-text">${labels.join(', ')}: ${reason}</span>`));
+  // The movement comparator on the same sessions: its metrics carry units
+  // and a severity, and its advice ids say what persisted or went away.
+  const c = t.coaching;
+  if (c && c.n_sessions >= 2) {
+    rows.push(kv('<span class="muted small-text">movement</span>', ''));
+    // Only the movements that cleared their metric's own minimum are rows;
+    // the rest are a count, so the panel reads as what changed.
+    const unit = (m) => (m.unit ? ` ${m.unit}` : '');
+    const num = (x) => (Math.abs(x) >= 100 ? Math.round(x) : Math.round(x * 100) / 100);
+    const all = Object.values(c.metrics || {});
+    for (const m of all.filter((m) => m.meaningful)) {
+      rows.push(kv(m.label, `${num(m.first)}${unit(m)} to ${num(m.last)}${unit(m)}, ${m.direction}${m.series && m.series.length < c.n_sessions ? ` (${m.series.length} of ${c.n_sessions} sessions)` : ''}`));
+    }
+    const still = all.filter((m) => !m.meaningful);
+    if (still.length) rows.push(kv('', `<span class="muted small-text">${still.length} other movement number${still.length === 1 ? '' : 's'} unchanged: ${still.map((m) => m.label.toLowerCase()).join(', ')}</span>`));
+    const ids = (xs) => (xs || []).map((x) => x.replace(/_/g, ' ')).join(', ');
+    if ((c.persistent || []).length) rows.push(kv('still to work on', ids(c.persistent)));
+    if ((c.resolved || []).length) rows.push(kv('no longer flagged', ids(c.resolved)));
+    if ((c.new || []).length) rows.push(kv('newly flagged', ids(c.new)));
+    if (!Object.keys(c.metrics || {}).length) rows.push(kv('', '<span class="muted small-text">no movement number was measured in two of these sessions</span>'));
+  }
   $('#trends-metrics').innerHTML = rows.join('');
-  $('#trends-note').textContent = (t.notes || []).map((n) => n.charAt(0).toUpperCase() + n.slice(1) + '.').join(' ');
+  const notes = (t.notes || []).concat(c && c.n_sessions >= 2 ? (c.notes || []).filter((n) => !(t.notes || []).includes(n)) : []);
+  $('#trends-note').textContent = notes.map((n) => n.charAt(0).toUpperCase() + n.slice(1) + '.').join(' ');
 }
 
 // The tagger: the labelling pass the per-player classifier trains on. It walks

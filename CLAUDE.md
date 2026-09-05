@@ -213,11 +213,10 @@ Known gaps:
   a bout and can never start one. A rally played slowly enough for the motion
   threshold to call it idle would still be cut in half, and nothing tests that
   case because no clip here contains one.
-* `coaching.compare_sessions` turns a list of session summaries into progress
-  and is tested. Saving a project now keeps the session's summaries in
-  `history.json`, and the tactical figures are compared across them in the
-  Over time panel, but the biomechanical comparator's output is not yet shown
-  there: its data is kept, its panel is not built.
+* Progress over time rests on the user saving projects: a session is kept in
+  `history.json` on save, grouped by the project's player label, and nothing
+  else feeds the store. Two sessions of the same file cut the same way are
+  one session; there is no other duplicate guard.
 * `segments.py` has been calibrated against two real clips and is pinned in
   `tests/test_real_footage.py`, but only for the *play* split. On the
   two-minute phone drill the rest comes out idle, and people walking close

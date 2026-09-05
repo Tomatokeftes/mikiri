@@ -82,12 +82,15 @@ unchanged; and provenance is the weakest across the sessions read. One session
 is not a trend, and two carry the coaching comparator's own caveat: they cannot
 separate a trend from a good or bad day.
 
+The movement side of the same sessions -- the split-step, coverage and rally
+numbers `coaching.compare_sessions` follows, with their own minimum changes
+and their own caveats about measurement quality -- is read from the kept
+coaching summaries and shown under the tactical figures, with the advice that
+persisted, was resolved or is new. That comparator existed before any of this
+and had nothing to read; this is the first time it runs on a real store.
+
 ## What is still missing
 
-* The biomechanical side of a session -- the split-step and coverage numbers
-  `compare_sessions` follows -- is kept in the record but not yet shown beside
-  the tactical trends. The comparator now has its data; the panel for it is
-  the next piece.
 * A recording date is the video file's modification time, which survives a
   copy from a phone but not every re-encode. The record keeps it as a field
   the user can correct in the file.
