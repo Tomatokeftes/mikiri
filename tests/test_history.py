@@ -179,3 +179,16 @@ def test_the_movement_comparator_reads_the_kept_coaching_summaries():
     assert trends([a, {**b, "coaching": None}])["coaching"] is None, (
         "one summary is nothing to compare"
     )
+
+
+def test_the_export_section_lists_the_sessions_and_what_moved():
+    """Guards the summary file dropping the withheld metrics or the caveats."""
+    from mikiri.export import _trends_lines
+
+    a = _record(NEAR_WINS, "a", "2026-01-01", shot="clear")
+    b = _record(NEAR_WINS, "b", "2026-01-02", shot="smash")
+    text = "\n".join(_trends_lines(trends([a, {**b, "current": True}])))
+    assert "## Over time" in text and "1 earlier kept session" in text
+    assert "| 2026-01-02 b (this clip) |" in text
+    assert "| clear share of named shots | 100% | 0% | down | inferred |" in text
+    assert "withheld" in text and "Two sessions cannot separate" in text

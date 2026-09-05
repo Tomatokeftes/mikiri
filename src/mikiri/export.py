@@ -77,6 +77,8 @@ class ExportInputs:
     tactics: dict | None = None
     #: Formation per side with two tracked partners, from :mod:`mikiri.doubles`.
     doubles: dict | None = None
+    #: This clip against the same player's kept sessions, from :func:`mikiri.tactics.trends`.
+    trends: dict | None = None
 
 
 def _pct(x: float | None) -> str:
@@ -210,6 +212,72 @@ def _doubles_lines(d: dict) -> list[str]:
                 )
         elif r.get("note"):
             lines.append(f"| Time in the wrong shape after own shot | {r['note']} |")
+        lines.append("")
+    return lines
+
+
+def _trends_lines(t: dict) -> list[str]:
+    """The over-time section: the kept sessions, what moved, and what could not be followed."""
+    lines = ["## Over time", ""]
+    lines.append(
+        f"This clip against {t['n_sessions'] - 1} earlier kept session"
+        f"{'' if t['n_sessions'] == 2 else 's'} of the same player. A change smaller than "
+        "the metric's own minimum reads as unchanged; a share withheld in a session stays "
+        "withheld here; provenance is the weakest across the sessions read."
+    )
+    lines.append("")
+    lines.append("| Session | Rallies | Points |")
+    lines.append("|---|---|---|")
+    for s in t.get("sessions", []):
+        when = (s.get("recorded_at") or "")[:10] or "undated"
+        pts = "-".join(str(v) for v in s["points"]) if s.get("points") else ""
+        mark = " (this clip)" if s.get("current") else ""
+        lines.append(f"| {when} {s.get('name') or ''}{mark} | {s.get('n_rallies', 0)} | {pts} |")
+    lines.append("")
+    if t.get("metrics"):
+        lines.append("| Measure | First | Last | Change | How |")
+        lines.append("|---|---|---|---|---|")
+        for mid, m in t["metrics"].items():
+            fmt = (
+                (lambda x: f"{x}") if mid == "shots_per_rally" else (lambda x: f"{round(100 * x)}%")
+            )
+            lines.append(
+                f"| {m['label']} | {fmt(m['first'])} | {fmt(m['last'])} | {m['direction']} | "
+                f"{m.get('how') or 'withheld'} |"
+            )
+        lines.append("")
+    for w in t.get("withheld", []):
+        lines.append(f"* {w['label']}: withheld, {w['reason']}.")
+    if t.get("withheld"):
+        lines.append("")
+    c = t.get("coaching")
+    if c and c.get("n_sessions", 0) >= 2:
+        moved = [m for m in c.get("metrics", {}).values() if m.get("meaningful")]
+        if moved:
+            lines.append("| Movement | First | Last | Change |")
+            lines.append("|---|---|---|---|")
+            for m in moved:
+                unit = f" {m['unit']}" if m.get("unit") else ""
+                lines.append(
+                    f"| {m['label']} | {m['first']}{unit} | {m['last']}{unit} | {m['direction']} |"
+                )
+            lines.append("")
+        still = [m["label"] for m in c.get("metrics", {}).values() if not m.get("meaningful")]
+        if still:
+            lines.append(f"Unchanged movement numbers: {', '.join(still)}.")
+            lines.append("")
+        for key, label in (
+            ("persistent", "Still flagged"),
+            ("resolved", "No longer flagged"),
+            ("new", "Newly flagged"),
+        ):
+            if c.get(key):
+                lines.append(f"{label}: {', '.join(x.replace('_', ' ') for x in c[key])}.")
+        if any(c.get(k) for k in ("persistent", "resolved", "new")):
+            lines.append("")
+    for n in t.get("notes", []):
+        lines.append(f"{n[0].upper()}{n[1:]}.")
+    if t.get("notes"):
         lines.append("")
     return lines
 
@@ -653,6 +721,8 @@ def write_summary(
         lines.extend(_tactics_lines(inp.tactics))
     if inp.doubles and inp.doubles.get("sides"):
         lines.extend(_doubles_lines(inp.doubles))
+    if inp.trends and inp.trends.get("n_sessions", 0) >= 2:
+        lines.extend(_trends_lines(inp.trends))
     if inp.split_steps and inp.split_steps.get("n_moves"):
         sp = inp.split_steps
         lines.append("## Split steps")

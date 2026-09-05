@@ -2026,6 +2026,7 @@ class ProjectSession:
             match=self.match_summary(),
             tactics=self.tactics(),
             doubles=self.doubles(),
+            trends=self.trends(),
         )
 
         def progress(frac: float, msg: str) -> None:
