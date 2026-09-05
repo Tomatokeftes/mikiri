@@ -71,3 +71,119 @@ def test_jump_smash_from_behind(clip: Path, out_dir: Path):
     assert np.isfinite(knees).all()
     summary = (pack / "summary.md").read_text(encoding="utf-8")
     assert "Flight time (takeoff to landing): **" in summary
+
+
+# --- match footage: a static camera behind the court, both players present -------
+
+MATCH_CLIP = ROOT / "demo" / "lindan_rally.mp4"
+# Court calibration for that clip, fitted once by aligning the model to the
+# detected line pixels (reprojection error 14 cm over 14 points) and verified by
+# eye against the painted lines. The two net-post bases were read from the frame;
+# the right doubles sideline is constructed from the right post and the sideline
+# vanishing point, because too little of it is painted in view to detect.
+MATCH_COURT_IMAGE = [
+    [168.7, 1102.6],
+    [242.3, 1016.6],
+    [435.1, 791.1],
+    [387.8, 1090.5],
+    [430.6, 1007.0],
+    [543.0, 787.3],
+    [1503.1, 1028.8],
+    [1397.9, 957.5],
+    [1116.4, 766.7],
+    [2721.7, 961.4],
+    [2472.7, 902.5],
+    [1795.7, 742.4],
+    [470.0, 724.0],
+    [1574.0, 690.0],
+]
+MATCH_COURT_WORLD = [
+    [0.0, 0.0],
+    [0.0, 0.76],
+    [0.0, 4.72],
+    [0.46, 0.0],
+    [0.46, 0.76],
+    [0.46, 4.72],
+    [3.05, 0.0],
+    [3.05, 0.76],
+    [3.05, 4.72],
+    [6.10, 0.0],
+    [6.10, 0.76],
+    [6.10, 4.72],
+    [0.0, 6.70],
+    [6.10, 6.70],
+]
+# The near player's torso in the first frame, for the initial click.
+MATCH_CLICK = (869.0, 600.0)
+
+
+@pytest.fixture(scope="module")
+def match_clip() -> Path:
+    if not MATCH_CLIP.exists():
+        pytest.skip(f"match footage not present: {MATCH_CLIP.name}")
+    return MATCH_CLIP
+
+
+def test_tracker_stays_on_the_player_not_the_officials(match_clip: Path):
+    """The regression this footage was added for.
+
+    Without the court restriction the tracker lost the player after about eight
+    seconds and spent the rest of the clip locked onto a seated line judge, who
+    is large, still and just off the right of the court. The symptom is easy to
+    assert on: a player cannot spend the match standing outside his own half.
+    """
+    settings = Settings(
+        backend="rtmlib", rtmlib_mode="balanced", frame_cache_longest=640, det_every=4
+    )
+    try:
+        backend = build_backend(settings, match_clip)
+    except ModelNotAvailableError as exc:
+        pytest.skip(str(exc))
+
+    s = ProjectSession.open_video(match_clip, settings)
+    s.project.project_path = None
+    s.set_trim(0, s.info.n_frames - 1)
+    s.set_court("doubles_corners", MATCH_COURT_IMAGE, MATCH_COURT_WORLD, frame=0)
+    assert s.project.court.reprojection_error_m < 0.25
+
+    req = s.run_request(MATCH_CLICK)
+    assert req.court_polygon is not None, "a calibrated court must restrict tracking"
+    s.apply_result(run_tracking(s.reader, backend, req, frame_cache=s.frame_cache), req)
+
+    track = s.court_track()
+    pos = track.positions[np.isfinite(track.positions).all(axis=1)]
+    assert pos.shape[0] > 1000
+    on_own_half = (pos[:, 0] > -0.6) & (pos[:, 0] < 6.7) & (pos[:, 1] > -0.6) & (pos[:, 1] < 7.3)
+    assert on_own_half.mean() > 0.97, f"only {on_own_half.mean():.0%} of frames on his own half"
+
+    m = track.metrics
+    # Forty seconds of elite singles: tens of metres covered, not a frozen official.
+    assert 50.0 < m["distance_m"] < 160.0, m["distance_m"]
+    assert 1.2 < m["avg_speed_mps"] < 4.0, m["avg_speed_mps"]
+    assert m["direction_changes"] > 20
+    # His base sits near the middle of his own half, which is the elite signature.
+    base = m["base_m"]
+    assert abs(base[0] - 3.05) < 1.2 and 2.0 < base[1] < 5.0, base
+
+
+def test_an_eye_level_camera_cannot_be_recovered_from_the_net_posts(match_clip: Path):
+    """This clip is filmed from about head height, which the posts cannot resolve.
+
+    A vertical's top crosses the ground plane's horizon exactly when its height
+    equals the camera's, so post tops shot from near 1.55 m sit on the horizon
+    and map arbitrarily far away. The app must say that plainly rather than
+    blame the clicked points, and must keep the court calibration regardless.
+    """
+    settings = Settings(backend="rtmlib", frame_cache_longest=640)
+    s = ProjectSession.open_video(match_clip, settings)
+    s.project.project_path = None
+    cal = s.set_court(
+        "doubles_corners",
+        MATCH_COURT_IMAGE,
+        MATCH_COURT_WORLD,
+        frame=0,
+        post_tops=[[470.0, 438.0], [1574.0, 432.0]],
+    )
+    assert cal.is_valid(), "the court itself must survive a failed camera recovery"
+    assert not cal.has_camera()
+    assert s.court_camera_error and "too close to 1.55 m" in s.court_camera_error
