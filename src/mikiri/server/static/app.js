@@ -319,6 +319,21 @@ function renderTimeline() {
   ctx.fillStyle = '#2a2e38'; ctx.fillRect(g.pad, y0, g.w - 2 * g.pad, y1 - y0);
   // trimmed range
   ctx.fillStyle = 'rgba(79,140,255,0.28)'; ctx.fillRect(g.x(S.state.trim_start), y0, g.x(S.state.trim_end) - g.x(S.state.trim_start), y1 - y0);
+  // What each stretch of the clip is, along the top of the bar: play in
+  // green, rest in grey, another scene in red. Read straight off the
+  // segmenter's runs, so a twelve-minute match shows its points at a glance.
+  const runs = (S.state.tracking && S.state.tracking.segments) || [];
+  for (const r of runs) {
+    ctx.fillStyle = TIMELINE_STATE[r.state] || TIMELINE_STATE.idle;
+    ctx.fillRect(g.x(r.start), y0, Math.max(1, g.x(r.end + 1) - g.x(r.start)), 4);
+  }
+  // Rallies as bands, tinted by who won where the chain knows: near in the
+  // left-hand colour, far in the right-hand one, open in grey. Without a
+  // chain the bouts of play stand in, untinted.
+  for (const band of timelineBands()) {
+    ctx.fillStyle = band.fill;
+    ctx.fillRect(g.x(band.start), y0 + 6, Math.max(1, g.x(band.end + 1) - g.x(band.start)), y1 - 6 - (y0 + 6));
+  }
   // tracked range
   if (S.pose) { ctx.fillStyle = 'rgba(63,195,128,0.35)'; ctx.fillRect(g.x(S.pose.start), y1 - 5, g.x(S.pose.end) - g.x(S.pose.start), 5); }
   // lost frames
@@ -326,7 +341,7 @@ function renderTimeline() {
   // detected contacts, as short ticks so they never crowd the event labels
   if (S.pose && S.pose.strokes && S.pose.strokes.strokes.length) {
     ctx.fillStyle = 'rgba(179,136,255,0.9)';
-    for (const st of S.pose.strokes.strokes) ctx.fillRect(g.x(st.frame + S.pose.start) - 1, y0, 2, 8);
+    for (const st of S.pose.strokes.strokes) ctx.fillRect(g.x(st.frame + S.pose.start) - 1, y0 + 6, 2, 8);
   }
   // handles
   for (const f of [S.state.trim_start, S.state.trim_end]) { ctx.fillStyle = COLORS.accent; ctx.fillRect(g.x(f) - 3, y0 - 4, 6, y1 - y0 + 8); }
@@ -348,9 +363,47 @@ function renderTimeline() {
   ctx.fillStyle = '#ccc'; ctx.font = '10px sans-serif'; ctx.fillText('0', g.pad, g.h - 0); ctx.fillText(String(nFrames() - 1), g.w - g.pad - 24, g.h - 0);
 }
 
+const TIMELINE_STATE = {
+  play: 'rgba(63,195,128,0.55)', idle: 'rgba(154,160,173,0.28)', interval: 'rgba(154,160,173,0.28)',
+  warm_up: 'rgba(230,200,90,0.45)', not_badminton: 'rgba(255,92,92,0.45)',
+};
+const TIMELINE_WINNER = { near: 'rgba(63,195,128,0.22)', far: 'rgba(255,127,42,0.22)' };
+
+// The bands the timeline draws and names: the chain's rallies with their
+// outcome where there is a chain, else the bouts of play. Frames absolute.
+function timelineBands() {
+  if (!S.pose) return [];
+  const off = S.pose.start;
+  const m = S.state.match;
+  if (m && m.rallies && m.rallies.length) {
+    return m.rallies.map((r, i) => {
+      const w = r.winner && r.winner.value;
+      const label = `rally ${i + 1}, ${r.duration_s} s, ${r.n_contacts} contacts, ${w ? `${w} won (${r.winner.how})` : 'open'}`;
+      return { start: r.start + off, end: r.end + off, fill: TIMELINE_WINNER[w] || 'rgba(154,160,173,0.18)', label };
+    });
+  }
+  const b = S.state.bouts;
+  if (b && b.bouts && b.bouts.length) {
+    return b.bouts.map((x, i) => ({ start: x.start + off, end: x.end + off, fill: 'rgba(154,160,173,0.18)', label: `bout ${i + 1}, ${x.duration_s} s` }));
+  }
+  return [];
+}
+
+function timelineLabelAt(x) {
+  const g = timelineGeom(); const f = g.f(x);
+  const band = timelineBands().find((b) => f >= b.start && f <= b.end);
+  const run = ((S.state.tracking && S.state.tracking.segments) || []).find((r) => f >= r.start && f <= r.end);
+  const parts = [];
+  if (band) parts.push(band.label);
+  if (run && run.state !== 'play') parts.push(run.state.replace('_', ' '));
+  return parts.join('; ');
+}
+
 function bindTimeline() {
   const canvas = $('#timeline-canvas');
   const pos = (ev) => { const r = canvas.getBoundingClientRect(); return ev.clientX - r.left; };
+  // Hovering a band names it: the rally, its length, who won.
+  canvas.addEventListener('mousemove', (ev) => { if (S.state && !S.timelineDrag) canvas.title = timelineLabelAt(pos(ev)); });
   canvas.addEventListener('mousedown', (ev) => {
     if (!S.state) return;
     const g = timelineGeom(); const x = pos(ev);
@@ -1756,6 +1809,7 @@ window.JL = {
     return { x: r.left + kp[joint][0] * scale, y: r.top + kp[joint][1] * scale, scale, rect: r };
   },
   plotCanvas(name) { const p = S.plots.find((x) => x.name === name); return p ? p.canvas : null; },
+  timelineBands,
 };
 
 document.addEventListener('DOMContentLoaded', init);

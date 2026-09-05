@@ -255,6 +255,10 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         expect(page.locator("#rally-list")).to_contain_text("bout 1")
         # With the court in, the next step is the player at the other end.
         expect(page.locator("#next-step")).to_contain_text("other end")
+        # The timeline names the bout under the pointer: without a chain the
+        # bouts of play are the bands, and hovering one says which it is.
+        bands = page.evaluate("JL.timelineBands().map((b) => b.label)")
+        assert bands and bands[0].startswith("bout 1")
 
         # Detected contacts live on the Match page: the demo clip's swing shows
         # up there with a speed and a court zone. The exact height class is
