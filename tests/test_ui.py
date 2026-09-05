@@ -77,6 +77,9 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         expect(page.locator("#welcome")).to_be_visible()
 
         # Load the demo by path.
+        # The path box is the fallback behind the system file dialog, folded
+        # away until asked for; a test has no desktop to put a dialog on.
+        page.click("details.open-inline > summary")
         page.fill("#open-path-input", str(demo_video))
         page.press("#open-path-input", "Enter")
         expect(page.locator("#workspace")).to_be_visible()

@@ -742,10 +742,16 @@ function bindVideoCanvas() {
     if (!S.drag) return;
     const d = S.drag; S.drag = null;
     try {
-      applyState(await api('POST', `/api/projects/${S.pid}/corrections`, { frame: S.frame, joint: d.joint, x: d.x, y: d.y }));
+      // Fetch the corrected pose before showing the correction as applied.
+      // Rendering the new state first left a window in which the panel said
+      // "1 corrected keypoint" while the canvas still drew the old joint, and
+      // anything reading the joint in that window -- the UI smoke test did --
+      // saw it unmoved.
+      const state = await api('POST', `/api/projects/${S.pid}/corrections`, { frame: S.frame, joint: d.joint, x: d.x, y: d.y });
+      await loadPose();
+      applyState(state);
       S.lastJoint = d.joint; $('#interp-joint').value = d.joint;
       if (!$('#interp-start').value) $('#interp-start').value = S.frame; else $('#interp-end').value = S.frame;
-      await loadPose(); renderAll();
       setStatus(`Corrected ${S.state.meta.keypoint_names[d.joint]} on frame ${S.frame}`);
     } catch (e) { setStatus(e.message, true); }
   });
@@ -1368,6 +1374,19 @@ async function nativeDialog() {
     if (r.path) await openPath(r.path); else if (r.error) setStatus('System dialog unavailable: ' + r.error, true);
   } catch (e) { setStatus(e.message, true); }
 }
+// The entry point is the operating system's own file picker: the dialog every
+// other program on the machine opens with, nothing to learn. The in-app
+// browser exists for the case where there is no display to put a dialog on
+// -- a remote or headless server -- and only then.
+async function openNative(kind) {
+  browseKind = kind;
+  try {
+    const r = await api('POST', `/api/dialog/open-file?kind=${kind}`);
+    if (r.path) { await openPath(r.path); return; }
+    if (r.error) { setStatus('No system file dialog here (' + r.error + '); browse instead', true); await openBrowser(kind); }
+    // No path and no error: the user cancelled the dialog. Nothing to do.
+  } catch (e) { setStatus(e.message, true); await openBrowser(kind); }
+}
 async function uploadFile(file) {
   const fd = new FormData(); fd.append('file', file);
   try { setStatus('Uploading ' + file.name + '...'); const state = await api('POST', '/api/video/upload', fd, true); await setProject(state); }
@@ -1377,10 +1396,10 @@ async function uploadFile(file) {
 // ---------------------------------------------------------------- wiring
 
 function bindUI() {
-  $('#open-btn').addEventListener('click', () => openBrowser('video'));
-  $('#welcome-open').addEventListener('click', () => openBrowser('video'));
-  $('#open-project-btn').addEventListener('click', () => openBrowser('project'));
-  $('#welcome-open-project').addEventListener('click', () => openBrowser('project'));
+  $('#open-btn').addEventListener('click', () => openNative('video'));
+  $('#welcome-open').addEventListener('click', () => openNative('video'));
+  $('#open-project-btn').addEventListener('click', () => openNative('project'));
+  $('#welcome-open-project').addEventListener('click', () => openNative('project'));
   $('#open-path-btn').addEventListener('click', () => openPath($('#open-path-input').value.trim()));
   $('#open-path-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') openPath($('#open-path-input').value.trim()); });
   $('#upload-input').addEventListener('change', (e) => { if (e.target.files[0]) uploadFile(e.target.files[0]); });

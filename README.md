@@ -29,7 +29,8 @@ mikiri
 
 The browser opens at `http://127.0.0.1:8765`. Then:
 
-1. **Open video**: browse, paste a path, or upload. Duration, fps and resolution
+1. **Open video**: the system's own file dialog opens. On a machine with no
+   display to put one on, paste a path or upload instead. Duration, fps and resolution
    appear above the frame; rotation metadata is respected.
 2. **Trim**: drag the blue handles on the timeline or press <kbd>I</kbd> /
    <kbd>O</kbd> on the current frame.

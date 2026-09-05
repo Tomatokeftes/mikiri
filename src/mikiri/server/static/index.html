@@ -28,11 +28,12 @@
       <button class="btn primary" id="welcome-open">Open video</button>
       <button class="btn" id="welcome-open-project">Open project</button>
     </div>
-    <div class="open-inline">
-      <input id="open-path-input" type="text" placeholder="...or paste a path to a video / .mikiri.json and press Enter">
+    <details class="open-inline">
+      <summary class="muted small-text">No file dialog on this machine? Paste a path or upload instead.</summary>
+      <input id="open-path-input" type="text" placeholder="Path to a video or a .mikiri.json, then Enter">
       <button class="btn" id="open-path-btn">Open path</button>
       <label class="btn file-btn">Upload<input id="upload-input" type="file" accept="video/*,.mp4,.mov,.m4v,.avi,.mkv"></label>
-    </div>
+    </details>
   </section>
 
   <section id="workspace">

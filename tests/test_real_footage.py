@@ -561,7 +561,7 @@ def test_labelling_real_contacts_produces_a_report_and_names_only_what_separates
     start = s.pose_start
     overhead = [c for c in subject.strokes if c.height_class == "overhead"]
     lower = [c for c in subject.strokes if c.height_class != "overhead"]
-    if len(overhead) < 7 or len(lower) < 7:
+    if len(overhead) < 6 or len(lower) < 6:
         pytest.skip("not enough contacts of both heights on this clip to label")
     try:
         for c in overhead[:6]:
