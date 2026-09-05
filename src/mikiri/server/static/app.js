@@ -1094,6 +1094,7 @@ function renderReview() {
   panel.classList.toggle('hidden', !hasQueue && !hasContacts);
   $('#tag-toggle').classList.toggle('hidden', !hasContacts);
   $('#tag-toggle').textContent = S.tagging ? 'Back to questions' : 'Tag shots';
+  $('#review-undo').disabled = !(q && q.can_undo);
   renderClassifier(tg);
   if (!hasQueue && !hasContacts) { S.review = null; S.tag = null; return; }
   if (S.tagging && hasContacts) { S.review = null; renderTagging(tg); return; }
@@ -1116,7 +1117,7 @@ function renderReview() {
   $('#review-options').innerHTML = item.options.map((o, i) =>
     `<button class="btn small" data-i="${i}"><b>${i + 1}</b> ${o.label}</button>`).join(' ')
     + ' <button class="btn small" data-i="d"><b>d</b> leave it</button>';
-  $('#review-help').innerHTML = 'Press the number to answer, or <b>d</b> to leave this one. The video is at the frame in question; for "at the frame I am on", scrub to the hit first.';
+  $('#review-help').innerHTML = 'Press the number to answer, <b>d</b> to leave this one, <b>u</b> to take the last answer back. The video is at the frame in question; for "at the frame I am on", scrub to the hit first.';
   for (const b of $('#review-options').querySelectorAll('button')) {
     b.addEventListener('click', () => answerReview(b.dataset.i === 'd' ? 'd' : Number(b.dataset.i)));
   }
@@ -1308,6 +1309,11 @@ async function tagShot(choice) {
   } catch (e) { setStatus(e.message, true); }
 }
 
+async function undoReview() {
+  try { applyState(await api('PUT', `/api/projects/${S.pid}/review`, { action: 'undo', frame: S.frame })); setStatus('Took the last answer back'); }
+  catch (e) { setStatus(e.message, true); }
+}
+
 async function answerReview(choice) {
   const item = S.review;
   if (!item) return;
@@ -1317,6 +1323,8 @@ async function answerReview(choice) {
     const o = item.options[choice];
     if (!o) return;
     body = { action: o.action, frame: o.frame == null ? S.frame : o.frame, side: o.side, kind: item.kind };
+    // A move keeps the contact's own frame and takes the user's as the destination.
+    if (o.moves) body.value = String(S.frame);
   }
   try { applyState(await api('PUT', `/api/projects/${S.pid}/review`, body)); setStatus('Answered'); }
   catch (e) { setStatus(e.message, true); }
@@ -1547,6 +1555,7 @@ function bindUI() {
   $('#show-labels').addEventListener('change', (e) => { S.showLabels = e.target.checked; renderVideo(); });
   $('#swap-lr').addEventListener('change', async (e) => { applyState(await api('PUT', `/api/projects/${S.pid}/options`, { swap_lr: e.target.checked })); await loadPose(); renderAll(); });
   $('#tag-toggle').addEventListener('click', () => { S.tagging = !S.tagging; S.tagSeekKey = null; renderReview(); });
+  $('#review-undo').addEventListener('click', undoReview);
   $('#edit-toggle').addEventListener('change', (e) => { S.edit = e.target.checked; $('#edit-panel').classList.toggle('hidden', !S.edit); if (S.edit && !$('#interp-start').value) $('#interp-start').value = S.frame; renderVideo(); });
   $('#undo-btn').addEventListener('click', undo);
   $('#redo-btn').addEventListener('click', redo);
@@ -1641,6 +1650,9 @@ function bindUI() {
     if (S.review && reviewShowing) {
       if (/^[1-9]$/.test(e.key)) { answerReview(Number(e.key) - 1); e.preventDefault(); return; }
       if (e.key === 'd' || e.key === 'D') { answerReview('d'); e.preventDefault(); return; }
+    }
+    if (reviewShowing && (e.key === 'u' || e.key === 'U') && !$('#review-undo').disabled) {
+      undoReview(); e.preventDefault(); return;
     }
     const mult = e.shiftKey ? 10 : 1;
     if (e.key === 'ArrowLeft') { step(-mult); e.preventDefault(); }

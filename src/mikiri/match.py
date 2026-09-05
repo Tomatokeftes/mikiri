@@ -120,6 +120,9 @@ ACTION_ADD_CONTACT = "add_contact"
 ACTION_CONFIRM_WINNER = "confirm_winner"
 ACTION_CONFIRM_SERVER = "confirm_server"
 ACTION_DISMISS = "dismiss"
+#: A contact is real but at another frame: removed where it was found and
+#: added where the user is. One answer, so one step to undo.
+ACTION_MOVE_CONTACT = "move_contact"
 #: Not a question the chain asks but an answer the tagger records: what shot
 #: a contact was, in the user's own words, for the per-player classifier.
 ACTION_LABEL_SHOT = "label_shot"
@@ -702,9 +705,19 @@ def _check_alternation(r: Rally, fps: float) -> None:
         )
 
 
-def _option(action: str, side: str | None, frame: int | None, label: str) -> dict:
-    """One answer the queue can offer. ``frame`` of ``None`` means the frame the user is on."""
-    return {"action": action, "side": side, "frame": frame, "label": label}
+def _option(
+    action: str, side: str | None, frame: int | None, label: str, moves: bool = False
+) -> dict:
+    """One answer the queue can offer.
+
+    ``frame`` of ``None`` means the frame the user is on. A ``moves`` answer
+    keeps ``frame`` as the contact to move and takes the frame the user is
+    on as where it goes.
+    """
+    out = {"action": action, "side": side, "frame": frame, "label": label}
+    if moves:
+        out["moves"] = True
+    return out
 
 
 def _options_for(issue: Issue, rally: Rally) -> list[dict]:
@@ -720,6 +733,13 @@ def _options_for(issue: Issue, rally: Rally) -> list[dict]:
         return [
             _option(ACTION_CONFIRM_CONTACT, side, issue.frame, f"Yes, the {side} side hit here"),
             _option(ACTION_REMOVE_CONTACT, side, issue.frame, "No, there is no contact here"),
+            _option(
+                ACTION_MOVE_CONTACT,
+                side,
+                issue.frame,
+                f"The {side} side hit at the frame I am on, not here",
+                moves=True,
+            ),
         ]
     if issue.kind == ISSUE_DOUBLE_CONTACT and side:
         other = other_side(side)
@@ -736,6 +756,13 @@ def _options_for(issue: Issue, rally: Rally) -> list[dict]:
             ),
             _option(
                 ACTION_REMOVE_CONTACT, side, issue.frame, f"The later {side} one is not a contact"
+            ),
+            _option(
+                ACTION_MOVE_CONTACT,
+                side,
+                issue.frame,
+                f"The later {side} one belongs at the frame I am on",
+                moves=True,
             ),
         ]
         if earlier is not None:

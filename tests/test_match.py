@@ -449,6 +449,7 @@ def test_a_double_contact_is_asked_with_the_three_things_it_can_mean():
     """The queue offers exactly the answers that would settle the question."""
     from mikiri.match import (
         ACTION_ADD_CONTACT,
+        ACTION_MOVE_CONTACT,
         ACTION_REMOVE_CONTACT,
         review_items,
     )
@@ -468,8 +469,10 @@ def test_a_double_contact_is_asked_with_the_three_things_it_can_mean():
     assert actions == [
         (ACTION_ADD_CONTACT, players[1].side, None),  # at the frame the user is on
         (ACTION_REMOVE_CONTACT, players[0].side, later),
+        (ACTION_MOVE_CONTACT, players[0].side, later),  # to the frame the user is on
         (ACTION_REMOVE_CONTACT, players[0].side, earlier),
     ]
+    assert item["options"][2]["moves"] and "moves" not in item["options"][1]
     assert item["frame"] == later and item["id"].startswith(ISSUE_DOUBLE_CONTACT)
 
 

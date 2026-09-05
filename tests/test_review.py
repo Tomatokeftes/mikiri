@@ -10,7 +10,7 @@ from mikiri.project import Project
 def test_a_project_without_a_match_has_an_empty_queue(tracked_session):
     """One player and no court: nothing to ask, and the panel stays away."""
     review = tracked_session.state()["review"]
-    assert review == {"open": [], "n_open": 0, "answered": 0}
+    assert review == {"open": [], "n_open": 0, "answered": 0, "can_undo": False}
 
 
 def test_answers_are_recorded_on_the_project_keyed_by_frame_and_survive_a_save(tracked_session):
@@ -74,3 +74,42 @@ def test_tagging_state_lists_the_contacts_with_their_labels(tracked_session):
     assert tg["n_labelled"] <= tg["n_contacts"]
     for row in tg["contacts"]:
         assert set(row) == {"frame", "side", "descriptor", "shot", "how", "confidence"}
+
+
+def test_the_last_answer_can_be_taken_back_whatever_it_changed(tracked_session):
+    """Guards an undo that only knows about one kind of answer.
+
+    A contact edit, a dismissal and a shot label live in three lists; taking
+    back the last answer must restore whichever one it touched, and only the
+    last, and saying there is nothing to take back is an error, not a no-op.
+    """
+    s = tracked_session
+    assert s.state()["review"]["can_undo"] is False
+    with pytest.raises(ValueError, match="nothing to undo"):
+        s.answer_review("undo", 0, None)
+    s.answer_review("add_contact", 50, "near")
+    s.answer_review("dismiss", 60, None, kind="no_contacts")
+    s.answer_review("label_shot", 50, "near", value="clear")
+    review = s.project.match_review
+    assert len(review.contact_edits) == 1 and len(review.dismissed) == 1
+    assert [lab.shot for lab in review.shot_labels] == ["clear"]
+    assert s.state()["review"]["can_undo"] is True
+    s.answer_review("undo", 0, None)
+    assert s.project.match_review.shot_labels == [] and len(s.project.match_review.dismissed) == 1
+    s.answer_review("undo", 0, None)
+    assert s.project.match_review.dismissed == [] and len(s.project.match_review.contact_edits) == 1
+    s.answer_review("undo", 0, None)
+    assert s.project.match_review.contact_edits == []
+    assert s.state()["review"]["can_undo"] is False
+
+
+def test_moving_a_contact_is_two_edits_and_one_step_back(tracked_session):
+    """Guards a move that leaves the old contact standing, or that takes two undos."""
+    s = tracked_session
+    with pytest.raises(ValueError, match="frame it moves to"):
+        s.answer_review("move_contact", 50, "near")
+    s.answer_review("move_contact", 50, "near", value="57")
+    edits = [(e.frame, e.side, e.action) for e in s.project.match_review.contact_edits]
+    assert edits == [(50, "near", "remove"), (57, "near", "add")]
+    s.answer_review("undo", 0, None)
+    assert s.project.match_review.contact_edits == []

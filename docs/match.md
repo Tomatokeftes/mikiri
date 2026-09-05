@@ -130,16 +130,23 @@ that disagree, and the answers it admits are numbered so a keypress settles it.
 `d` leaves a question -- it stays raised in the chain and drops out of the
 queue. Each kind of question admits only the answers that would settle it:
 
-* a **recovered contact** is a hit or it is not;
-* a **double contact** is one of the three things it can mean -- the other side
-  hit between the two, at the frame the user has scrubbed to; the later one is
-  not a contact; the earlier one is not a contact;
+* a **recovered contact** is a hit, or it is not, or it is a hit at the frame
+  the user has scrubbed to rather than here;
+* a **double contact** is one of the things it can mean -- the other side hit
+  between the two, at the frame the user has scrubbed to; the later one is
+  not a contact; the later one belongs at the frame the user is on; the
+  earlier one is not a contact;
 * an **open outcome** is a choice of winner;
 * a **doubtful service or receiver court** is a choice of server.
 
+`u` takes the last answer back, whatever it changed -- a contact edit, a
+dismissal, a shot label, a move -- for as long as the project is open; the
+project file holds the answers, not the history of giving them.
+
 Answers are recorded on the project under `match_review`, keyed by absolute
 frame like the rally confirmations, so they survive the contacts and rallies
-being recomputed. Contact answers become `ContactEdit`s and are applied last,
+being recomputed. A move is two edits, a removal where the contact was found
+and an addition where the user is, and one step to undo. Contact answers become `ContactEdit`s and are applied last,
 after detection and recovery, when the chain's contacts are built
 (`session.chain_strokes`): a removal drops the contact nearest its frame
 within a quarter of a second, a confirmation marks it, and an addition

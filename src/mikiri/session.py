@@ -59,6 +59,7 @@ from mikiri.match import (
     ACTION_CONFIRM_WINNER,
     ACTION_DISMISS,
     ACTION_LABEL_SHOT,
+    ACTION_MOVE_CONTACT,
     ACTION_REMOVE_CONTACT,
     CONFIRMABLE,
     SIDES,
@@ -91,6 +92,7 @@ from mikiri.project import (
     Correction,
     EventMarker,
     IssueDismissal,
+    MatchReview,
     Project,
     RallyConfirmation,
     ShotLabel,
@@ -114,6 +116,11 @@ from mikiri.strokes import summarise as stroke_summary
 from mikiri.tactics import tactics_summary, trends
 from mikiri.tracking import SIDE_FAR
 from mikiri.video import FrameCache, VideoInfo, VideoReader, fit_size, probe_video
+
+#: The answer that takes the last one back; the queue's, not the chain's.
+ACTION_UNDO = "undo"
+#: How many answers a session keeps to take back. Nobody undoes fifty.
+MAX_REVIEW_UNDO = 50
 
 #: Distance from the ankle keypoint to the floor plus the head keypoint offset,
 #: subtracted from stature when calibrating from the athlete's height.
@@ -186,6 +193,11 @@ class ProjectSession:
         self._other_strokes: list[StrokeSeries | None] | None = None
         self._chain_strokes: tuple[StrokeSeries | None, list[StrokeSeries | None]] | None = None
         self._classifier: dict[str, dict] = {}
+        #: What the review looked like before each answer, newest last, so
+        #: an answer can be taken back whatever it changed. Kept for the
+        #: open session only: the project file holds the answers, not the
+        #: history of giving them.
+        self._review_undo: list[MatchReview] = []
         self._match: MatchChain | None = None
         self.last_export: dict | None = None
         #: Why camera recovery from the net posts failed, if it did. The court
@@ -1157,9 +1169,22 @@ class ProjectSession:
     ) -> None:
         """Record one answer from the queue or the tagger as the fact it settles.
 
-        Raises ``ValueError`` for an action the queue does not offer, or an
-        answer missing the side or value it needs.
+        Every answer is one step for :meth:`undo_review`, including a move,
+        which records two contact edits. Raises ``ValueError`` for an action
+        the queue does not offer, or an answer missing the side or value it
+        needs.
         """
+        if action == ACTION_UNDO:
+            self.undo_review()
+            return
+        self._review_undo.append(self.project.match_review.model_copy(deep=True))
+        del self._review_undo[:-MAX_REVIEW_UNDO]
+        if action == ACTION_MOVE_CONTACT:
+            if side is None or value is None:
+                raise ValueError("moving a contact needs a side and the frame it moves to")
+            self.edit_contact(frame, side, "remove")
+            self.edit_contact(int(value), side, "add")
+            return
         if action == ACTION_LABEL_SHOT:
             if side is None or value is None:
                 raise ValueError("a shot label needs a side and a shot")
@@ -1185,6 +1210,18 @@ class ProjectSession:
         else:
             raise ValueError(f"the queue has no answer {action!r}")
 
+    def undo_review(self) -> None:
+        """Take back the last answer given in this session, whatever it changed.
+
+        Raises ``ValueError`` when there is nothing to take back.
+        """
+        if not self._review_undo:
+            raise ValueError("nothing to undo")
+        with self.lock:
+            self.project.match_review = self._review_undo.pop()
+            self._chain_strokes = None
+            self._match = None
+
     def review_queue(self) -> dict:
         """The open questions, one at a time, with the answers each admits.
 
@@ -1198,9 +1235,10 @@ class ProjectSession:
             + len(review.dismissed)
             + (1 if review.score_start is not None else 0)
         )
+        can_undo = bool(self._review_undo)
         m = self.match()
         if m is None:
-            return {"open": [], "n_open": 0, "answered": answered}
+            return {"open": [], "n_open": 0, "answered": answered, "can_undo": can_undo}
         start = self.pose_start
         dismissed = [(d.kind, int(d.frame) - start, d.side) for d in review.dismissed]
         items = review_items(m, self.info.fps, dismissed)
@@ -1209,7 +1247,7 @@ class ProjectSession:
             for opt in item["options"]:
                 if opt.get("frame") is not None:
                     opt["frame"] = int(opt["frame"]) + start
-        return {"open": items, "n_open": len(items), "answered": answered}
+        return {"open": items, "n_open": len(items), "answered": answered, "can_undo": can_undo}
 
     def confirm_rally(self, frame: int, field: str, value: str | None) -> None:
         """Record what the user settled about the rally containing ``frame``.
