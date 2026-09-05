@@ -641,7 +641,7 @@ function renderAll() {
   if (!S.state) return;
   renderInfo(); renderTrim(); renderEvents(); renderOptions();
   renderVideo(); renderTimeline(); renderPlots(); renderCourt();
-  renderStrokes(); renderRallies(); renderCoaching(); renderCameraView();
+  renderStrokes(); renderRallies(); renderMatch(); renderCoaching(); renderCameraView();
 }
 
 async function refreshTabs() {
@@ -1023,6 +1023,53 @@ function renderRallies() {
   else if (b.trimmed_to_play) notes.push('The clip is already cut to the play, so work-to-rest would measure the editing rather than you, and is not reported.');
   if (sp && sp.n_splits) notes.push('A split step here means a brief two-footed hop before a move, which a recovery push-off can also look like: read it as preparation of some kind, and compare it against your own earlier sessions rather than a published figure.');
   $('#rally-note').textContent = notes.join(' ');
+}
+
+function renderMatch() {
+  const panel = $('#match-panel');
+  const m = S.state && S.state.match;
+  const has = !!(m && m.n_rallies);
+  panel.classList.toggle('hidden', !has);
+  if (!has) return;
+  const kv = (k, v) => `<span class="k">${k}</span><span>${v}</span>`;
+  const fact = (f) => (f && f.value != null) ? `${Array.isArray(f.value) ? f.value.join('-') : f.value} <span class="muted small-text">(${f.how})</span>` : '<span class="muted">withheld</span>';
+  const you = S.state.tracking && S.state.tracking.side;
+  const who = (side) => side == null ? '?' : (side === you ? `you (${side})` : side);
+  const rows = [kv('rallies', String(m.n_rallies))];
+  rows.push(kv(m.score_is_absolute ? 'score (near-far)' : 'points in clip (near-far)', fact(m.score)));
+  const won = m.rallies_won || {};
+  rows.push(kv('rallies won', `near ${won.near ?? 0}, far ${won.far ?? 0}${won.open ? `, ${won.open} open` : ''}`));
+  const sv = m.serves || {};
+  rows.push(kv('serves', `${sv.detected} found; ${sv.consistent} of ${sv.checked} tested stand where the count puts them`));
+  const prov = m.by_provenance || {};
+  rows.push(kv('outcomes by', `confirmed ${prov.confirmed ?? 0}, inferred ${prov.inferred ?? 0}, auto ${prov.auto ?? 0}, withheld ${prov.withheld ?? 0}`));
+  $('#match-summary').innerHTML = rows.join('');
+
+  const rate = fps();
+  const start = S.pose ? S.pose.start : (S.state.tracking ? S.state.tracking.start : 0);
+  $('#match-list').innerHTML = (m.rallies || []).map((r) => {
+    const t = ((r.start + start) / rate).toFixed(1);
+    const server = r.server.value ? `${who(r.server.value)} served${r.service_court.value ? ` from the ${r.service_court.value}` : ''}` : 'server unknown';
+    const winner = r.winner.value ? `${who(r.winner.value)} won` : 'open';
+    const how = r.winner.how || 'withheld';
+    const n = r.n_contacts ? `${r.n_contacts} contacts` : 'no contacts';
+    return `<li data-frame="${r.start + start}"><span class="mono">${t}s</span> <b>rally ${r.index + 1}</b>`
+      + `<span class="muted small-text"> ${r.duration_s} s, ${n}; ${server}; ${winner} <i>(${how})</i>${r.issues.length ? `; ${r.issues.length} question${r.issues.length === 1 ? '' : 's'}` : ''}</span></li>`;
+  }).join('');
+  $('#match-issues').innerHTML = (m.issues || []).map((i) =>
+    `<li data-frame="${i.frame + start}"><span class="mono">${((i.frame + start) / rate).toFixed(1)}s</span> ${i.question}</li>`
+  ).join('');
+  for (const li of panel.querySelectorAll('li')) {
+    li.style.cursor = 'pointer';
+    li.addEventListener('click', () => seek(Number(li.dataset.frame)));
+  }
+
+  const notes = [];
+  notes.push(m.headline ? m.headline.charAt(0).toUpperCase() + m.headline.slice(1) + '.' : `No result is stated: ${m.headline_withheld}.`);
+  notes.push('Who won a rally is read off who serves next; the serve is the first detected contact of a bout. Confirmed means you answered it, inferred means the rules of the game derived it from confirmed facts, auto means unreviewed detection.');
+  if (m.n_issues) notes.push(`${m.n_issues} question${m.n_issues === 1 ? '' : 's'} the chain could not settle, listed below; the review queue that will ask them is not built yet.`);
+  if (m.note) notes.push(m.note.charAt(0).toUpperCase() + m.note.slice(1) + '.');
+  $('#match-note').textContent = notes.join(' ');
 }
 
 function renderCoaching() {

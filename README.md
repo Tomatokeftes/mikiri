@@ -209,6 +209,17 @@ reasoning, and what the number is worth, is in
 
 ![The Rallies panel on a short clip, refusing the figures it cannot support](docs/screenshots/09_rallies.png)
 
+### Serves, outcomes and the score
+
+With the court calibrated and both players tracked, Mikiri reads who won each
+rally off who serves the next one, keeps the score, and checks every serve
+against the rules of the game: contacts alternate, the server stands in the
+right court on an even score and the left on an odd one, the receiver stands
+diagonally opposite. Where the rules are broken it asks a question instead of
+stating a result, and every fact it does state says whether you confirmed it,
+the rules derived it, or a detector guessed it. A result is never stated on
+guesses alone. [docs/match.md](docs/match.md).
+
 ## Filming guidelines
 
 There are two different set-ups here, and they pull in opposite directions.

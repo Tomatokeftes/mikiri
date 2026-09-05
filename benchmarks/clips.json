@@ -18,7 +18,8 @@
         "bouts: a clip cut to one rally reports no work-to-rest figure",
         "moves are counted per trip to a corner, not per run of fast frames",
         "the split-step signal survives the perspective drift",
-        "the opponent is tracked on his own side of the net, and neither the umpire on his chair nor the spectator above the far baseline takes his place"
+        "the opponent is tracked on his own side of the net, and neither the umpire on his chair nor the spectator above the far baseline takes his place",
+        "the rally chain finds contacts on both sides, asks who won rather than guessing, and states no result"
       ],
       "click": [869.0, 600.0],
       "click_note": "the near player's torso in the first frame, for the tracking click",

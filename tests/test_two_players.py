@@ -521,6 +521,49 @@ def test_the_other_player_survives_the_project_round_trip(two_player_session, tm
     assert np.allclose(kp, s.project.others[0].get_keypoints(), atol=0.01)
 
 
+def test_the_session_runs_the_rally_chain_and_keeps_what_the_user_settles(
+    two_player_session, tmp_path: Path
+):
+    """Guards the plumbing from two tracks to a chain, and the answers surviving a save.
+
+    The scripted players walk without swinging, so the clip is one rally with
+    no contacts: the chain must say the server is unknown rather than pick
+    one, take the user's answer keyed by a frame inside the rally, and write
+    it into the project file.
+    """
+    s, _ = two_player_session
+    m = s.state()["match"]
+    assert m is not None and m["n_rallies"] == 1
+    rally = m["rallies"][0]
+    assert rally["server"]["how"] is None
+    assert [i["kind"] for i in m["issues"]] == ["no_contacts", "open_outcome"]
+    assert m["headline"] is None
+    assert s.other_strokes() and s.other_strokes()[0] is not None
+
+    with pytest.raises(ValueError, match="cannot confirm"):
+        s.confirm_rally(5, "winner", "left")
+    s.confirm_rally(5, "server", "far")
+    s.confirm_rally(6, "winner", "far")
+    s.set_score_start((3, 7))
+    m = s.state()["match"]
+    rally = m["rallies"][0]
+    assert rally["server"] == {"value": "far", "how": "confirmed", "evidence": "confirmed by you"}
+    assert rally["winner"]["how"] == "confirmed"
+    assert m["score_is_absolute"] and m["score"]["value"] == [3, 8]
+    assert [i["kind"] for i in m["issues"]] == []
+    # A second answer to the same question replaces the first; null withdraws it.
+    s.confirm_rally(9, "winner", "near")
+    assert len(s.project.match_review.confirmations) == 2
+    assert s.state()["match"]["score"]["value"] == [4, 7]
+    s.confirm_rally(9, "winner", None)
+    assert s.state()["match"]["rallies"][0]["winner"]["how"] is None
+
+    path = s.save(tmp_path / "chain.mikiri.json")
+    p2 = Project.load(path)
+    assert p2.match_review.score_start == [3, 7]
+    assert [(c.field, c.value) for c in p2.match_review.confirmations] == [("server", "far")]
+
+
 def test_asking_for_two_players_without_a_court_is_refused_at_the_session(tracked_session):
     """Guards the API letting a two-player run start that the pipeline would refuse later."""
     with pytest.raises(ValueError, match="court"):

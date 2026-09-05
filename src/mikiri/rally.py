@@ -32,6 +32,7 @@ toward a towel is not a rally.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -180,6 +181,25 @@ def _runs(active: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(starts, ends))
 
 
+def _active_mask(
+    track, strokes, n: int, fps: float, active_speed_mps: float, contact_halo_s: float
+) -> np.ndarray:
+    """Frames in which one player is working: moving fast, or hitting."""
+    speed = np.asarray(getattr(track, "speed", np.zeros(0)), dtype=float)[:n]
+    positions = np.asarray(track.positions, dtype=float)[:n]
+    active = np.zeros(n, dtype=bool)
+    m = min(speed.shape[0], positions.shape[0])
+    if m:
+        finite = np.isfinite(speed[:m]) & np.isfinite(positions[:m]).all(axis=1)
+        active[:m] = finite & (speed[:m] > active_speed_mps)
+    if strokes is not None and getattr(strokes, "strokes", None):
+        halo = max(1, int(round(contact_halo_s * fps)))
+        for s in strokes.strokes:
+            lo, hi = max(0, s.frame - halo), min(n, s.frame + halo + 1)
+            active[lo:hi] = True
+    return active
+
+
 def segment_bouts(
     track,
     strokes=None,
@@ -187,6 +207,7 @@ def segment_bouts(
     merge_gap_s: float = MERGE_GAP_S,
     min_bout_s: float = MIN_BOUT_S,
     contact_halo_s: float = CONTACT_HALO_S,
+    others: Sequence[tuple[object, object]] = (),
 ) -> BoutSeries:
     """Cut a court track into bouts of work.
 
@@ -198,6 +219,13 @@ def segment_bouts(
         merge_gap_s: Pauses shorter than this stay inside a bout.
         min_bout_s: Bouts shorter than this are dropped.
         contact_halo_s: How far either side of a contact counts as active.
+        others: ``(track, strokes)`` pairs for the other players on the
+            court. A frame is then active when *any* player is working,
+            which is what a rally is when both sides are tracked: the
+            opponent's contact is proof of play even in the second the
+            subject stands still under a clear. The per-bout distances and
+            speeds stay the subject's own. Leave empty for the biomechanical
+            figures, which follow one player by design.
 
     Returns:
         A :class:`BoutSeries`. With no usable speed the whole tracked range is
@@ -215,12 +243,11 @@ def segment_bouts(
     if finite.sum() < 2:
         return BoutSeries(fps=fps, n_frames=n, note="no usable speed; not segmented")
 
-    active = finite & (speed > active_speed_mps)
-    if strokes is not None and getattr(strokes, "strokes", None):
-        halo = max(1, int(round(contact_halo_s * fps)))
-        for s in strokes.strokes:
-            lo, hi = max(0, s.frame - halo), min(n, s.frame + halo + 1)
-            active[lo:hi] = True
+    active = _active_mask(track, strokes, n, fps, active_speed_mps, contact_halo_s)
+    for other_track, other_strokes in others:
+        if other_track is None:
+            continue
+        active |= _active_mask(other_track, other_strokes, n, fps, active_speed_mps, contact_halo_s)
 
     # Close short pauses first, then drop short bouts. The other order would
     # delete a rally that happens to contain a pause.
