@@ -19,11 +19,27 @@ a scored rally it will differ honestly: a long tactical pause splits a rally in
 two, and a fast serve after a short walk-back may join two rallies into one.
 The count is reported as bouts, never as points.
 
-Two signals drive it, and either is enough:
+**That second failure was measured, and it is not rare.** On
+``benchmarks/lindan_rally.mp4`` -- forty seconds holding about four points --
+this module used to report one bout covering the whole clip, because an elite
+player walking back to the baseline never drops below :data:`ACTIVE_SPEED_MPS`
+for long enough to end one. Per-bout distance came out near 96 m against a
+published 16-25 m per rally, one bout carrying four points' worth of court. It
+matters well beyond the footwork figures: :mod:`mikiri.match` builds one rally
+per bout, so a merge here corrupts the serve and score chain with it.
+
+So bouts now also take a ``play_mask`` from :mod:`mikiri.segments`, which finds
+those boundaries in image motion -- both players stand still between points
+even while the subject is still walking fast. It only ever vetoes, so a clip
+that could not be segmented behaves exactly as before. The same clip now
+reports four bouts averaging 19.2 m.
+
+Three signals drive it, two of which can start a bout:
 
 * **movement** -- the smoothed court speed rising above a walking pace;
 * **contacts** -- a detected stroke, which is proof of play even in the
-  fraction of a second where the player happens to be still.
+  fraction of a second where the player happens to be still;
+* **the clip states** -- which can only end a bout, never begin one.
 
 Short gaps inside a bout are closed before short bouts are dropped, in that
 order: a player who pauses mid-rally is still rallying, but a single step
@@ -53,6 +69,22 @@ CONTACT_HALO_S = 0.6
 #: play. Work density then measures the editing rather than the player, so it
 #: is not reported.
 MIN_REST_SHARE = 0.05
+#: The longest gap between bouts must reach this, in seconds, before any
+#: rest-derived figure is reported. A share is not enough on its own: an edited
+#: clip keeps a plausible *amount* of rest and merely keeps the wrong rest.
+#: Between points a player collects the shuttle, walks back and serves when
+#: ready, which is 22.9 +/- 10.6 s in elite men's singles and longer at club
+#: level, so a clip whose longest gap is a few seconds contains no real
+#: between-point rest at all -- only what an editor left between cuts.
+#:
+#: Measured on ``benchmarks/lindan_rally.mp4``, whose gaps run 1.6 to 6.0 s:
+#: without this it reported a work density of 2.79 and an effective playing
+#: time of 73.6%, against published figures of 0.4 +/- 0.1 and 34.1 +/- 5.3%.
+#: The same number and the same argument as
+#: :data:`mikiri.segments.EDITED_MAX_REST_S`, which catches the whole-clip
+#: version of this; the two are separate because that one needs many rests to
+#: be sure and a forty-second crop has three.
+MIN_REAL_REST_S = 8.0
 
 
 @dataclass
@@ -155,7 +187,12 @@ class BoutSeries:
             rest_share = rest_s / span_s
             out["play_span_s"] = round(span_s, 1)
             out["rest_share"] = round(rest_share, 2)
-            if rest_share >= MIN_REST_SHARE:
+            # Enough rest, and rest that looks like rest. The second test is
+            # what catches a clip cut between points: the gaps it keeps are the
+            # couple of seconds before each serve, which add up to a believable
+            # share while being nothing like a real between-point rest.
+            longest_rest_s = max(self.rests_s) if self.rests_s else 0.0
+            if rest_share >= MIN_REST_SHARE and longest_rest_s >= MIN_REAL_REST_S:
                 out["effective_playing_time_pct"] = round(100.0 * play_s / span_s, 1)
                 if rest_s > 0:
                     out["work_density"] = round(play_s / rest_s, 2)
@@ -203,6 +240,7 @@ def _active_mask(
 def segment_bouts(
     track,
     strokes=None,
+    play_mask=None,
     active_speed_mps: float = ACTIVE_SPEED_MPS,
     merge_gap_s: float = MERGE_GAP_S,
     min_bout_s: float = MIN_BOUT_S,
@@ -215,6 +253,14 @@ def segment_bouts(
         track: A :class:`~mikiri.court.CourtTrack`.
         strokes: Optional :class:`~mikiri.strokes.StrokeSeries`; its contacts
             count as play even where the feet are still.
+        play_mask: Optional per-pose-frame boolean from
+            :mod:`mikiri.segments`, True where the clip is playing. Where it is
+            False no bout may run, whatever the speed says. This is what stops
+            a fast walk-back joining two points: image motion sees the pause
+            that court speed cannot, because a player crossing the court
+            between points moves as fast as one inside a rally. It only vetoes
+            and never creates, so a clip that could not be segmented passes
+            through unchanged.
         active_speed_mps: Court speed above which the player is working.
         merge_gap_s: Pauses shorter than this stay inside a bout.
         min_bout_s: Bouts shorter than this are dropped.
@@ -248,6 +294,18 @@ def segment_bouts(
         if other_track is None:
             continue
         active |= _active_mask(other_track, other_strokes, n, fps, active_speed_mps, contact_halo_s)
+
+    # The veto goes last, after every player has had their say. A contact found
+    # inside a stretch the segmenter called still is more likely a practice
+    # swing or a shuttle being knocked back than a rally nobody could see, and
+    # letting a contact halo resurrect those frames would rebuild exactly the
+    # merge this exists to prevent.
+    if play_mask is not None:
+        mask = np.asarray(play_mask, dtype=bool)
+        if mask.shape[0] >= n:
+            active &= mask[:n]
+        elif mask.shape[0]:
+            active[: mask.shape[0]] &= mask
 
     # Close short pauses first, then drop short bouts. The other order would
     # delete a rally that happens to contain a pause.

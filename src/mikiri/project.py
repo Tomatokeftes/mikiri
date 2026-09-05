@@ -133,6 +133,12 @@ class TrackingRun(BaseModel):
     processed_at: str = Field(default_factory=now_iso)
     seconds: float | None = None
     cache_file: str | None = None
+    #: Clip states from :mod:`mikiri.segments`, as ``{start, end, state}`` runs
+    #: in video frames. Stored because bouts take their boundaries from them
+    #: and rebuilding them means decoding the clip again. Absent on projects
+    #: tracked before segmentation existed, or with it turned off, and
+    #: everything downstream falls back to speed alone when it is.
+    segments: list[dict] | None = None
     #: Which side of the net the subject stood on, when the court was known.
     #: The footwork figures are computed in the subject's own frame, so this
     #: is what says whether that frame is the camera's or the flipped one.

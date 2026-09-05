@@ -189,6 +189,11 @@ Known gaps:
   be added, moved or removed by hand, on either side, and the questions the
   chain raises are listed but not yet asked one at a time: that is the
   review queue, step 4.
+* Bouts take a veto from `segments.py`, so a fast walk-back no longer merges
+  two points, but only the *veto* direction is wired: the clip states can end
+  a bout and can never start one. A rally played slowly enough for the motion
+  threshold to call it idle would still be cut in half, and nothing tests that
+  case because no clip here contains one.
 * `coaching.compare_sessions` turns a list of session summaries into progress
   and is tested, but nothing calls it: there is no way to load an earlier
   session, so the comparator the split-step numbers point at -- the same

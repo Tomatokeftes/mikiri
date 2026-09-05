@@ -70,6 +70,7 @@ from mikiri.project import (
 )
 from mikiri.racket import RacketSeries, racket_series
 from mikiri.rally import BoutSeries, segment_bouts
+from mikiri.segments import STATE_PLAY
 from mikiri.settings import Settings
 from mikiri.smoothing import apply_corrections, interpolate_joint, smooth_keypoints
 from mikiri.strokes import StrokeSeries, detect_strokes
@@ -749,6 +750,28 @@ class ProjectSession:
         f = self.footwork()
         return None if f is None else f.summary()
 
+    def play_mask(self) -> np.ndarray | None:
+        """Per-pose-frame mask of the clip states, True where the clip is playing.
+
+        ``None`` when the run was not segmented, which leaves every consumer on
+        the behaviour it had before segmentation existed.
+        """
+        runs = getattr(self.project.tracking, "segments", None)
+        kp = self.raw_keypoints()
+        if not runs or kp is None:
+            return None
+        n = int(kp.shape[0])
+        offset = self.pose_start
+        mask = np.zeros(n, dtype=bool)
+        for run in runs:
+            if run.get("state") != STATE_PLAY:
+                continue
+            lo = max(0, int(run["start"]) - offset)
+            hi = min(n, int(run["end"]) - offset + 1)
+            if hi > lo:
+                mask[lo:hi] = True
+        return mask
+
     def bouts(self) -> BoutSeries | None:
         """Bouts of play and the rests between them, or ``None`` without a court.
 
@@ -759,7 +782,7 @@ class ProjectSession:
         track = self.court_track()
         if track is None:
             return None
-        return segment_bouts(track, self.strokes())
+        return segment_bouts(track, self.strokes(), play_mask=self.play_mask())
 
     def bouts_summary(self) -> dict | None:
         """JSON-friendly bout figures, or ``None`` without a court."""
@@ -804,6 +827,11 @@ class ProjectSession:
         :meth:`bouts` follows the subject alone, which is what the footwork
         figures need. A rally is over when nobody is playing, so with the
         other player tracked their movement and contacts count too.
+
+        The clip states veto here as they do for :meth:`bouts`, and it matters
+        more: :mod:`mikiri.match` builds one rally per bout, so two points
+        merged into one bout become one rally with two serves in it, and the
+        constraint chain then has to explain a score that moved twice.
         """
         track = self.court_track()
         if track is None:
@@ -811,7 +839,7 @@ class ProjectSession:
         others = [
             (t, s) for t, s in zip(self.other_tracks(), self.other_strokes()) if t is not None
         ]
-        return segment_bouts(track, self.strokes(), others=others)
+        return segment_bouts(track, self.strokes(), play_mask=self.play_mask(), others=others)
 
     def match(self) -> MatchChain | None:
         """The rally chain, or ``None`` without a court and a player on each side."""
@@ -1383,6 +1411,7 @@ class ProjectSession:
                 cache_file=result.cache_file,
                 side=result.side,
                 players=1 + len(result.others),
+                segments=(result.extra.get("segments") or {}).get("runs") or None,
             )
             self.project.conf_threshold = req.conf_threshold
             self._raw = result.keypoints.astype(np.float32)

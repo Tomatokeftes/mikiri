@@ -222,57 +222,84 @@ def test_an_eye_level_camera_cannot_be_recovered_from_the_net_posts(match_clip: 
     assert s.court_camera_error and "too close to 1.55 m" in s.court_camera_error
 
 
-def test_a_forty_second_rally_reads_as_one_bout_of_continuous_work(match_session):
-    """The clip is a single rally, so the per-rally figures must not be invented.
+def test_the_points_in_this_clip_are_cut_apart_rather_than_merged(match_session):
+    """Bouts must follow the points, not the player's speed.
 
-    Before bouts existed, the whole-clip distance was divided by nothing and
-    reported as if it were a rally, which produced a "96 m per rally" cue: a
-    figure roughly ten times any published value, from a clip that happens to
-    contain exactly one rally with its dead time already cut off.
+    This clip was called a single rally until it was looked at: it holds four
+    points, separated by two to six seconds of walking back and serving, and
+    frames 640 to 740 show both players standing at rest. Court speed alone
+    cannot see those gaps -- a player crossing the court between points moves
+    as fast as one inside a rally -- so all four merged into one bout carrying
+    96 m, against the 16-25 m per rally the literature gives. Image motion does
+    see them, so the clip states now veto activity between points.
+
+    Distance per bout is the number that shows it, and it can only land in the
+    published band by cutting in the right places.
     """
     got = match_session.bouts_summary()
-    assert got["n_bouts"] == 1
-    assert "one continuous bout" in got["note"]
-    assert got["play_seconds"] == pytest.approx(40.0, abs=3.0)
-    assert got["contacts_per_bout"] > 15.0
-    # Cut to the rally, so work density would measure the editing, not the player.
+    assert got["n_bouts"] == 4, [round(b["duration_s"], 1) for b in got["bouts"]]
+    assert 12.0 < got["distance_per_bout_m"] < 30.0, got["distance_per_bout_m"]
+    assert 4.0 < got["mean_bout_s"] < 15.0, got["mean_bout_s"]
+    assert got["contacts_per_bout"] > 3.0
+
+
+def test_a_clip_whose_dead_time_is_already_cut_reports_no_work_to_rest(match_session):
+    """Work density on an edited clip would measure the editor, not the player.
+
+    This is a crop of footage whose between-point intervals were already
+    removed, so what sits between its points is the couple of seconds before
+    each serve rather than a rest. Once bouts resolved the points those gaps
+    added up to a believable 26% rest share, and the summary duly offered a
+    work density of 2.79 and an effective playing time of 73.6%, against
+    published figures of 0.4 and 34.1%. A share is not enough on its own: the
+    rest has to look like rest, which is what the longest-gap test is for.
+    """
+    got = match_session.bouts_summary()
+    assert got["rest_share"] > 0.05, "the gaps are there; it is their length that disqualifies them"
     assert got.get("trimmed_to_play") is True
     assert "work_density" not in got
     assert "effective_playing_time_pct" not in got
 
 
-def test_the_rally_chain_on_one_rally_asks_rather_than_guesses(match_session):
+def test_the_rally_chain_reads_winners_off_the_next_serve_and_asks_for_the_last(match_session):
     """Step 2 of the tactical build on the only two-player footage there is.
 
-    One rally, cut from a broadcast, with no serve in it and nothing after
-    it. So the chain has exactly one honest thing to say about the outcome:
-    nothing, and a question. What it must still do is find contacts on both
-    sides -- the far player is small and often behind the near one -- and
-    keep the double-contact questions to a minority of the contacts, which
-    is the first measure of whether the two detectors agree on a rally.
+    Four points, cut from a broadcast. That is what makes the chain testable
+    at all: with the clip treated as one rally there was nothing after it, so
+    the only honest thing it could say about any outcome was a question. Now
+    three of the four are followed by a serve, and the side that serves next
+    is the side that won -- which is the whole mechanism this module exists
+    for. The fourth has nothing after it and stays a question, as it must.
 
-    Measured when this was written: 22 near and 28 far contacts, 21 pairs by
-    one side in a row. That is two contacts in five the detectors disagree
-    on, which is the size of the work left in step 3, and the bound below is
-    set so that getting worse fails and getting better does not.
+    What it must still do underneath that is find contacts on both sides --
+    the far player is small and often behind the near one -- and keep the
+    double-contact questions to a minority, which is the first measure of
+    whether the two detectors agree. Measured when the points were cut apart:
+    19 near and 27 far contacts, 19 pairs by one side in a row. Slightly
+    fewer than the 22/28/21 seen when the clip was one bout, because contacts
+    falling in the gaps between points are no longer inside a rally. The
+    bound below is set so that getting worse fails and getting better does
+    not.
     """
     s = match_session
     m = s.state()["match"]
-    assert m is not None and m["n_rallies"] == 1, m and m.get("note")
-    rally = m["rallies"][0]
+    assert m is not None and m["n_rallies"] == 4, m and m.get("note")
     near, far = m["contacts"]["near"], m["contacts"]["far"]
     assert near > 15, near
     assert far > 8, far
     assert 0.5 < near / far < 2.0, (near, far)
-    # Nothing follows the rally, so its winner is a question, never a guess,
-    # and the serve is whatever hit first, labelled as unreviewed.
-    assert rally["winner"]["how"] is None
-    assert rally["server"]["how"] == "auto"
-    assert rally["score_before"]["value"] == [0, 0]
-    assert rally["score_after"]["how"] is None
+
+    # Three winners are readable because a serve follows them, and the score
+    # walks along with them from a start it does not claim to know.
+    assert [r["winner"]["how"] is not None for r in m["rallies"]] == [True, True, True, False]
+    assert m["rallies"][0]["score_before"]["value"] == [0, 0]
+    assert m["rallies"][-1]["score_after"]["how"] is None
+    # The score is a count of what happened in the clip, not the match score,
+    # because nothing here says what the score was when the clip started.
     assert m["headline"] is None and m["score_is_absolute"] is False
+
     kinds = [i["kind"] for i in m["issues"]]
-    assert kinds.count("open_outcome") == 1
+    assert kinds.count("open_outcome") == 1, "only the last rally has nothing after it"
     assert "no_contacts" not in kinds
     doubles = kinds.count("double_contact")
     assert doubles <= 0.5 * (near + far), (doubles, near, far)
