@@ -59,13 +59,14 @@ Notes that will otherwise cost time:
 | --- | --- |
 | `geometry.py` | camera on the court plane: height recovery from the net posts, off-plane bias, covariance propagation, view classification |
 | `court.py` | court calibration, the top-down track, heat map, footwork metrics |
+| `segments.py` | what each frame of the raw clip *is* -- play, idle, interval, another scene -- before pose runs |
 | `rally.py` | bouts of play and the rests between them |
 | `footwork.py` | split steps and the moves they prepare |
 | `strokes.py` | swing detection and the two-tier stroke description |
 | `shuttle.py`, `shots.py` | classical shuttle search after each contact, and shot naming gated on it |
 | `coaching.py` | turning the numbers into at most three things to work on |
 | `tracking.py` | keeping the tracker on one player, inside the court |
-| `pipeline.py` | the tracking run and its cache (`CACHE_VERSION`) |
+| `pipeline.py` | the tracking run and its cache (`CACHE_VERSION`); segments the clip first and spends the model only where there is something to see |
 | `session.py` | in-memory state for one open project; the layer between the API and the maths |
 | `server/` | FastAPI app plus `static/` (one `app.js`, no build step) |
 | `pose/` | RTMPose, MediaPipe and synthetic backends behind one interface |
@@ -156,9 +157,13 @@ Known gaps:
   and is tested, but nothing calls it: there is no way to load an earlier
   session, so the comparator the split-step numbers point at -- the same
   player against themselves over time -- is not reachable from the app.
-* Whole clips are analysed end to end. There is no segmentation into
-  play/not-play, so dead frames both contaminate per-minute figures and
-  dominate the run time of a CPU pipeline.
+* `segments.py` is calibrated by reasoning, not by measurement. It is on by
+  default in every tracking run and no real clip has ever been through it --
+  the thresholds were argued from how club play behaves and checked against
+  synthetic clips only. `PLAY_LEVEL` and `CHANGED_DELTA` are the two most
+  likely to be wrong on real footage. Put a long clip with dead time in
+  `demo/` and tune before trusting the play/rest split for anything that
+  matters.
 
 ## Where it is going
 
