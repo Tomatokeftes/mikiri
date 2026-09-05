@@ -162,15 +162,16 @@ Known gaps:
   and is tested, but nothing calls it: there is no way to load an earlier
   session, so the comparator the split-step numbers point at -- the same
   player against themselves over time -- is not reachable from the app.
-* `segments.py` is calibrated by reasoning, not by measurement. It is on by
-  default in every tracking run and no real clip has ever been through it --
-  the thresholds were argued from how club play behaves and checked against
-  synthetic clips only. `PLAY_LEVEL` and `CHANGED_DELTA` are the two most
-  likely to be wrong on real footage. `benchmarks/lindan_source.mp4` is the
-  obvious thing to tune against: it is the whole broadcast rather than the cut
-  rally, so it has the adverts, replays and dead time the module claims to
-  find. Tune there and pin it in `tests/test_benchmarks.py` before trusting
-  the play/rest split for anything that matters.
+* `segments.py` has been checked on two real clips. The two-minute phone
+  drill in `benchmarks/` is pinned in `tests/test_real_footage.py`: the rest
+  and the drill split correctly, and people walking close to the lens read as
+  play, because a large slow mover changes more pixels than a small fast one.
+  That error only costs pose time, so the thresholds stand. The twelve-minute
+  broadcast compilation `benchmarks/lindan_source.mp4` was checked by hand
+  (two minutes to scan, so not in the suite): its title card was excluded, a
+  whole-frame flash was not, and the rallies came out as play. Neither clip
+  has adverts or replays, and a club recording with several rests has not
+  been through it.
 
 ## Where it is going
 

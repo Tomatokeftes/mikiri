@@ -18,8 +18,10 @@ from mikiri.benchmarks import clip_path
 from mikiri.export import ExportOptions
 from mikiri.pipeline import build_backend, run_tracking
 from mikiri.pose.rtmlib_backend import ModelNotAvailableError
+from mikiri.segments import STATE_IDLE, STATE_NOT_BADMINTON, STATE_PLAY, segment_video
 from mikiri.session import ProjectSession
 from mikiri.settings import Settings
+from mikiri.video import VideoReader
 
 SMASH = benchmark_clip("jump_smash_behind") or {}
 TRIM = tuple(SMASH.get("trim", (150, 300)))
@@ -253,3 +255,65 @@ def test_perspective_drift_is_removed_before_looking_for_hops(match_session):
     assert float(np.percentile(finite, 95)) < 0.10
     # What survives is the fast part: real hops, still there to be found.
     assert float(finite.max()) > 0.05
+
+
+# --- a raw phone recording: a drill with its dead time still in it ---------------
+
+PHONE = benchmark_clip("jump_smashes_phone") or {}
+PHONE_STATES = PHONE.get("states", {})
+
+
+@pytest.fixture(scope="module")
+def phone_segments():
+    """The two-minute phone clip scanned and segmented, once for the module."""
+    path = clip_path("jump_smashes_phone")
+    if path is None:
+        pytest.skip("benchmark clip 'jump_smashes_phone' not present")
+    with VideoReader(path) as reader:
+        return segment_video(reader)
+
+
+def _inside(seg, a_s: float, b_s: float) -> slice:
+    """Frames strictly inside a hand-labelled window, the tolerance trimmed off each end."""
+    tol = float(PHONE_STATES.get("tolerance_s", 3.0))
+    return slice(int(round((a_s + tol) * seg.fps)), int(round((b_s - tol) * seg.fps)))
+
+
+def test_a_raw_phone_recording_is_cut_into_its_drill_and_its_rest(phone_segments):
+    """The segmenter's thresholds were argued, not measured, until this clip.
+
+    Two minutes from a phone on a tripod: two people walk on and talk, stand at
+    the far end for twenty seconds, then one runs a jump-smash drill for over a
+    minute with short pauses between feeds, and they walk off. The boundaries
+    in the manifest were read off a contact sheet by eye. The rest has to come
+    out idle, and the drill has to come out as one stretch of play rather than
+    a fragment per smash, which is what a higher ``PLAY_LEVEL`` or a shorter
+    ``MERGE_GAP_S`` would produce: the drill's motion dips under the threshold
+    between feeds and the merge gap is what holds it together.
+    """
+    seg = phone_segments
+    assert not seg.not_segmented, seg.note
+    idle = seg.state_mask(STATE_IDLE)
+    play = seg.state_mask(STATE_PLAY)
+    for a, b in PHONE_STATES["idle"]:
+        window = idle[_inside(seg, a, b)]
+        assert window.size and window.mean() > 0.95, (
+            f"rest {a}-{b} s came out {window.mean():.0%} idle"
+        )
+    for a, b in PHONE_STATES["play"]:
+        window = play[_inside(seg, a, b)]
+        assert window.size and window.all(), f"drill {a}-{b} s was broken into pieces"
+    # The clip is mostly drill, and the drill is a handful of stretches, not dozens.
+    summary = seg.summary()
+    assert 0.5 < summary["play_share"] < 0.9, summary
+    assert summary["n_play"] <= 6, summary
+
+
+def test_a_single_continuous_phone_shot_has_no_camera_cuts(phone_segments):
+    """Guards the cut detector against firing on a phone left running on a tripod.
+
+    A false cut would split the clip into shots that are thresholded
+    separately, and a shot short enough would be excluded as another scene.
+    """
+    assert "camera cut" not in phone_segments.note
+    assert STATE_NOT_BADMINTON not in {s.state for s in phone_segments.segments}

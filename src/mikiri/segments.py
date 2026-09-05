@@ -60,6 +60,25 @@ recover, and does so invisibly. So every threshold here leans toward keeping,
 and where the signal is unreadable the answer is to keep everything and say so
 rather than to guess.
 
+**What real footage showed.** The thresholds were argued from how club play
+behaves and then checked on two minutes of phone footage of a jump-smash drill
+(``jump_smashes_phone`` in ``benchmarks/clips.json``, pinned in
+``tests/test_real_footage.py``). The twenty-second rest came out idle and the
+seventy-second drill came out as one stretch of play, held together across the
+pauses between feeds by :data:`MERGE_GAP_S`; a higher :data:`PLAY_LEVEL` cut
+the drill into pieces. The one thing it got wrong is instructive: people
+walking on and off close to the lens read as play, because a large slow mover
+near the camera changes more pixels than a small fast one at the far end, and
+no threshold on a difference map can tell those apart. Speed in metres can,
+and that is the court track's job downstream. Here it costs pose time and
+nothing else, which is the direction every error in this module is meant to
+lean. The twelve-minute broadcast compilation that ``lindan_rally`` was cut
+from was scanned as well, by hand rather than in the suite because the scan
+alone takes two minutes: its closing title card was excluded as another scene,
+a whole-frame flash mid-match was not, and the rallies came out as play with
+the walk-backs between them as idle. It has no adverts or replays, so the
+scene test has still only ever excluded a title card.
+
 **What this cannot do yet.** Warm-up is the hard case, and it is deliberately
 not attempted here. Two people hitting a shuttle at speed looks exactly like
 play on every signal available before pose runs, because it *is* play; what

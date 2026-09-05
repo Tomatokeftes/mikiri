@@ -89,8 +89,17 @@
       "fps": 29.998,
       "frames": 3798,
       "duration_s": 126.6,
-      "guards": [],
-      "note": "Not yet asserted on by any test. Long enough to be the clip for anything that needs several rallies rather than one."
+      "guards": [
+        "a raw recording with a long rest in it is cut into play and idle where a person would cut it",
+        "a feeding drill with pauses between smashes stays one stretch of play"
+      ],
+      "states": {
+        "note": "By eye from a contact sheet at three-second steps. Two people walk on and talk close to the lens until about 15 s, stand talking at the far end until about 36 s, then one runs a jump-smash drill fed from the far end until about 109 s, and they walk back toward the camera at the end. The walk-on and walk-off read as play to a motion threshold, because a person close to the lens moves more pixels than a distant player smashing does; that costs pose time and nothing else, so it is accepted rather than tuned away.",
+        "idle": [[15.0, 36.0]],
+        "play": [[36.0, 109.0]],
+        "tolerance_s": 3.0
+      },
+      "note": "Long enough to be the clip for anything that needs several rallies rather than one."
     },
     {
       "id": "side_on_smash",
