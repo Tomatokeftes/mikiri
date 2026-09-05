@@ -401,9 +401,11 @@ The amended rule opens doors; it does not open all of them.
    side the shot mix, the points split by who hit last with the ending shot
    named where it can be, and the serve -- every figure with its provenance
    and every share withheld below a minimum count (`docs/tactics.md`). The
-   trends half, the same figures across a player's sessions, waits on
-   sessions being stored, which is also what `coaching.compare_sessions` has
-   been waiting for.
+   trends half followed: saving a project keeps the session (`history.py`),
+   sessions are grouped by a player label, and `tactics.trends` reads the
+   same figures across them with the same withholding, shown in an Over time
+   panel. The coaching comparator's numbers are kept in each record but not
+   yet shown beside them.
 7. **Doubles**: player attribution within a side, then the formation pack,
    which needs no classifier and may well land before singles shot naming is
    any good.

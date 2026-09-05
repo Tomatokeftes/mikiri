@@ -224,3 +224,209 @@ def tactics_summary(chain: MatchChain | None, fps: float) -> dict:
         ],
     }
     return out
+
+
+# ---------------------------------------------------------------- over time
+
+#: Smallest movement in a share worth reading as a change rather than a
+#: different handful of rallies. At the minimum count one rally is a tenth,
+#: so a change has to be more than one rally's worth to be more than noise.
+MIN_SHARE_CHANGE = 0.15
+#: Smallest movement in shots per rally worth reading; the median of a few
+#: rallies moves by one on its own.
+MIN_SHOTS_CHANGE = 2.0
+#: The two-session caveat, the same words the coaching comparator uses.
+TWO_SESSIONS_NOTE = (
+    "two sessions cannot separate a trend from a good or bad day; three or more "
+    "in similar conditions is the smallest useful comparison"
+)
+
+
+def _side(t: dict, you: str | None) -> dict:
+    return ((t.get("sides") or {}).get(you) or {}) if you else {}
+
+
+def _points_share(numerator_key: str):
+    def get(t: dict, you: str | None) -> tuple[float | None, str | None]:
+        p = _side(t, you).get("points") or {}
+        decided = p.get("won", 0) + p.get("lost", 0)
+        if decided < MIN_RALLIES_FOR_SHARES:
+            return None, p.get("how")
+        return p[numerator_key] / decided, p.get("how")
+
+    return get
+
+
+def _rally_metric(key: str):
+    def get(t: dict, you: str | None) -> tuple[float | None, str | None]:
+        r = t.get("rallies") or {}
+        v = r.get(key)
+        # Rally lengths are counts of detected contacts: unreviewed until a
+        # person confirms them, so never better than auto here.
+        return (None if v is None else float(v)), AUTO
+
+    return get
+
+
+def _serve_share(t: dict, you: str | None) -> tuple[float | None, str | None]:
+    s = _side(t, you).get("serve") or {}
+    return s.get("won_serving_share"), s.get("how")
+
+
+def _mix_share(shot: str):
+    def get(t: dict, you: str | None) -> tuple[float | None, str | None]:
+        sh = _side(t, you).get("shots") or {}
+        share = sh.get("mix_share")
+        if share is None:
+            return None, sh.get("how")
+        return float(share.get(shot, 0.0)), sh.get("how")
+
+    return get
+
+
+#: What is followed across sessions: id, label, which way is progress,
+#: the smallest movement worth reading, and how to read it off a summary.
+TREND_METRICS = (
+    (
+        "shots_per_rally",
+        "Shots per rally (median)",
+        "none",
+        MIN_SHOTS_CHANGE,
+        _rally_metric("shots_median"),
+    ),
+    (
+        "long_rally_share",
+        "Rallies of 11 shots or more",
+        "none",
+        MIN_SHARE_CHANGE,
+        _rally_metric("long_share"),
+    ),
+    ("points_won_share", "Points won", "higher", MIN_SHARE_CHANGE, _points_share("won")),
+    (
+        "own_winner_share",
+        "Points won on your own shot",
+        "higher",
+        MIN_SHARE_CHANGE,
+        _points_share("won_by_own_winner"),
+    ),
+    (
+        "own_error_share",
+        "Points lost on your own shot",
+        "lower",
+        MIN_SHARE_CHANGE,
+        _points_share("lost_by_own_error"),
+    ),
+    ("serve_won_share", "Points won when serving", "higher", MIN_SHARE_CHANGE, _serve_share),
+)
+
+
+def _direction(first: float, last: float, better: str, min_change: float) -> tuple[str, bool]:
+    delta = last - first
+    if abs(delta) < min_change:
+        return "unchanged", False
+    if better == "higher":
+        return ("improved" if delta > 0 else "worse"), True
+    if better == "lower":
+        return ("improved" if delta < 0 else "worse"), True
+    # No direction is progress for this one: say which way it went, no more.
+    return ("up" if delta > 0 else "down"), True
+
+
+def _shots_seen(records: list[dict]) -> list[str]:
+    seen: set[str] = set()
+    for r in records:
+        sh = _side(r.get("tactics") or {}, r.get("you")).get("shots") or {}
+        seen.update((sh.get("mix_share") or {}).keys())
+    return sorted(seen)
+
+
+def trends(records: list[dict]) -> dict:
+    """What moved across a player's kept sessions, oldest first.
+
+    Each metric is read off every session's tactical summary; a session whose
+    share was withheld there stays withheld here, and a metric with fewer
+    than two readable sessions is listed as withheld with the count rather
+    than drawn through one point. A change smaller than the metric's own
+    minimum is ``unchanged`` on purpose. Provenance is the weakest across the
+    sessions read.
+
+    Args:
+        records: History records as :mod:`mikiri.history` keeps them, each
+            with a ``tactics`` summary and the subject's side under ``you``.
+
+    Returns:
+        A JSON-friendly dict: ``sessions`` in order, ``metrics`` keyed by id
+        with first, last, delta, direction, the series and its provenance,
+        ``withheld`` for the metrics that could not be followed, and
+        ``notes``.
+    """
+    rows = sorted(records, key=lambda r: str(r.get("recorded_at", "")))
+    out: dict = {
+        "n_sessions": len(rows),
+        "sessions": [],
+        "metrics": {},
+        "withheld": [],
+        "notes": [],
+    }
+    for r in rows:
+        p = _side(r.get("tactics") or {}, r.get("you")).get("points") or {}
+        out["sessions"].append(
+            {
+                "project_id": r.get("project_id"),
+                "name": r.get("name") or r.get("video"),
+                "recorded_at": r.get("recorded_at"),
+                "n_rallies": r.get("n_rallies", 0),
+                "points": [p.get("won", 0), p.get("lost", 0)] if p else None,
+                "current": bool(r.get("current")),
+            }
+        )
+    if not rows:
+        out["notes"].append("no sessions kept yet: saving a tracked project keeps it")
+        return out
+    if len(rows) == 1:
+        out["notes"].append(
+            "one session only: save more clips of the same player to read this one against them"
+        )
+        return out
+    metrics = list(TREND_METRICS) + [
+        (f"mix_{shot}", f"{shot} share of named shots", "none", MIN_SHARE_CHANGE, _mix_share(shot))
+        for shot in _shots_seen(rows)
+    ]
+    for mid, label, better, min_change, get in metrics:
+        series: list[float | None] = []
+        hows: list[str | None] = []
+        for r in rows:
+            v, how = get(r.get("tactics") or {}, r.get("you"))
+            series.append(None if v is None else round(v, 3))
+            if v is not None:
+                hows.append(how)
+        known = [v for v in series if v is not None]
+        if len(known) < 2:
+            out["withheld"].append(
+                {
+                    "id": mid,
+                    "label": label,
+                    "reason": f"readable in {len(known)} of {len(rows)} sessions; two are needed",
+                }
+            )
+            continue
+        direction, meaningful = _direction(known[0], known[-1], better, min_change)
+        out["metrics"][mid] = {
+            "label": label,
+            "first": known[0],
+            "last": known[-1],
+            "delta": round(known[-1] - known[0], 3),
+            "direction": direction,
+            "meaningful": meaningful,
+            "min_change": min_change,
+            "series": series,
+            "n": len(known),
+            "how": weakest(*hows),
+        }
+    if len(rows) == 2:
+        out["notes"].append(TWO_SESSIONS_NOTE)
+    if any(s["n"] < len(rows) for s in out["metrics"].values()):
+        out["notes"].append(
+            "a session missing from a series had too few rallies or named shots for a share"
+        )
+    return out

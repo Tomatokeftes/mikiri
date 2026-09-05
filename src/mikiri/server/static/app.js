@@ -611,6 +611,7 @@ function renderOptions() {
     $('#lead-leg').value = S.state.lead_leg || 'auto';
     $('#conf-threshold').value = S.state.conf_threshold;
     $('#notes').value = S.state.notes || '';
+    $('#player').value = S.state.player || '';
     S.lastOptionsSynced = optKey;
   }
   const sm = S.state.smoothing;
@@ -641,7 +642,7 @@ function renderAll() {
   if (!S.state) return;
   renderInfo(); renderTrim(); renderEvents(); renderOptions();
   renderVideo(); renderTimeline(); renderPlots(); renderCourt();
-  renderStrokes(); renderRallies(); renderMatch(); renderReview(); renderTactics(); renderCoaching(); renderCameraView();
+  renderStrokes(); renderRallies(); renderMatch(); renderReview(); renderTactics(); renderTrends(); renderCoaching(); renderCameraView();
 }
 
 async function refreshTabs() {
@@ -1162,6 +1163,34 @@ function renderTactics() {
   $('#tactics-note').textContent = notes.join(' ');
 }
 
+// Over time: this clip against the same player's kept sessions. A metric
+// with fewer than two readable sessions is listed as withheld with the
+// count; a movement under the metric's own minimum reads as unchanged.
+function renderTrends() {
+  const panel = $('#trends-panel');
+  const t = S.state && S.state.trends;
+  const has = !!(t && t.n_sessions);
+  panel.classList.toggle('hidden', !has);
+  if (!has) return;
+  const kv = (k, v) => `<span class="k">${k}</span><span>${v}</span>`;
+  const fmt = (id, x) => (id === 'shots_per_rally' ? String(x) : `${Math.round(100 * x)}%`);
+  const day = (iso) => (iso || '').slice(0, 10) || 'undated';
+  $('#trends-sessions').innerHTML = (t.sessions || []).map((s) => kv(day(s.recorded_at),
+    `${s.name || ''}: ${s.n_rallies} rallies${s.points ? `, points ${s.points[0]}-${s.points[1]}` : ''}${s.current ? ' <span class="muted small-text">(this clip)</span>' : ''}`)).join('');
+  const rows = [];
+  for (const [id, m] of Object.entries(t.metrics || {})) {
+    const arrow = m.direction === 'unchanged' ? 'unchanged' : m.direction;
+    rows.push(kv(m.label, `${fmt(id, m.first)} to ${fmt(id, m.last)}, ${arrow}${m.n < t.n_sessions ? ` (${m.n} of ${t.n_sessions} sessions)` : ''} <span class="muted small-text">(${m.how || 'withheld'})</span>`));
+  }
+  // The withheld metrics usually share one reason (too few rallies for a
+  // share in most sessions), so they go on one line per reason.
+  const byReason = new Map();
+  for (const w of t.withheld || []) byReason.set(w.reason, [...(byReason.get(w.reason) || []), w.label]);
+  for (const [reason, labels] of byReason) rows.push(kv('withheld', `<span class="muted small-text">${labels.join(', ')}: ${reason}</span>`));
+  $('#trends-metrics').innerHTML = rows.join('');
+  $('#trends-note').textContent = (t.notes || []).map((n) => n.charAt(0).toUpperCase() + n.slice(1) + '.').join(' ');
+}
+
 // The tagger: the labelling pass the per-player classifier trains on. It walks
 // the chain's contacts in order, skipping the ones already labelled and the
 // ones the user skipped this session, and a number key names the shot.
@@ -1526,6 +1555,7 @@ function bindUI() {
   $('#lead-leg').addEventListener('change', optionThenPose('lead_leg'));
   $('#conf-threshold').addEventListener('change', async (e) => { applyState(await api('PUT', `/api/projects/${S.pid}/options`, { conf_threshold: +e.target.value })); await loadPose(); renderAll(); });
   $('#notes').addEventListener('change', async (e) => applyState(await api('PUT', `/api/projects/${S.pid}/options`, { notes: e.target.value })));
+  $('#player').addEventListener('change', async (e) => applyState(await api('PUT', `/api/projects/${S.pid}/options`, { player: e.target.value })));
 
   window.addEventListener('resize', () => { renderVideo(); renderTimeline(); renderPlots(); });
   window.addEventListener('keydown', (e) => {

@@ -73,7 +73,8 @@ Notes that will otherwise cost time:
 | `rally.py` | bouts of play and the rests between them |
 | `match.py` | the rally chain: serves, outcomes and scores from the five constraints, every fact with its provenance, contradictions as questions |
 | `classify.py` | naming shots from the player's own labels, and the per-pair held-out accuracy each name is allowed to rest on |
-| `tactics.py` | what each side played and whether it worked: rally lengths, shot mix, points by who hit last, the serve; shares withheld below a minimum count |
+| `tactics.py` | what each side played and whether it worked: rally lengths, shot mix, points by who hit last, the serve; shares withheld below a minimum count; the same figures across a player's kept sessions |
+| `history.py` | the sessions a player has kept, written when a project is saved, grouped by a player label |
 | `footwork.py` | split steps and the moves they prepare |
 | `strokes.py` | swing detection and the two-tier stroke description |
 | `shuttle.py`, `shots.py` | classical shuttle search after each contact, and shot naming gated on it |
@@ -213,9 +214,10 @@ Known gaps:
   threshold to call it idle would still be cut in half, and nothing tests that
   case because no clip here contains one.
 * `coaching.compare_sessions` turns a list of session summaries into progress
-  and is tested, but nothing calls it: there is no way to load an earlier
-  session, so the comparator the split-step numbers point at -- the same
-  player against themselves over time -- is not reachable from the app.
+  and is tested. Saving a project now keeps the session's summaries in
+  `history.json`, and the tactical figures are compared across them in the
+  Over time panel, but the biomechanical comparator's output is not yet shown
+  there: its data is kept, its panel is not built.
 * `segments.py` has been calibrated against two real clips and is pinned in
   `tests/test_real_footage.py`, but only for the *play* split. On the
   two-minute phone drill the rest comes out idle, and people walking close

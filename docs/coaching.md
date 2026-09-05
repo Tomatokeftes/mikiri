@@ -98,7 +98,10 @@ literature, and it is why the cue text reads the way it does.
 `session_summary` reduces one clip to a record, and `compare_sessions` reads a
 list of those to show what moved. Because the primary comparator is your own
 earlier work, this is the part that matters most once you have filmed yourself
-more than twice.
+more than twice. Saving a project keeps its summary in the session history
+(`docs/tactics.md`, "Over time"); the tactical figures are already compared
+across kept sessions, and showing this comparator's output beside them is the
+next step.
 
 ## What it deliberately does not say
 

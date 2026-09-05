@@ -18,7 +18,7 @@ import numpy as np
 from mikiri.angles import ANGLE_NAMES, POSITION_NAMES, SEGMENT_NAMES, AngleTable, compute_angles
 from mikiri.classify import LABELLED_EVIDENCE, TAGGABLE_SHOTS, name_shots_from_labels
 from mikiri.coaching import coach as coach_advice
-from mikiri.coaching import top_cues
+from mikiri.coaching import session_summary, top_cues
 from mikiri.court import (
     COURT_LENGTH,
     DOUBLES_WIDTH,
@@ -40,6 +40,15 @@ from mikiri.court import (
 from mikiri.events import EventSuggestion, flight_time_s
 from mikiri.export import ExportInputs, ExportOptions, export_pack
 from mikiri.footwork import FootworkSeries, analyse_split_steps
+from mikiri.history import (
+    RECORD_VERSION,
+    clip_key,
+    load_history,
+    merge_current,
+    recorded_at,
+    remember,
+    sessions_for,
+)
 from mikiri.jobs import Job
 from mikiri.keypoints import KEYPOINT_NAMES, KP, SKELETON_EDGES, body_height_px, swap_left_right
 from mikiri.match import (
@@ -86,6 +95,7 @@ from mikiri.project import (
     SmoothingSettings,
     TrackedPlayer,
     TrackingRun,
+    now_iso,
 )
 from mikiri.racket import RacketSeries, racket_series
 from mikiri.rally import BoutSeries, segment_bouts
@@ -99,7 +109,7 @@ from mikiri.strokes import (
     recover_alternation,
 )
 from mikiri.strokes import summarise as stroke_summary
-from mikiri.tactics import tactics_summary
+from mikiri.tactics import tactics_summary, trends
 from mikiri.tracking import SIDE_FAR
 from mikiri.video import FrameCache, VideoInfo, VideoReader, fit_size, probe_video
 
@@ -166,6 +176,9 @@ class ProjectSession:
         self._racket: RacketSeries | None = None
         self._strokes: StrokeSeries | None = None
         self._footwork: FootworkSeries | None = None
+        #: The kept sessions, read once per open project and dropped when the
+        #: store changes; ``state()`` runs on every interaction.
+        self._history: list[dict] | None = None
         self._others: list[OtherPlayer] | None = None
         self._other_tracks: list[CourtTrack | None] | None = None
         self._other_strokes: list[StrokeSeries | None] | None = None
@@ -1395,6 +1408,7 @@ class ProjectSession:
         racket_hand: str | None = None,
         lead_leg: str | None = None,
         coach_level: str | None = None,
+        player: str | None = None,
     ) -> None:
         """Change display/analysis options."""
         from mikiri.coaching import LEVELS
@@ -1402,6 +1416,8 @@ class ProjectSession:
         with self.lock:
             if coach_level in LEVELS:
                 self.project.coach_level = coach_level  # type: ignore[assignment]
+            if player is not None:
+                self.project.player = player.strip()
             if swap_lr is not None:
                 self.project.swap_lr = bool(swap_lr)
             if movement in PROFILES:
@@ -1749,6 +1765,8 @@ class ProjectSession:
             "review": self.review_queue(),
             "tagging": self.tagging(),
             "tactics": self.tactics(),
+            "trends": self.trends(),
+            "player": p.player,
             "split_steps": self.footwork_summary(),
             "coaching": self.coaching(),
             "coach_level": p.coach_level,
@@ -1837,9 +1855,64 @@ class ProjectSession:
         }
 
     def save(self, path: str | Path | None = None) -> Path:
-        """Write the project file."""
+        """Write the project file, and keep the session for comparison if it was tracked."""
         with self.lock:
-            return self.project.save(path)
+            out = self.project.save(path)
+        record = self.session_record()
+        if record is not None:
+            self._history = remember(record)
+        return out
+
+    # -- over time ---------------------------------------------------------
+
+    def session_record(self) -> dict | None:
+        """This session as the history keeps it, or ``None`` before tracking.
+
+        The summaries and nothing heavier: what the tactics and the coaching
+        comparator read, plus enough to name the clip in a list.
+        """
+        if self.raw_keypoints() is None:
+            return None
+        p = self.project
+        track = self.court_track()
+        coaching = None
+        if track is not None and track.metrics:
+            strokes = self.strokes()
+            stroke_sum = stroke_summary(strokes) if strokes is not None else None
+            bouts = self.bouts_summary()
+            advice = coach_advice(track.metrics, stroke_sum, level=p.coach_level, bouts=bouts)
+            coaching = session_summary(advice, track.metrics, stroke_sum, bouts=bouts)
+        tactics = self.tactics()
+        return {
+            "version": RECORD_VERSION,
+            "project_id": p.id,
+            "clip_key": clip_key(p.video.path, p.trim_start, p.trim_end),
+            "project_path": p.project_path,
+            "name": p.name,
+            "video": Path(p.video.path).name,
+            "player": p.player,
+            "you": self.subject_side,
+            "recorded_at": recorded_at(p.video.path, p.created_at),
+            "saved_at": now_iso(),
+            "duration_s": round(self.info.n_frames / self.info.fps, 1) if self.info.fps else None,
+            "n_rallies": int(tactics.get("n_rallies", 0)),
+            "tactics": tactics,
+            "coaching": coaching,
+        }
+
+    def invalidate_trends(self) -> None:
+        """Forget the cached history, after the store changed underneath."""
+        self._history = None
+
+    def trends(self) -> dict:
+        """This session against the same player's kept ones, oldest first."""
+        current = self.session_record()
+        if current is None:
+            return trends([])
+        if self._history is None:
+            self._history = load_history()
+        kept = sessions_for(self._history, self.project.player)
+        return trends(merge_current(kept, current))
 
     # -- export ----------------------------------------------------------
 

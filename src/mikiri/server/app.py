@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from mikiri import __version__
 from mikiri.export import ExportOptions
+from mikiri.history import forget, load_history
 from mikiri.jobs import Job, JobManager
 from mikiri.paths import app_home, uploads_dir
 from mikiri.pipeline import (
@@ -67,6 +68,7 @@ class OptionsBody(BaseModel):
     racket_hand: str | None = None
     lead_leg: str | None = None
     coach_level: str | None = None
+    player: str | None = None
 
 
 class CalibrationBody(BaseModel):
@@ -178,6 +180,27 @@ class SettingsBody(BaseModel):
 
 
 # -- app factory ---------------------------------------------------------
+
+
+def _history_row(record: dict) -> dict:
+    """A kept session as the list shows it: the summaries stay in the store."""
+    t = record.get("tactics") or {}
+    you = record.get("you")
+    points = None
+    if you and t.get("sides"):
+        p = (t["sides"].get(you) or {}).get("points") or {}
+        points = [p.get("won", 0), p.get("lost", 0)]
+    return {
+        "project_id": record.get("project_id"),
+        "project_path": record.get("project_path"),
+        "name": record.get("name"),
+        "video": record.get("video"),
+        "player": record.get("player", ""),
+        "recorded_at": record.get("recorded_at"),
+        "saved_at": record.get("saved_at"),
+        "n_rallies": record.get("n_rallies", 0),
+        "points": points,
+    }
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -769,9 +792,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             path = s.save(body.path)
         except OSError as exc:
             raise HTTPException(400, f"cannot save: {exc}") from exc
+        # The other open projects read the same store, and one of them may be
+        # the same player.
+        for other in st.sessions.values():
+            if other is not s:
+                other.invalidate_trends()
         out = s.state()
         out["saved_path"] = str(path)
         return out
+
+    @app.get("/api/history")
+    def history() -> list[dict]:
+        return [_history_row(r) for r in load_history()]
+
+    @app.delete("/api/history/{project_id}")
+    def forget_session(project_id: str) -> list[dict]:
+        rows = [_history_row(r) for r in forget(project_id)]
+        for s in st.sessions.values():
+            s.invalidate_trends()
+        return rows
 
     @app.post("/api/projects/{pid}/export")
     def export(pid: str, body: ExportBody) -> dict:

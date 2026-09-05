@@ -265,6 +265,9 @@ class Project(BaseModel):
     #: The user's answers to the rally chain's questions.
     match_review: MatchReview = Field(default_factory=MatchReview)
     notes: str = ""
+    #: Who the subject is, for reading this session against their earlier
+    #: ones. Free text the user chooses; empty means the user themselves.
+    player: str = ""
     created_at: str = Field(default_factory=now_iso)
     modified_at: str = Field(default_factory=now_iso)
     project_path: str | None = None

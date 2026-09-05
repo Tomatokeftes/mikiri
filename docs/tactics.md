@@ -51,3 +51,43 @@ player watching their own footage a week later will rationalise it, so it is
 neither computed nor asked. Where a shot was aimed, and whether it went in,
 need the shuttle, which nothing here sees land. Both are listed under
 `not_measured` in the summary so the reader knows they were not overlooked.
+
+## Over time
+
+The comparator every number in this app points at is the same player earlier,
+and until now nothing kept a session to compare with. `history.py` keeps one
+when the user saves the project -- the one moment they have said the clip is
+worth keeping -- as its summaries only: the tactical summary above, the
+coaching summary `coaching.compare_sessions` reads, and enough to name the
+clip in a list. Saving again replaces the record, and so does saving the same
+file cut the same way under a new project, so re-opening a raw clip does not
+count a match twice; the same footage trimmed differently is a different
+session on purpose. The store is one JSON file in the app's home, and
+`DELETE /api/history/{project_id}` forgets a session.
+
+Sessions are grouped by a free-text **player** label on the project, empty
+meaning the user themselves, compared loosely so that " Misaki " and "misaki"
+are one person. The app does not try to recognise who is in the clip.
+
+`tactics.trends` reads the same figures across a player's sessions, oldest
+first, with the open project standing in for its own kept copy: shots per
+rally, the long-rally share, points won, points won on the player's own shot,
+points lost on their own shot, points won when serving, and the share of each
+named shot. The same rules apply as within a clip. A share withheld in a
+session stays withheld in the trend; a metric with fewer than two readable
+sessions is listed as withheld with the count rather than drawn through one
+point; a movement smaller than the metric's own minimum -- more than one
+rally's worth at the minimum count, two shots for the median -- reads as
+unchanged; and provenance is the weakest across the sessions read. One session
+is not a trend, and two carry the coaching comparator's own caveat: they cannot
+separate a trend from a good or bad day.
+
+## What is still missing
+
+* The biomechanical side of a session -- the split-step and coverage numbers
+  `compare_sessions` follows -- is kept in the record but not yet shown beside
+  the tactical trends. The comparator now has its data; the panel for it is
+  the next piece.
+* A recording date is the video file's modification time, which survives a
+  copy from a phone but not every re-encode. The record keeps it as a field
+  the user can correct in the file.

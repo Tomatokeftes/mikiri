@@ -62,3 +62,8 @@ def default_models_dir() -> Path:
 def settings_file() -> Path:
     """Path of the JSON settings file."""
     return app_home() / "settings.json"
+
+
+def history_file() -> Path:
+    """The kept sessions, one JSON file for every player the user has labelled."""
+    return app_home() / "history.json"
