@@ -41,6 +41,7 @@ from mikiri.export import ExportInputs, ExportOptions, export_pack
 from mikiri.footwork import FootworkSeries, analyse_split_steps
 from mikiri.jobs import Job
 from mikiri.keypoints import KEYPOINT_NAMES, KP, SKELETON_EDGES, body_height_px, swap_left_right
+from mikiri.match import CONFIRMABLE, Confirmation, MatchChain, SidePlayer, build_chain
 from mikiri.movements import (
     PROFILES,
     MetricContext,
@@ -62,6 +63,7 @@ from mikiri.project import (
     Correction,
     EventMarker,
     Project,
+    RallyConfirmation,
     SmoothingSettings,
     TrackedPlayer,
     TrackingRun,
@@ -140,6 +142,8 @@ class ProjectSession:
         self._footwork: FootworkSeries | None = None
         self._others: list[OtherPlayer] | None = None
         self._other_tracks: list[CourtTrack | None] | None = None
+        self._other_strokes: list[StrokeSeries | None] | None = None
+        self._match: MatchChain | None = None
         self.last_export: dict | None = None
         #: Why camera recovery from the net posts failed, if it did. The court
         #: calibration stays usable either way, so this is a note, not an error.
@@ -327,6 +331,7 @@ class ProjectSession:
     def _launches(self, value: dict | None) -> None:
         self._launches_store = value
         self._strokes = None
+        self._match = None
 
     def _invalidate(self) -> None:
         """Drop everything derived from the keypoints."""
@@ -353,6 +358,8 @@ class ProjectSession:
         self._strokes = None
         self._footwork = None
         self._other_tracks = None
+        self._other_strokes = None
+        self._match = None
 
     def raw_keypoints(self) -> np.ndarray | None:
         """Raw tracked keypoints ``(n, 26, 3)`` or ``None`` before tracking."""
@@ -759,6 +766,129 @@ class ProjectSession:
         b = self.bouts()
         return None if b is None else b.summary()
 
+    # -- the rally chain ---------------------------------------------------
+
+    def other_strokes(self) -> list[StrokeSeries | None]:
+        """Detected contacts of each other player, aligned with :meth:`others`.
+
+        The same detector as the subject's, on their own court track so the
+        zones are in their own frame. Their racket hand is not known -- it is
+        a project option for the subject only -- so the right hand is assumed,
+        which weakens the swing signal for a left-hander rather than breaking
+        it: the elbow and shoulder terms still move. No contact height in
+        metres, for the reason given in :meth:`strokes`.
+        """
+        if self._other_strokes is not None:
+            return self._other_strokes
+        out: list[StrokeSeries | None] = []
+        for o, track in zip(self.others(), self.other_tracks()):
+            if track is None:
+                out.append(None)
+                continue
+            out.append(
+                detect_strokes(
+                    o.keypoints,
+                    self.info.fps,
+                    None,
+                    "right",
+                    self.project.conf_threshold,
+                    track=track,
+                )
+            )
+        self._other_strokes = out
+        return out
+
+    def rallies(self) -> BoutSeries | None:
+        """Bouts of play by *either* side: the rallies the chain runs over.
+
+        :meth:`bouts` follows the subject alone, which is what the footwork
+        figures need. A rally is over when nobody is playing, so with the
+        other player tracked their movement and contacts count too.
+        """
+        track = self.court_track()
+        if track is None:
+            return None
+        others = [
+            (t, s) for t, s in zip(self.other_tracks(), self.other_strokes()) if t is not None
+        ]
+        return segment_bouts(track, self.strokes(), others=others)
+
+    def match(self) -> MatchChain | None:
+        """The rally chain, or ``None`` without a court and a player on each side."""
+        if self._match is not None:
+            return self._match
+        track = self.court_track()
+        rallies = self.rallies()
+        if track is None or rallies is None or self.subject_side is None:
+            return None
+        players = [SidePlayer(self.subject_side, 0, self.strokes(), track)]
+        for k, (o, ot, os) in enumerate(
+            zip(self.others(), self.other_tracks(), self.other_strokes()), start=1
+        ):
+            if o.side is not None and ot is not None:
+                players.append(SidePlayer(o.side, k, os, ot))
+        if len({p.side for p in players}) < 2:
+            return None
+        review = self.project.match_review
+        start = self.pose_start
+        confirmations = [
+            Confirmation(c.frame - start, c.field, c.value) for c in review.confirmations
+        ]
+        score_start = None if review.score_start is None else tuple(review.score_start[:2])
+        self._match = build_chain(
+            rallies, players, self.info.fps, confirmations, score_start=score_start
+        )
+        return self._match
+
+    def match_summary(self) -> dict | None:
+        """JSON-friendly rally chain, or ``None`` when there is no chain to run."""
+        m = self.match()
+        return None if m is None else m.summary()
+
+    def confirm_rally(self, frame: int, field: str, value: str | None) -> None:
+        """Record what the user settled about the rally containing ``frame``.
+
+        ``value`` of ``None`` withdraws an earlier answer. ``frame`` is an
+        absolute frame index, like an event's. Raises ``ValueError`` for a
+        field or value the chain cannot take.
+        """
+        allowed = CONFIRMABLE.get(field)
+        if allowed is None or (value is not None and value not in allowed):
+            raise ValueError(f"cannot confirm {field!r} as {value!r}")
+        with self.lock:
+            m = self.match()
+            rel = int(frame) - self.pose_start
+            hit = (
+                None if m is None else next((r for r in m.rallies if r.start <= rel <= r.end), None)
+            )
+            # One answer per fact per rally: drop any earlier answer that
+            # lands in the same rally, or at the same frame when no chain
+            # exists to say which rally that is.
+            keep = []
+            for c in self.project.match_review.confirmations:
+                same = c.field == field and (
+                    (hit is not None and hit.start <= c.frame - self.pose_start <= hit.end)
+                    or (hit is None and c.frame == int(frame))
+                )
+                if not same:
+                    keep.append(c)
+            if value is not None:
+                keep.append(RallyConfirmation(frame=int(frame), field=field, value=value))  # type: ignore[arg-type]
+            self.project.match_review.confirmations = keep
+            self._match = None
+
+    def set_score_start(self, score: tuple[int, int] | None) -> None:
+        """Record the score ``(near, far)`` when the clip begins, or forget it."""
+        with self.lock:
+            if score is None:
+                self.project.match_review.score_start = None
+            else:
+                near, far = int(score[0]), int(score[1])
+                if near < 0 or far < 0:
+                    raise ValueError("a score cannot be negative")
+                self.project.match_review.score_start = [near, far]
+            self._match = None
+
     def strokes(self) -> StrokeSeries | None:
         """Detected contacts with their descriptors, or ``None`` before tracking.
 
@@ -773,6 +903,11 @@ class ProjectSession:
             return None
         calib = self.project.court
         camera = calib.camera if (calib is not None and calib.has_camera()) else None
+        # The contact height in metres compares the racket's floor projection,
+        # in the camera's frame, with the player's position, which for a
+        # far-end player is kept in their own frame: half a turn away. Rather
+        # than a height measured between two frames, a far subject gets none.
+        far = self.subject_side == SIDE_FAR
         series = detect_strokes(
             eff[0],
             self.info.fps,
@@ -780,8 +915,8 @@ class ProjectSession:
             self.project.racket_hand,
             self.project.conf_threshold,
             track=self.court_track(),
-            homography=self.homography(),
-            camera=camera,
+            homography=None if far else self.homography(),
+            camera=None if far else camera,
         )
         if self._launches:
             from mikiri.shots import name_shots
@@ -1292,6 +1427,7 @@ class ProjectSession:
             "players": self.players_summary(),
             "strokes": (stroke_summary(sv) if (sv := self.strokes()) is not None else None),
             "bouts": self.bouts_summary(),
+            "match": self.match_summary(),
             "split_steps": self.footwork_summary(),
             "coaching": self.coaching(),
             "coach_level": p.coach_level,
@@ -1416,6 +1552,7 @@ class ProjectSession:
             coaching=self.coaching(limit=0),
             bouts=self.bouts_summary(),
             split_steps=self.footwork_summary(),
+            match=self.match_summary(),
         )
 
         def progress(frac: float, msg: str) -> None:

@@ -241,6 +241,43 @@ def test_a_forty_second_rally_reads_as_one_bout_of_continuous_work(match_session
     assert "effective_playing_time_pct" not in got
 
 
+def test_the_rally_chain_on_one_rally_asks_rather_than_guesses(match_session):
+    """Step 2 of the tactical build on the only two-player footage there is.
+
+    One rally, cut from a broadcast, with no serve in it and nothing after
+    it. So the chain has exactly one honest thing to say about the outcome:
+    nothing, and a question. What it must still do is find contacts on both
+    sides -- the far player is small and often behind the near one -- and
+    keep the double-contact questions to a minority of the contacts, which
+    is the first measure of whether the two detectors agree on a rally.
+
+    Measured when this was written: 22 near and 28 far contacts, 21 pairs by
+    one side in a row. That is two contacts in five the detectors disagree
+    on, which is the size of the work left in step 3, and the bound below is
+    set so that getting worse fails and getting better does not.
+    """
+    s = match_session
+    m = s.state()["match"]
+    assert m is not None and m["n_rallies"] == 1, m and m.get("note")
+    rally = m["rallies"][0]
+    near, far = m["contacts"]["near"], m["contacts"]["far"]
+    assert near > 15, near
+    assert far > 8, far
+    assert 0.5 < near / far < 2.0, (near, far)
+    # Nothing follows the rally, so its winner is a question, never a guess,
+    # and the serve is whatever hit first, labelled as unreviewed.
+    assert rally["winner"]["how"] is None
+    assert rally["server"]["how"] == "auto"
+    assert rally["score_before"]["value"] == [0, 0]
+    assert rally["score_after"]["how"] is None
+    assert m["headline"] is None and m["score_is_absolute"] is False
+    kinds = [i["kind"] for i in m["issues"]]
+    assert kinds.count("open_outcome") == 1
+    assert "no_contacts" not in kinds
+    doubles = kinds.count("double_contact")
+    assert doubles <= 0.5 * (near + far), (doubles, near, far)
+
+
 def test_moves_are_counted_per_trip_to_a_corner_not_per_run_of_fast_frames(match_session):
     """Run-based move detection found three moves in this rally. It is a shot a second.
 

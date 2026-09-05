@@ -71,6 +71,8 @@ class ExportInputs:
     coaching: list | None = None
     bouts: dict | None = None
     split_steps: dict | None = None
+    #: The rally chain's summary, when both players were tracked.
+    match: dict | None = None
 
 
 def _safe(name: str) -> str:
@@ -457,6 +459,56 @@ def write_summary(
             lines.append("")
         if b.get("note"):
             lines.append(b["note"].capitalize() + ".")
+            lines.append("")
+    if inp.match and inp.match.get("n_rallies"):
+        m = inp.match
+        lines.append("## Rallies, serves and score")
+        lines.append("")
+        lines.append(
+            "Who won a rally is read off who serves the next one, and the serve is the first "
+            "detected contact of a bout of play. Every figure here says how it was established: "
+            "*confirmed* by you, *inferred* through the rules of the game from confirmed facts, "
+            "or *auto*, meaning unreviewed detection. A result is never stated on *auto* alone."
+        )
+        lines.append("")
+        if m.get("headline"):
+            lines.append(f"**{m['headline']}**")
+        else:
+            lines.append(f"No result is stated: {m.get('headline_withheld', 'unknown')}.")
+        lines.append("")
+        score = m.get("score") or {}
+        serves = m.get("serves") or {}
+        lines.append("| Measure | Value |")
+        lines.append("|---|---|")
+        if score.get("value") is not None:
+            what = "Score" if m.get("score_is_absolute") else "Points won in this clip"
+            lines.append(
+                f"| {what} (near-far) | {score['value'][0]}-{score['value'][1]} "
+                f"({score.get('how')}) |"
+            )
+        lines.append(
+            f"| Serves found / tested against parity / consistent | {serves.get('detected', 0)} / "
+            f"{serves.get('checked', 0)} / {serves.get('consistent', 0)} |"
+        )
+        lines.append("")
+        lines.append("| Rally | At | Server | From | Winner | How |")
+        lines.append("|---|---|---|---|---|---|")
+        fps = inp.info.fps
+        for r in m.get("rallies", []):
+            at = r["start"] / fps if fps else 0.0
+            server = r["server"].get("value") or "?"
+            court = r["service_court"].get("value") or "?"
+            winner = r["winner"].get("value") or "open"
+            how = r["winner"].get("how") or "withheld"
+            lines.append(
+                f"| {r['index'] + 1} | {at:.1f} s | {server} | {court} | {winner} | {how} |"
+            )
+        lines.append("")
+        if m.get("issues"):
+            lines.append("Questions the chain could not settle:")
+            lines.append("")
+            for i in m["issues"]:
+                lines.append(f"* {i['question']}")
             lines.append("")
     if inp.split_steps and inp.split_steps.get("n_moves"):
         sp = inp.split_steps

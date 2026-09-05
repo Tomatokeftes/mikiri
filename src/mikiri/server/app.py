@@ -95,6 +95,21 @@ class EventBody(BaseModel):
     frame: int
 
 
+class RallyConfirmBody(BaseModel):
+    """Settle one fact about the rally containing ``frame``; ``value`` null withdraws it."""
+
+    frame: int
+    field: str
+    value: str | None = None
+
+
+class ScoreStartBody(BaseModel):
+    """The score when the clip begins, or null for both to forget it."""
+
+    near: int | None = None
+    far: int | None = None
+
+
 class EventUpdateBody(BaseModel):
     """Rename/move an event."""
 
@@ -654,6 +669,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def accept(pid: str, body: SuggestionsBody) -> dict:
         s = session(pid)
         s.accept_suggestions(body.suggestions)
+        return s.state()
+
+    # -- the rally chain ---------------------------------------------------
+
+    @app.put("/api/projects/{pid}/match/confirm")
+    def confirm_rally(pid: str, body: RallyConfirmBody) -> dict:
+        s = session(pid)
+        try:
+            s.confirm_rally(body.frame, body.field, body.value)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return s.state()
+
+    @app.put("/api/projects/{pid}/match/score-start")
+    def score_start(pid: str, body: ScoreStartBody) -> dict:
+        s = session(pid)
+        try:
+            if body.near is None or body.far is None:
+                s.set_score_start(None)
+            else:
+                s.set_score_start((body.near, body.far))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return s.state()
 
     # -- corrections -------------------------------------------------------

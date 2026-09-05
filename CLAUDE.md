@@ -71,6 +71,7 @@ Notes that will otherwise cost time:
 | `court.py` | court calibration, the top-down track, heat map, footwork metrics |
 | `segments.py` | what each frame of the raw clip *is* -- play, idle, interval, another scene -- before pose runs |
 | `rally.py` | bouts of play and the rests between them |
+| `match.py` | the rally chain: serves, outcomes and scores from the five constraints, every fact with its provenance, contradictions as questions |
 | `footwork.py` | split steps and the moves they prepare |
 | `strokes.py` | swing detection and the two-tier stroke description |
 | `shuttle.py`, `shots.py` | classical shuttle search after each contact, and shot naming gated on it |
@@ -157,8 +158,18 @@ Verified:
   looked for (he is behind Lin Dan for the rest), and never confused with
   the umpire on his chair or the spectator above the far baseline, both of
   whom the first runs tracked instead of him.
+* The rally chain on scripted matches where every answer is known
+  (`tests/test_match.py`): a missing rally raises one question at the first
+  serve that exposes it, a missed contact one at the contact that exposes
+  it, the headline stays withheld until nothing in it is unreviewed.
 
 Not verified, and the module docstrings say so:
+
+* The rally chain on a real match. The only two-player footage is one rally
+  with no serve in it, on which it finds 22 near and 28 far contacts and
+  asks about 21 pairs by one side in a row: the two detectors disagree on
+  two contacts in five, which is pinned as a bound, not a result. A clip
+  with several rallies and a raised camera is what it needs.
 
 * The split-step detector against hand-labelled frames. It finds a two-footed
   rise before a move, which is a split step *or* a recovery push-off.
@@ -171,9 +182,13 @@ Known gaps:
   the other player is identified by side and nothing else, so an uncalibrated
   clip gets the subject alone. Doubles is not: a side holds one tracker, and
   telling partners apart within a side needs appearance and continuity that
-  nothing here has. The other player's pose is displayed and mapped but
-  nothing is computed from it yet; strokes, bouts and footwork are still the
-  subject's alone, which is what the tactical build's next steps consume.
+  nothing here has. The other player's contacts are detected with the racket
+  hand assumed right, and their movement and contacts extend the rallies
+  the chain runs over (`session.rallies()`); the footwork figures and the
+  bouts panel are still the subject's alone, on purpose. No contact can yet
+  be added, moved or removed by hand, on either side, and the questions the
+  chain raises are listed but not yet asked one at a time: that is the
+  review queue, step 4.
 * `coaching.compare_sessions` turns a list of session summaries into progress
   and is tested, but nothing calls it: there is no way to load an earlier
   session, so the comparator the split-step numbers point at -- the same
@@ -202,9 +217,11 @@ calibration, and the camera view decides which one a clip can support:
 * **Biomechanical** (built): one player, movement quality, side-on or rear.
   `docs/feature-roadmap.md` is its roadmap and its list of deliberate
   refusals.
-* **Tactical** (designed, not started): two or four players, shots, rallies,
-  points and trends, from a raised camera behind one end.
-  `docs/tactical.md` is the plan, and `docs/roadmap.md` Phase 4 the context.
+* **Tactical** (steps 1 to 3 of its build order landed): two or four
+  players, shots, rallies, points and trends, from a raised camera behind one
+  end. `docs/tactical.md` is the plan, `docs/match.md` the rally chain as
+  built, and `docs/roadmap.md` Phase 4 the context. Next is the review
+  queue.
 
 Read `docs/tactical.md` before touching `tracking.py`, `rally.py`,
 `strokes.py` or `shots.py` -- it changes what those modules are for. Two

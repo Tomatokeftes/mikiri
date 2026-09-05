@@ -164,6 +164,31 @@ class TrackedPlayer(BaseModel):
         return arr
 
 
+class RallyConfirmation(BaseModel):
+    """A fact about one rally that the user settled, keyed by a frame inside it.
+
+    Keyed by frame rather than by rally index because the rallies are
+    re-segmented whenever the trim or the court changes, and a confirmation
+    must survive that: any frame inside the rally still finds it.
+    """
+
+    frame: int
+    field: Literal["server", "winner", "service_court"]
+    value: Literal["near", "far", "left", "right"]
+
+
+class MatchReview(BaseModel):
+    """What the user has told the rally chain; see :mod:`mikiri.match`.
+
+    ``score_start`` is the score ``[near, far]`` when the clip begins. Without
+    it the chain reports points won in the clip and checks serve parity
+    relatively.
+    """
+
+    score_start: list[int] | None = None
+    confirmations: list[RallyConfirmation] = Field(default_factory=list)
+
+
 class Project(BaseModel):
     """Everything about one analysed clip."""
 
@@ -191,6 +216,8 @@ class Project(BaseModel):
     #: Everyone tracked besides the subject, each with the side of the net
     #: they stood on. Empty for a run that tracked the subject alone.
     others: list[TrackedPlayer] = Field(default_factory=list)
+    #: The user's answers to the rally chain's questions.
+    match_review: MatchReview = Field(default_factory=MatchReview)
     notes: str = ""
     created_at: str = Field(default_factory=now_iso)
     modified_at: str = Field(default_factory=now_iso)

@@ -353,9 +353,23 @@ The amended rule opens doors; it does not open all of them.
    behind the near player. Doubles is the open part: one tracker per side,
    and nothing yet to tell partners apart within one.
 2. **Rallies, serves and scores**, on the constraint chain above, producing
-   rally outcomes from the serve alternation.
+   rally outcomes from the serve alternation. *Done:* `match.py` runs the
+   five constraints over bouts of play by either side, reads each rally's
+   winner off the next serve, keeps a score (points in the clip, or the
+   real score once the user gives the start), tests every service court
+   against the parity the score predicts, and turns each contradiction into
+   a question carrying the two facts that disagree. Every fact carries
+   `confirmed`, `inferred` or `auto`, derived facts take their weakest
+   input's label, and the headline is withheld while any outcome is `auto`.
+   Answers come in by frame through the API and live in the project file.
+   `docs/match.md` has the details and the refusals.
 3. **Contacts for both sides**, running the existing detection per player, with
-   the alternation check generating the first review items.
+   the alternation check generating the first review items. *Done with step
+   2, because the serve chain needed it:* the other player's contacts come
+   from the same detector, and the alternation check produces the
+   double-contact questions. Still open here: the other player's racket
+   hand is assumed right, and no contact can yet be added or removed by
+   hand, which is the queue's job.
 4. **The review queue**, which is where this becomes a product rather than a
    pipeline.
 5. **Shot naming** through the three sources, with per-pair confusion reporting.

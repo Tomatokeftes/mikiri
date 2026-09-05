@@ -3,6 +3,58 @@
 Every non-obvious choice made while building Mikiri, and why. Ordered roughly
 by how much they affect you.
 
+## A rally's winner is whoever serves next, and the score is allowed not to start at 0-0
+
+The tactical module's first real output is `match.py`: who served each rally,
+who won it, and the score, from the serve alternation and nothing else. The
+choices in it that are easy to undo by accident:
+
+* **The starting score is unknown until the user gives it, and the chain
+  works anyway.** The obvious design assumes 0-0 and lets the user correct
+  it. That would make every parity check on a clip that starts mid-game fail
+  at the first serve, which is a contradiction the footage does not contain.
+  So without a start the chain reports *points won in this clip*, and the
+  service-court check runs relatively: the first serve by each side fixes
+  where that side's parity sits, every later serve by that side tests it.
+  One free serve per side is the whole cost, and a missed rally is still
+  caught by the first serve after it by the side whose count is off.
+* **After a parity mismatch the anchor moves to the observed court.** A
+  missed rally flips one side's parity for the rest of the clip, and without
+  re-anchoring every later serve by that side would raise the same question
+  again. One missing rally, one question, at the first serve that exposes it.
+* **A derived fact takes its weakest input's label, and is never
+  `confirmed`.** A winner read off an unreviewed serve is `auto`; a score
+  with one `auto` outcome in it is `auto` however many confirmed ones sit
+  beside it; a chain of confirmed facts yields `inferred`, because only a
+  person confirms. The headline is withheld while any counted outcome is
+  `auto`. This is the amended rule made mechanical: nothing undefendable is
+  printed as fact, and the queue -- not a threshold -- decides what to ask.
+* **An unknown link breaks the tally rather than being bridged.** A rally
+  with no contacts has no server, so the previous winner is withheld and
+  every later score with it, while the parity checks restart from the next
+  serve by each side. Carrying the count across an unknown outcome would be a
+  guess about who won, and the chain would then test later serves against a
+  guess.
+* **Rallies are bouts of play by either side; footwork bouts stay the
+  subject's.** `segment_bouts` gained an `others` argument rather than a
+  second function. The biomechanical figures follow one player by design
+  (docs/rally.md says so); a rally is over when nobody is playing, and the
+  opponent's contact is proof of play in the second the subject stands still
+  under a clear.
+* **Confirmations are keyed by a frame inside the rally, not by rally
+  index.** The rallies are re-segmented whenever the trim or the court
+  changes, and an answer must survive that.
+
+Two things were tried and rejected. Deriving the server from the players'
+positions alone -- the receiver stands still in the diagonal court, the server
+is closer to the short service line -- because a flick serve and a deep return
+of serve put the players in the same places, and the first detected contact is
+at least a measurement. And treating a run of consistent parity checks as
+evidence strong enough to promote `auto` outcomes to `inferred`: it is
+corroboration, and the summary reports it as such, but a missed serve on
+both sides of a rally is consistent with everything, and the amended rule says
+a person settles it, not a coincidence.
+
 ## The side of the net is a player's identity
 
 Two players are now tracked, and the second one is identified by nothing but
