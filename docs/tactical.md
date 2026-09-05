@@ -387,6 +387,14 @@ The amended rule opens doors; it does not open all of them.
    answer from the panel, and every answer feeding the per-player classifier
    of step 5, which is the reason the queue exists.
 5. **Shot naming** through the three sources, with per-pair confusion reporting.
+   *Done, first version:* `classify.py` trains a per-player multinomial
+   logistic regression on the user's own labels, gathered by a Tag shots mode
+   in the Review panel, and names a contact only when the predicted shot
+   separates on held-out labels from every other shot the player has
+   labelled; the evidence names the pair that failed otherwise. Shuttle
+   evidence, where it exists, is kept in preference. See
+   `docs/classifier.md`. Still open: no real clip here has shot labels yet,
+   so the feature set is validated on synthetic swings only.
 6. **Analytics and trends**, which are straightforward once the events are
    trustworthy, and are where the visible value sits.
 7. **Doubles**: player attribution within a side, then the formation pack,

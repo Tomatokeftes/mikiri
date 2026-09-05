@@ -72,6 +72,7 @@ Notes that will otherwise cost time:
 | `segments.py` | what each frame of the raw clip *is* -- play, idle, interval, another scene -- before pose runs |
 | `rally.py` | bouts of play and the rests between them |
 | `match.py` | the rally chain: serves, outcomes and scores from the five constraints, every fact with its provenance, contradictions as questions |
+| `classify.py` | naming shots from the player's own labels, and the per-pair held-out accuracy each name is allowed to rest on |
 | `footwork.py` | split steps and the moves they prepare |
 | `strokes.py` | swing detection and the two-tier stroke description |
 | `shuttle.py`, `shots.py` | classical shuttle search after each contact, and shot naming gated on it |
@@ -199,9 +200,12 @@ Known gaps:
   still the subject's alone, on purpose. The questions the chain raises are
   asked one at a time in the Review panel and answered by keypress; contact
   answers are `ContactEdit`s on the project, keyed by frame, applied after
-  detection and recovery (`docs/match.md`). Not yet: undoing an answer from
-  the panel, moving a contact rather than removing and adding, and the
-  answers feeding the per-player classifier, which is what they are for.
+  detection and recovery (`docs/match.md`). Shot labels from the Tag shots
+  mode train the per-player classifier (`docs/classifier.md`), which names a
+  contact only when the pair separates on held-out labels. Not yet: undoing
+  an answer from the panel, moving a contact rather than removing and adding,
+  and any real clip with shot labels on it -- the classifier's features are
+  validated on synthetic swings only.
 * Bouts take a veto from `segments.py`, so a fast walk-back no longer merges
   two points, but only the *veto* direction is wired: the clip states can end
   a bout and can never start one. A rally played slowly enough for the motion

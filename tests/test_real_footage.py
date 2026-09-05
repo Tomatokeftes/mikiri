@@ -542,3 +542,47 @@ def test_answering_a_recovered_contact_confirms_it_and_shortens_the_queue(match_
         s.project.match_review.contact_edits.clear()
         s._chain_strokes = None
         s._match = None
+
+
+def test_labelling_real_contacts_produces_a_report_and_names_only_what_separates(match_session):
+    """The classifier's plumbing on real footage, with pseudo-labels.
+
+    There is no ground truth for shot types on this clip, so the labels here
+    are derived from the contact height class -- overheads called clears,
+    the rest lifts -- which the classifier also sees as a feature. That makes
+    separation trivial and says nothing about the model's worth; what it
+    proves is that labels reach the model through the session, the report
+    comes back with the pair it rests on, and only unlabelled contacts get a
+    classifier name, each carrying the pair in its evidence. The session is
+    restored afterwards.
+    """
+    s = match_session
+    subject, _ = s.chain_strokes()
+    start = s.pose_start
+    overhead = [c for c in subject.strokes if c.height_class == "overhead"]
+    lower = [c for c in subject.strokes if c.height_class != "overhead"]
+    if len(overhead) < 7 or len(lower) < 7:
+        pytest.skip("not enough contacts of both heights on this clip to label")
+    try:
+        for c in overhead[:6]:
+            s.answer_review("label_shot", c.frame + start, "near", value="clear")
+        for c in lower[:6]:
+            s.answer_review("label_shot", c.frame + start, "near", value="lift")
+        report = s.classifier_report()["near"]
+        assert report["n_labelled"] == 12
+        assert report["eligible"] == ["clear", "lift"]
+        assert report["pairs"][0]["n"] == 12
+        named, _ = s.chain_strokes()
+        labelled = {c.frame for c in overhead[:6]} | {c.frame for c in lower[:6]}
+        for c in named.strokes:
+            if c.frame in labelled:
+                assert c.evidence == "labelled by you"
+            elif c.shot is not None:
+                assert c.evidence.startswith("named from your 12 labelled contacts")
+        tagging = s.state()["tagging"]
+        assert tagging["n_labelled"] == 12
+        assert any(r["how"] == "labelled" for r in tagging["contacts"])
+    finally:
+        s.project.match_review.shot_labels.clear()
+        s._chain_strokes = None
+        s._match = None

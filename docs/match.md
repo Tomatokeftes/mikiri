@@ -149,7 +149,10 @@ about again. The subject's footwork figures never see any of this: they use
 the detected contacts alone, on purpose.
 
 The queue is a single endpoint, `PUT /api/projects/{id}/review`, taking the
-action, the absolute frame and the side, and returning the new state.
+action, the absolute frame and the side, and returning the new state. The
+same endpoint takes shot labels from the panel's Tag shots mode
+(`action: label_shot`, with the shot in `value`), which are the training data
+for the per-player classifier described in `docs/classifier.md`.
 
 ## Sides own events, players are an attribution
 

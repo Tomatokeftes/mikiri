@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from mikiri.angles import ANGLE_NAMES, POSITION_NAMES, SEGMENT_NAMES, AngleTable, compute_angles
+from mikiri.classify import TAGGABLE_SHOTS, name_shots_from_labels
 from mikiri.coaching import coach as coach_advice
 from mikiri.coaching import top_cues
 from mikiri.court import (
@@ -47,6 +48,7 @@ from mikiri.match import (
     ACTION_CONFIRM_SERVER,
     ACTION_CONFIRM_WINNER,
     ACTION_DISMISS,
+    ACTION_LABEL_SHOT,
     ACTION_REMOVE_CONTACT,
     CONFIRMABLE,
     SIDES,
@@ -80,6 +82,7 @@ from mikiri.project import (
     IssueDismissal,
     Project,
     RallyConfirmation,
+    ShotLabel,
     SmoothingSettings,
     TrackedPlayer,
     TrackingRun,
@@ -166,6 +169,7 @@ class ProjectSession:
         self._other_tracks: list[CourtTrack | None] | None = None
         self._other_strokes: list[StrokeSeries | None] | None = None
         self._chain_strokes: tuple[StrokeSeries | None, list[StrokeSeries | None]] | None = None
+        self._classifier: dict[str, dict] = {}
         self._match: MatchChain | None = None
         self.last_export: dict | None = None
         #: Why camera recovery from the net posts failed, if it did. The court
@@ -907,8 +911,111 @@ class ProjectSession:
                     start,
                     track=track,
                 )
+
+        # Then the player's own labels name what they can defend. Per player,
+        # because a label from one player says nothing about the other.
+        self._classifier = {}
+        start = self.pose_start
+
+        def labels_for(side: str | None) -> dict[int, str]:
+            return {
+                int(lab.frame) - start: lab.shot for lab in review.shot_labels if lab.side == side
+            }
+
+        if subject is not None and eff is not None and self.subject_side is not None:
+            subject, report = name_shots_from_labels(
+                subject,
+                labels_for(self.subject_side),
+                eff[0],
+                self.info.fps,
+                self.project.racket_hand,
+                self.project.conf_threshold,
+                self.court_track(),
+            )
+            self._classifier[self.subject_side] = report
+        for k, (o, track) in enumerate(zip(self.others(), self.other_tracks())):
+            if others[k] is None or o.side is None:
+                continue
+            others[k], report = name_shots_from_labels(
+                others[k],
+                labels_for(o.side),
+                o.keypoints,
+                self.info.fps,
+                "right",
+                self.project.conf_threshold,
+                track,
+            )
+            self._classifier[o.side] = report
         self._chain_strokes = (subject, others)
         return self._chain_strokes
+
+    def classifier_report(self) -> dict[str, dict]:
+        """Per side: what the labels can name and the per-pair accuracy it rests on."""
+        self.chain_strokes()
+        return self._classifier
+
+    def label_shot(self, frame: int, side: str, shot: str) -> None:
+        """Record what shot the contact of ``side`` nearest ``frame`` was.
+
+        One label per contact: a later label at the same frame replaces the
+        earlier one. Raises ``ValueError`` for a side or a shot the tagger
+        does not offer.
+        """
+        if side not in SIDES:
+            raise ValueError(f"no such side {side!r}")
+        if shot not in TAGGABLE_SHOTS:
+            raise ValueError(f"{shot!r} is not a shot the tagger offers")
+        with self.lock:
+            review = self.project.match_review
+            review.shot_labels = [
+                lab
+                for lab in review.shot_labels
+                if not (lab.side == side and lab.frame == int(frame))
+            ]
+            review.shot_labels.append(ShotLabel(frame=int(frame), side=side, shot=shot))  # type: ignore[arg-type]
+            self._chain_strokes = None
+            self._match = None
+
+    def tagging(self) -> dict:
+        """Every contact the chain runs over, with its label if it has one.
+
+        The tagger walks this list; it is the labelling pass the classifier
+        trains on, and every row shows what the app would call the contact
+        today so the user can see the model change as they label.
+        """
+        subject, others = self.chain_strokes()
+        start = self.pose_start
+        rows: list[dict] = []
+
+        def add(side: str | None, series: StrokeSeries | None) -> None:
+            if series is None or side is None:
+                return
+            for s in series.strokes:
+                rows.append(
+                    {
+                        "frame": int(s.frame) + start,
+                        "side": side,
+                        "descriptor": s.descriptor(),
+                        "shot": s.shot,
+                        "how": "labelled"
+                        if s.evidence == "labelled by you"
+                        else ("classifier" if s.shot else None),
+                        "confidence": s.shot_confidence,
+                    }
+                )
+
+        add(self.subject_side, subject)
+        for o, series in zip(self.others(), others):
+            add(o.side, series)
+        rows.sort(key=lambda r: (r["frame"], r["side"]))
+        n_labelled = sum(1 for r in rows if r["how"] == "labelled")
+        return {
+            "contacts": rows,
+            "n_labelled": n_labelled,
+            "n_contacts": len(rows),
+            "shots": list(TAGGABLE_SHOTS),
+            "classifier": self.classifier_report(),
+        }
 
     def rallies(self) -> BoutSeries | None:
         """Bouts of play by *either* side: the rallies the chain runs over.
@@ -987,13 +1094,23 @@ class ProjectSession:
             )
 
     def answer_review(
-        self, action: str, frame: int, side: str | None, kind: str | None = None
+        self,
+        action: str,
+        frame: int,
+        side: str | None,
+        kind: str | None = None,
+        value: str | None = None,
     ) -> None:
-        """Record one answer from the queue as the fact it settles.
+        """Record one answer from the queue or the tagger as the fact it settles.
 
         Raises ``ValueError`` for an action the queue does not offer, or an
-        answer missing the side it needs.
+        answer missing the side or value it needs.
         """
+        if action == ACTION_LABEL_SHOT:
+            if side is None or value is None:
+                raise ValueError("a shot label needs a side and a shot")
+            self.label_shot(frame, side, value)
+            return
         contact_actions = {
             ACTION_CONFIRM_CONTACT: "confirm",
             ACTION_REMOVE_CONTACT: "remove",
@@ -1625,6 +1742,7 @@ class ProjectSession:
             "bouts": self.bouts_summary(),
             "match": self.match_summary(),
             "review": self.review_queue(),
+            "tagging": self.tagging(),
             "split_steps": self.footwork_summary(),
             "coaching": self.coaching(),
             "coach_level": p.coach_level,

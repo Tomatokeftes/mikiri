@@ -117,6 +117,8 @@ class ReviewBody(BaseModel):
     frame: int
     side: str | None = None
     kind: str | None = None
+    #: For a shot label: the shot, in the user's own words.
+    value: str | None = None
 
 
 class EventUpdateBody(BaseModel):
@@ -707,7 +709,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def answer_review(pid: str, body: ReviewBody) -> dict:
         s = session(pid)
         try:
-            s.answer_review(body.action, body.frame, body.side, body.kind)
+            s.answer_review(body.action, body.frame, body.side, body.kind, body.value)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return s.state()

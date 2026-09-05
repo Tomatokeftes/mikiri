@@ -120,7 +120,11 @@ ACTION_ADD_CONTACT = "add_contact"
 ACTION_CONFIRM_WINNER = "confirm_winner"
 ACTION_CONFIRM_SERVER = "confirm_server"
 ACTION_DISMISS = "dismiss"
+#: Not a question the chain asks but an answer the tagger records: what shot
+#: a contact was, in the user's own words, for the per-player classifier.
+ACTION_LABEL_SHOT = "label_shot"
 ACTIONS = (
+    ACTION_LABEL_SHOT,
     ACTION_CONFIRM_CONTACT,
     ACTION_REMOVE_CONTACT,
     ACTION_ADD_CONTACT,

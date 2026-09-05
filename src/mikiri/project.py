@@ -199,6 +199,19 @@ class ContactEdit(BaseModel):
     action: Literal["add", "remove", "confirm"]
 
 
+class ShotLabel(BaseModel):
+    """What shot a contact was, in the user's own words, keyed by an absolute frame.
+
+    The training data for the per-player shot classifier, and the only kind
+    of label it accepts: nothing here comes from a detector. Applied to the
+    contact of that side nearest the frame.
+    """
+
+    frame: int
+    side: Literal["near", "far"]
+    shot: str
+
+
 class IssueDismissal(BaseModel):
     """A question the user chose to leave. It stays raised and stays out of the queue."""
 
@@ -219,6 +232,7 @@ class MatchReview(BaseModel):
     confirmations: list[RallyConfirmation] = Field(default_factory=list)
     contact_edits: list[ContactEdit] = Field(default_factory=list)
     dismissed: list[IssueDismissal] = Field(default_factory=list)
+    shot_labels: list[ShotLabel] = Field(default_factory=list)
 
 
 class Project(BaseModel):

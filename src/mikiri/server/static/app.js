@@ -1079,9 +1079,25 @@ function renderMatch() {
 function renderReview() {
   const panel = $('#review-panel');
   const q = S.state && S.state.review;
-  const has = !!(q && q.n_open);
-  panel.classList.toggle('hidden', !has);
-  if (!has) { S.review = null; return; }
+  const tg = S.state && S.state.tagging;
+  const hasQueue = !!(q && q.n_open);
+  const hasContacts = !!(tg && tg.n_contacts);
+  panel.classList.toggle('hidden', !hasQueue && !hasContacts);
+  $('#tag-toggle').classList.toggle('hidden', !hasContacts);
+  $('#tag-toggle').textContent = S.tagging ? 'Back to questions' : 'Tag shots';
+  renderClassifier(tg);
+  if (!hasQueue && !hasContacts) { S.review = null; S.tag = null; return; }
+  if (S.tagging && hasContacts) { S.review = null; renderTagging(tg); return; }
+  S.tag = null;
+  if (!hasQueue) {
+    S.review = null;
+    $('#review-progress').textContent = `nothing open, ${q ? q.answered : 0} answered`;
+    $('#review-question').textContent = 'Every question is answered or left. Label shots to teach the classifier.';
+    $('#review-detail').textContent = '';
+    $('#review-options').innerHTML = '';
+    $('#review-help').textContent = '';
+    return;
+  }
   const item = q.open[0];
   S.review = item;
   if (S.reviewSeekId !== item.id) { S.reviewSeekId = item.id; seek(item.frame); }
@@ -1091,9 +1107,69 @@ function renderReview() {
   $('#review-options').innerHTML = item.options.map((o, i) =>
     `<button class="btn small" data-i="${i}"><b>${i + 1}</b> ${o.label}</button>`).join(' ')
     + ' <button class="btn small" data-i="d"><b>d</b> leave it</button>';
+  $('#review-help').innerHTML = 'Press the number to answer, or <b>d</b> to leave this one. The video is at the frame in question; for "at the frame I am on", scrub to the hit first.';
   for (const b of $('#review-options').querySelectorAll('button')) {
     b.addEventListener('click', () => answerReview(b.dataset.i === 'd' ? 'd' : Number(b.dataset.i)));
   }
+}
+
+// The tagger: the labelling pass the per-player classifier trains on. It walks
+// the chain's contacts in order, skipping the ones already labelled and the
+// ones the user skipped this session, and a number key names the shot.
+function renderTagging(tg) {
+  S.tagSkip = S.tagSkip || new Set();
+  const next = tg.contacts.find((c) => c.how !== 'labelled' && !S.tagSkip.has(`${c.side}:${c.frame}`));
+  $('#review-progress').textContent = `${tg.n_labelled} of ${tg.n_contacts} contacts labelled`;
+  if (!next) {
+    S.tag = null;
+    $('#review-question').textContent = 'Every contact is labelled or skipped.';
+    $('#review-detail').textContent = '';
+    $('#review-options').innerHTML = '';
+    $('#review-help').textContent = '';
+    return;
+  }
+  S.tag = next;
+  const key = `${next.side}:${next.frame}`;
+  if (S.tagSeekKey !== key) { S.tagSeekKey = key; seek(next.frame); }
+  const guess = next.shot ? ` The app would call it a ${next.shot} (${next.how}, ${Math.round(100 * next.confidence)}%).` : '';
+  $('#review-question').textContent = `What shot did the ${next.side} side play at ${(next.frame / fps()).toFixed(1)} s? It reads as ${next.descriptor}.${guess}`;
+  $('#review-detail').textContent = 'Your labels train a classifier for this player alone. It names a shot only when your labels for that shot separate from every other shot you have labelled, and it says how well.';
+  $('#review-options').innerHTML = tg.shots.map((sh, i) =>
+    `<button class="btn small" data-i="${i}"><b>${i + 1}</b> ${sh}</button>`).join(' ')
+    + ' <button class="btn small" data-i="s"><b>s</b> skip</button>';
+  $('#review-help').innerHTML = 'Press the number for the shot, <b>s</b> to skip this contact, <b>t</b> to go back to the questions.';
+  for (const b of $('#review-options').querySelectorAll('button')) {
+    b.addEventListener('click', () => tagShot(b.dataset.i === 's' ? 's' : Number(b.dataset.i)));
+  }
+}
+
+function renderClassifier(tg) {
+  const el = $('#classifier-report');
+  const rep = tg && tg.classifier;
+  if (!rep || !Object.keys(rep).length) { el.innerHTML = ''; return; }
+  const parts = [];
+  for (const [side, r] of Object.entries(rep)) {
+    const classes = Object.entries(r.classes || {}).map(([k, v]) => `${k} ${v}`).join(', ') || 'none';
+    let line = `<b>${side}</b>: ${r.n_labelled} labelled (${classes}).`;
+    if (r.pairs && r.pairs.length) {
+      line += ' Pairs: ' + r.pairs.map((p) => `${p.a}/${p.b} ${Math.round(100 * p.accuracy)}% of ${p.n}${p.separable ? '' : ' (not separated)'}`).join('; ') + '.';
+      line += ` Named ${r.named}, withheld ${r.withheld}.`;
+    } else if (r.note) line += ' ' + r.note.charAt(0).toUpperCase() + r.note.slice(1) + '.';
+    parts.push(line);
+  }
+  el.innerHTML = parts.join('<br>');
+}
+
+async function tagShot(choice) {
+  const c = S.tag;
+  if (!c) return;
+  if (choice === 's') { S.tagSkip.add(`${c.side}:${c.frame}`); renderReview(); return; }
+  const shot = S.state.tagging.shots[choice];
+  if (!shot) return;
+  try {
+    applyState(await api('PUT', `/api/projects/${S.pid}/review`, { action: 'label_shot', frame: c.frame, side: c.side, value: shot }));
+    setStatus(`Labelled ${shot}`);
+  } catch (e) { setStatus(e.message, true); }
 }
 
 async function answerReview(choice) {
@@ -1321,6 +1397,7 @@ function bindUI() {
   $('#show-skeleton').addEventListener('change', (e) => { S.showSkeleton = e.target.checked; renderVideo(); });
   $('#show-labels').addEventListener('change', (e) => { S.showLabels = e.target.checked; renderVideo(); });
   $('#swap-lr').addEventListener('change', async (e) => { applyState(await api('PUT', `/api/projects/${S.pid}/options`, { swap_lr: e.target.checked })); await loadPose(); renderAll(); });
+  $('#tag-toggle').addEventListener('click', () => { S.tagging = !S.tagging; S.tagSeekKey = null; renderReview(); });
   $('#edit-toggle').addEventListener('change', (e) => { S.edit = e.target.checked; $('#edit-panel').classList.toggle('hidden', !S.edit); if (S.edit && !$('#interp-start').value) $('#interp-start').value = S.frame; renderVideo(); });
   $('#undo-btn').addEventListener('click', undo);
   $('#redo-btn').addEventListener('click', redo);
@@ -1403,7 +1480,15 @@ function bindUI() {
     }
     // The review queue answers by number, and leaves a question with d. Only
     // while a question is showing, so the keys mean nothing otherwise.
-    if (S.review && !$('#review-panel').classList.contains('hidden') && !e.ctrlKey && !e.metaKey) {
+    const reviewShowing = !$('#review-panel').classList.contains('hidden') && !e.ctrlKey && !e.metaKey;
+    if (reviewShowing && (e.key === 't' || e.key === 'T') && !$('#tag-toggle').classList.contains('hidden')) {
+      $('#tag-toggle').click(); e.preventDefault(); return;
+    }
+    if (S.tagging && S.tag && reviewShowing) {
+      if (/^[1-9]$/.test(e.key)) { tagShot(Number(e.key) - 1); e.preventDefault(); return; }
+      if (e.key === 's' || e.key === 'S') { tagShot('s'); e.preventDefault(); return; }
+    }
+    if (S.review && reviewShowing) {
       if (/^[1-9]$/.test(e.key)) { answerReview(Number(e.key) - 1); e.preventDefault(); return; }
       if (e.key === 'd' || e.key === 'D') { answerReview('d'); e.preventDefault(); return; }
     }

@@ -48,3 +48,29 @@ def test_an_answer_the_queue_never_offered_is_refused(tracked_session):
         s.answer_review("dismiss", 1, None)  # leaving a question needs its kind
     with pytest.raises(ValueError):
         s.answer_review("add_contact", 1, "sideways")
+
+
+def test_a_shot_label_is_recorded_and_only_the_taggers_shots_are_accepted(tracked_session):
+    """Labels are the classifier's whole training set, so they are the user's word and nothing else."""
+    s = tracked_session
+    s.answer_review("label_shot", 50, "near", value="smash")
+    s.answer_review("label_shot", 50, "near", value="clear")  # relabelling replaces
+    labels = s.project.match_review.shot_labels
+    assert [(lab.frame, lab.side, lab.shot) for lab in labels] == [(50, "near", "clear")]
+    with pytest.raises(ValueError):
+        s.answer_review("label_shot", 60, "near", value="block")  # needs the other player
+    with pytest.raises(ValueError):
+        s.answer_review("label_shot", 60, "near")  # no shot given
+    back = Project.model_validate_json(s.project.model_dump_json())
+    assert back.match_review.shot_labels[0].shot == "clear"
+
+
+def test_tagging_state_lists_the_contacts_with_their_labels(tracked_session):
+    """The tagger walks this list, and it must be honest about what is labelled and what is guessed."""
+    s = tracked_session
+    tg = s.state()["tagging"]
+    assert set(tg) == {"contacts", "n_labelled", "n_contacts", "shots", "classifier"}
+    assert "block" not in tg["shots"] and "smash" in tg["shots"]
+    assert tg["n_labelled"] <= tg["n_contacts"]
+    for row in tg["contacts"]:
+        assert set(row) == {"frame", "side", "descriptor", "shot", "how", "confidence"}
