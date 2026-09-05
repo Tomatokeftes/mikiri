@@ -729,8 +729,13 @@ def test_a_clip_trimmed_to_one_bout_gets_no_per_rally_verdict():
     from mikiri.coaching import coach, metric_values
 
     fw = developing_footwork()
-    trimmed = {"n_bouts": 1, "distance_per_bout_m": 96.0, "mean_bout_s": 40.0,
-               "rest_share": 0.0, "trimmed_to_play": True}
+    trimmed = {
+        "n_bouts": 1,
+        "distance_per_bout_m": 96.0,
+        "mean_bout_s": 40.0,
+        "rest_share": 0.0,
+        "trimmed_to_play": True,
+    }
     values = metric_values(fw, developing_strokes(), trimmed)
     assert "distance_per_rally_m" not in values
     assert "mean_rally_s" not in values

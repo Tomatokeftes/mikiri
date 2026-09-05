@@ -36,6 +36,7 @@ from mikiri.court import (
 )
 from mikiri.events import EventSuggestion, flight_time_s
 from mikiri.export import ExportInputs, ExportOptions, export_pack
+from mikiri.footwork import FootworkSeries, analyse_split_steps
 from mikiri.jobs import Job
 from mikiri.keypoints import KEYPOINT_NAMES, KP, SKELETON_EDGES, body_height_px, swap_left_right
 from mikiri.movements import (
@@ -577,6 +578,23 @@ class ProjectSession:
             return [a.to_dict() for a in advice]
         return [a.to_dict() for a in top_cues(advice)]
 
+    def footwork(self) -> FootworkSeries | None:
+        """Split steps and the moves they prepared, or ``None`` without a court.
+
+        Needs court speed to know what a move is, so it appears with the
+        calibration.
+        """
+        track = self.court_track()
+        eff = self.effective_keypoints()
+        if track is None or eff is None:
+            return None
+        return analyse_split_steps(eff[0], track, self.project.conf_threshold)
+
+    def footwork_summary(self) -> dict | None:
+        """JSON-friendly split-step figures, or ``None`` without a court."""
+        f = self.footwork()
+        return None if f is None else f.summary()
+
     def bouts(self) -> BoutSeries | None:
         """Bouts of play and the rests between them, or ``None`` without a court.
 
@@ -1102,6 +1120,7 @@ class ProjectSession:
             "footwork": (track.metrics if (track := self.court_track()) is not None else None),
             "strokes": (stroke_summary(sv) if (sv := self.strokes()) is not None else None),
             "bouts": self.bouts_summary(),
+            "split_steps": self.footwork_summary(),
             "coaching": self.coaching(),
             "coach_level": p.coach_level,
             "last_export": self.last_export,
