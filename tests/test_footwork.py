@@ -185,6 +185,23 @@ def test_moves_without_a_split_lower_the_presence_rate():
     assert bare["split_presence_rate"] == 0.0
 
 
+def test_a_split_landing_with_the_move_reports_zero_rather_than_a_negative_latency():
+    """The lag window exists to absorb the smoothing lead, not to time a late split.
+
+    A hop marked a frame or two after the move onset is simultaneous at this
+    resolution; a negative "split to first step" would read as the player
+    splitting after setting off, which is not something the detector can see.
+    """
+    speed = _moving([(2, 0.1), (1.5, 2.5), (2, 0.1)])
+    kp = _add_hop(_still_pose(speed.shape[0]), land=62)  # just after the move begins
+    got = analyse_split_steps(kp, _track(speed))
+    lat = [s.latency_s for s in got.splits if s.latency_s is not None]
+    assert lat and all(v >= 0.0 for v in lat)
+    summary = got.summary()
+    if "median_split_to_step_s" in summary:
+        assert summary["median_split_to_step_s"] >= 0.0
+
+
 # --- the summary ----------------------------------------------------------------
 
 

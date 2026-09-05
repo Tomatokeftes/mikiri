@@ -382,12 +382,18 @@ def analyse_split_steps(
         move = min(candidates, key=lambda m: abs(m - frame)) if candidates else None
         if move is not None:
             used.add(move)
+        # A hop that lands inside the lag window is simultaneous with the move
+        # as far as this can tell: the detector marks the landing frame and the
+        # smoothed speed leads it. Reporting the negative number would say the
+        # player split *after* setting off, which is a claim about timing this
+        # resolution cannot make, so it floors at zero.
+        latency = None if move is None else max(0.0, (move - frame) / fps)
         splits.append(
             SplitStep(
                 frame=int(frame),
                 confidence=float(conf),
                 move_frame=None if move is None else int(move),
-                latency_s=None if move is None else (move - frame) / fps,
+                latency_s=latency,
             )
         )
     note = ""

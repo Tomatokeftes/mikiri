@@ -64,6 +64,8 @@ class ExportInputs:
     racket: RacketSeries | None = None
     strokes: StrokeSeries | None = None
     coaching: list | None = None
+    bouts: dict | None = None
+    split_steps: dict | None = None
 
 
 def _safe(name: str) -> str:
@@ -401,6 +403,82 @@ def write_summary(
         lines.append(f"| Time per zone | {zones} |")
         lines.append(
             f"| Frames with a measured position | {fw['frames_measured']} of {fw['frames_total']} |"
+        )
+        lines.append("")
+    if inp.bouts and inp.bouts.get("n_bouts"):
+        b = inp.bouts
+        lines.append("## Rallies")
+        lines.append("")
+        lines.append(
+            "A bout is a stretch of continuous work by the tracked player, not a scored point: "
+            "the score is invisible and the opponent may not be tracked. Everything here is "
+            "measured in play, with the rests excluded, because that is what published "
+            "reference values measure."
+        )
+        lines.append("")
+        lines.append("| Measure | Value |")
+        lines.append("|---|---|")
+        lines.append(f"| Bouts of play | {b['n_bouts']} |")
+        if b.get("mean_bout_s") is not None:
+            lines.append(f"| Mean / longest bout | {b['mean_bout_s']} / {b['longest_bout_s']} s |")
+        if b.get("distance_per_bout_m") is not None:
+            lines.append(f"| Distance per bout | {b['distance_per_bout_m']} m |")
+        if b.get("metres_per_minute_in_play") is not None:
+            lines.append(
+                f"| In play | {b['play_seconds']} s, {b['metres_per_minute_in_play']} m/min |"
+            )
+        if b.get("mean_rest_s") is not None:
+            lines.append(f"| Mean rest between bouts | {b['mean_rest_s']} s |")
+        if b.get("contacts_per_bout") is not None:
+            lines.append(f"| Contacts per bout | {b['contacts_per_bout']} |")
+        if b.get("effective_playing_time_pct") is not None:
+            lines.append(
+                f"| Effective playing time | {b['effective_playing_time_pct']}% of the session "
+                f"(work-to-rest {b.get('work_density')}) |"
+            )
+        lines.append("")
+        if b.get("not_segmented"):
+            lines.append(
+                "No bout could be found, so the whole tracked range stands in for one and the "
+                "figures above are whole-clip figures. Effective playing time and work-to-rest "
+                "are not reported, and nothing here should be read as a per-rally number."
+            )
+            lines.append("")
+        elif b.get("trimmed_to_play"):
+            lines.append(
+                "Effective playing time and work-to-rest are not reported: this clip is already "
+                "cut to the play, so they would measure the editing rather than the player."
+            )
+            lines.append("")
+        if b.get("note"):
+            lines.append(b["note"].capitalize() + ".")
+            lines.append("")
+    if inp.split_steps and inp.split_steps.get("n_moves"):
+        sp = inp.split_steps
+        lines.append("## Split steps")
+        lines.append("")
+        lines.append("| Measure | Value |")
+        lines.append("|---|---|")
+        lines.append(f"| Moves (trips to a corner) | {sp['n_moves']} |")
+        if sp.get("split_presence_rate") is not None:
+            lines.append(
+                f"| Moves prepared by a split step | {sp['n_moves_with_split']} of {sp['n_moves']} "
+                f"({round(100 * sp['split_presence_rate'])}%) |"
+            )
+        else:
+            lines.append(
+                f"| Moves prepared by a split step | {sp['n_moves_with_split']} of {sp['n_moves']} "
+                "(too few moves for a rate) |"
+            )
+        if sp.get("median_split_to_step_s") is not None:
+            lines.append(f"| Split to first step (median) | {sp['median_split_to_step_s']} s |")
+        lines.append("")
+        lines.append(
+            "What is detected is a brief two-footed rise before a move. A split step is one of "
+            "those, and so is the push-off that recovers from a net shot, so read this as a lower "
+            "bound on preparation of some kind rather than a count of textbook split steps. It is "
+            "not validated against labelled footage and is not comparable to published figures; "
+            "compare it against your own earlier sessions."
         )
         lines.append("")
     lines.append("## Angle definitions")

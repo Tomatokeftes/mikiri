@@ -240,6 +240,13 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         expect(page.locator("#court-panel")).to_be_visible()
         expect(page.locator("#footwork-metrics")).to_contain_text("distance", timeout=10000)
 
+        # Bouts of play appear with the court, because they need court speed.
+        # On a clip this short there is only one, and the panel must say why the
+        # work-to-rest figure is missing rather than quietly omitting it.
+        expect(page.locator("#rally-panel")).to_be_visible()
+        expect(page.locator("#rally-summary")).to_contain_text("bouts", timeout=10000)
+        expect(page.locator("#rally-list")).to_contain_text("bout 1")
+
         # Detected contacts: the demo clip's swing shows up in the panel with a
         # speed and a court zone. The exact height class is asserted in
         # tests/test_strokes.py against ground truth, not here - it sits near a
@@ -251,6 +258,9 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         page.locator("#court-panel").scroll_into_view_if_needed()
         page.wait_for_timeout(300)
         page.screenshot(path=str(SCREENSHOTS / "08_court.png"))
+        page.locator("#rally-panel").scroll_into_view_if_needed()
+        page.wait_for_timeout(200)
+        page.locator("#rally-panel").screenshot(path=str(SCREENSHOTS / "09_rallies.png"))
 
         # Export without videos into a temp folder.
         out = tmp_path / "ui_pack"

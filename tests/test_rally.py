@@ -184,6 +184,26 @@ def test_a_clip_with_no_movement_is_one_bout_and_says_so():
     got = segment_bouts(_track(np.full(300, 0.05)))
     assert len(got.bouts) == 1
     assert "whole tracked range" in got.note
+    assert got.not_segmented
+
+
+def test_an_unsegmentable_clip_is_not_called_trimmed_to_play():
+    """Two different situations that both end with one bout and no rests.
+
+    A clip cut to its rallies is a statement about the footage. A clip where no
+    bout could be found is a statement about the detector, and its single bout
+    is the whole range by construction, so its zero rest share means nothing.
+    Reporting the second as the first would be inventing a fact about the video.
+    """
+    unsegmented = segment_bouts(_track(np.full(300, 0.05))).summary()
+    assert unsegmented.get("not_segmented") is True
+    assert "trimmed_to_play" not in unsegmented
+    assert "rest_share" not in unsegmented
+    assert "work_density" not in unsegmented
+
+    trimmed = segment_bouts(_track(_rally_speed([(20, 2.5)]))).summary()
+    assert trimmed.get("trimmed_to_play") is True
+    assert "not_segmented" not in trimmed
 
 
 def test_an_empty_or_unusable_track_does_not_raise():

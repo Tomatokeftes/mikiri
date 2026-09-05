@@ -739,6 +739,16 @@ def test_a_clip_trimmed_to_one_bout_gets_no_per_rally_verdict():
     values = metric_values(fw, developing_strokes(), trimmed)
     assert "distance_per_rally_m" not in values
     assert "mean_rally_s" not in values
+
+    # And the same for a clip where no bout could be found at all: the single
+    # "bout" is the whole clip, so its distance is not a per-rally distance.
+    unsegmented = {
+        "n_bouts": 1,
+        "distance_per_bout_m": 96.0,
+        "mean_bout_s": 40.0,
+        "not_segmented": True,
+    }
+    assert "distance_per_rally_m" not in metric_values(fw, developing_strokes(), unsegmented)
     ids = {a.id for a in coach(fw, developing_strokes(), bouts=trimmed) if a.severity == "work-on"}
     assert "distance_per_rally" not in ids
 

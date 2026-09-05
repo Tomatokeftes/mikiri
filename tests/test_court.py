@@ -289,6 +289,35 @@ def test_export_pack_carries_the_full_advice_not_just_the_headline(tracked_sessi
         assert a["evidence"] and 0.0 <= a["confidence"] <= 1.0
 
 
+def test_the_pack_reports_rallies_with_the_caveats_attached(tracked_session, tmp_path):
+    """A number in a pack outlives the panel that explained it.
+
+    So the summary carries the same refusals the UI does: no work-to-rest on a
+    clip cut to the play, and the split-step figure labelled as the lower bound
+    it is.
+    """
+    cam = _synth_camera()
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    tracked_session.set_court("doubles_corners", cam.floor(corners).tolist(), None, 0)
+    bouts = tracked_session.bouts_summary()
+    assert bouts and bouts["n_bouts"] >= 1
+
+    out = tmp_path / "rally_pack"
+    tracked_session.export(ExportOptions(include_videos=False, make_zip=False, out_dir=str(out)))
+    summary = (out / "summary.md").read_text(encoding="utf-8")
+    assert "## Rallies" in summary
+    assert "not a scored point" in summary
+    if bouts.get("not_segmented"):
+        assert "No bout could be found" in summary
+        assert "Effective playing time |" not in summary
+    elif bouts.get("trimmed_to_play"):
+        assert "cut to the play" in summary
+        assert "Effective playing time |" not in summary
+    if (tracked_session.footwork_summary() or {}).get("n_moves"):
+        assert "## Split steps" in summary
+        assert "lower bound on preparation" in summary
+
+
 def test_memoised_series_do_not_go_stale_when_events_change(tracked_session):
     """Caching the track is only safe if every input to it invalidates.
 
@@ -325,6 +354,25 @@ def test_memoised_racket_reacts_to_a_scale_calibration(tracked_session):
     assert tracked_session.racket().speed_mps is not None
     tracked_session.set_calibration("clear")
     assert tracked_session.racket().speed_mps is None
+
+
+def test_memoised_split_steps_refresh_when_the_trim_changes(tracked_session):
+    """The split-step series is cached like the track, so it must invalidate too.
+
+    A stale one is silent: the panel keeps showing moves from frames that are
+    no longer in the clip.
+    """
+    cam = _synth_camera()
+    corners = np.asarray(preset_points("doubles_corners"), dtype=float)
+    tracked_session.set_court("doubles_corners", cam.floor(corners).tolist(), None, 0)
+    full = tracked_session.footwork()
+    assert full is not None
+    assert tracked_session.footwork() is full, "the series should be memoised"
+
+    n = tracked_session.court_track().positions.shape[0]
+    tracked_session.set_trim(tracked_session.pose_start, tracked_session.pose_start + n // 2)
+    after = tracked_session.footwork()
+    assert after is not None and after is not full
 
 
 # --- pinning the behaviour that mutation testing showed was unprotected ---------

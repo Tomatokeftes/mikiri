@@ -961,8 +961,14 @@ def metric_values(
     # One bout is one sample, and on a clip already cut to its play there is no
     # way to tell where one rally ended and the next began. Comparing that
     # single stretch against a per-rally band compares two different things, so
-    # the metric is withheld rather than reported with a verdict attached.
-    one_bout_no_rests = n_bouts is not None and n_bouts < 2 and bt.get("trimmed_to_play")
+    # the metric is withheld rather than reported with a verdict attached. The
+    # same applies, more strongly, when nothing could be segmented at all and
+    # the "bout" is the whole clip standing in for one.
+    one_bout_no_rests = (
+        n_bouts is not None
+        and n_bouts < 2
+        and bool(bt.get("trimmed_to_play") or bt.get("not_segmented"))
+    )
     if per_bout is not None and not one_bout_no_rests:
         out["distance_per_rally_m"] = per_bout
     elif per_bout is None and distance is not None and rallies is not None and rallies >= 1:

@@ -628,7 +628,7 @@ function renderAll() {
   if (!S.state) return;
   renderInfo(); renderTrim(); renderEvents(); renderOptions();
   renderVideo(); renderTimeline(); renderPlots(); renderCourt();
-  renderStrokes(); renderCoaching(); renderCameraView();
+  renderStrokes(); renderRallies(); renderCoaching(); renderCameraView();
 }
 
 async function refreshTabs() {
@@ -962,6 +962,50 @@ function renderStrokes() {
     li.style.cursor = 'pointer';
     li.addEventListener('click', () => seek(Number(li.dataset.frame)));
   }
+}
+
+function renderRallies() {
+  const panel = $('#rally-panel');
+  const b = S.state && S.state.bouts;
+  const has = !!(b && b.n_bouts);
+  panel.classList.toggle('hidden', !has);
+  if (!has) return;
+  const kv = (k, v) => `<span class="k">${k}</span><span>${v}</span>`;
+  const rows = [kv('bouts', `${b.n_bouts}${b.mean_bout_s != null ? `, mean ${b.mean_bout_s} s, longest ${b.longest_bout_s} s` : ''}`)];
+  if (b.distance_per_bout_m != null) rows.push(kv('distance per bout', `${b.distance_per_bout_m} m`));
+  if (b.play_seconds != null) rows.push(kv('in play', `${b.play_seconds} s${b.metres_per_minute_in_play != null ? `, ${b.metres_per_minute_in_play} m/min` : ''}`));
+  if (b.mean_rest_s != null) rows.push(kv('rest between', `mean ${b.mean_rest_s} s`));
+  if (b.contacts_per_bout != null) rows.push(kv('contacts per bout', String(b.contacts_per_bout)));
+  if (b.effective_playing_time_pct != null) rows.push(kv('playing time', `${b.effective_playing_time_pct}% of the session, work-to-rest ${b.work_density}`));
+  const sp = S.state.split_steps;
+  if (sp && sp.n_moves) {
+    rows.push(kv('moves', String(sp.n_moves)));
+    rows.push(kv('split step before', sp.split_presence_rate != null
+      ? `${sp.n_moves_with_split} of ${sp.n_moves} moves (${Math.round(sp.split_presence_rate * 100)}%)`
+      : `${sp.n_moves_with_split} of ${sp.n_moves} moves -- too few to give a rate`));
+    if (sp.median_split_to_step_s != null) rows.push(kv('split to first step', `${sp.median_split_to_step_s} s (median)`));
+  }
+  $('#rally-summary').innerHTML = rows.join('');
+
+  const fps = (S.state && S.state.fps) || 30;
+  const start = S.pose ? S.pose.start : 0;
+  $('#rally-list').innerHTML = (b.bouts || []).map((x, i) => {
+    const t = ((x.start + start) / fps).toFixed(1);
+    return `<li data-frame="${x.start + start}"><span class="mono">${t}s</span> <b>bout ${i + 1}</b>`
+      + `<span class="muted small-text"> ${x.duration_s} s, ${x.distance_m} m, peak ${x.peak_speed_mps} m/s`
+      + `${x.n_contacts ? `, ${x.n_contacts} contacts` : ''}</span></li>`;
+  }).join('');
+  for (const li of $('#rally-list').querySelectorAll('li')) {
+    li.style.cursor = 'pointer';
+    li.addEventListener('click', () => seek(Number(li.dataset.frame)));
+  }
+
+  const notes = [];
+  if (b.note) notes.push(b.note.charAt(0).toUpperCase() + b.note.slice(1) + '.');
+  if (b.not_segmented) notes.push('No separate bout could be found, so these are whole-clip figures rather than per-rally ones.');
+  else if (b.trimmed_to_play) notes.push('The clip is already cut to the play, so work-to-rest would measure the editing rather than you, and is not reported.');
+  if (sp && sp.n_splits) notes.push('A split step here means a brief two-footed hop before a move, which a recovery push-off can also look like: read it as preparation of some kind, and compare it against your own earlier sessions rather than a published figure.');
+  $('#rally-note').textContent = notes.join(' ');
 }
 
 function renderCoaching() {

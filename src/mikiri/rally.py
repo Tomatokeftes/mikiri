@@ -92,6 +92,12 @@ class BoutSeries:
     fps: float = 30.0
     n_frames: int = 0
     note: str = ""
+    #: True when no bout could be found and the whole tracked range stands in
+    #: for one. The per-bout figures are then whole-clip figures wearing a
+    #: rally's name, which is exactly the mistake bouts exist to prevent, so
+    #: the summary marks them and anything downstream must refuse to compare
+    #: them against a per-rally band.
+    not_segmented: bool = False
 
     @property
     def rests_s(self) -> list[float]:
@@ -135,7 +141,15 @@ class BoutSeries:
         # they only mean anything when the clip still contains its rests. A clip
         # already cut to rallies would report the editor's choices as the
         # player's work rate.
-        if span_s > 0:
+        #
+        # When nothing could be segmented there is no claim to make either way:
+        # the single "bout" is the whole clip by construction, so its rest share
+        # is zero for a reason that says nothing about the player. Saying "this
+        # clip is trimmed to the play" there would be a statement about the
+        # footage that the footage does not support.
+        if self.not_segmented:
+            out["not_segmented"] = True
+        elif span_s > 0:
             rest_s = max(0.0, span_s - play_s)
             rest_share = rest_s / span_s
             out["play_span_s"] = round(span_s, 1)
@@ -222,13 +236,15 @@ def segment_bouts(
     kept = [(a, b) for a, b in merged if (b - a + 1) >= min_len]
 
     note = ""
+    not_segmented = False
     if not kept:
         kept = [(0, n - 1)]
+        not_segmented = True
         note = "no distinct bouts found; the whole tracked range is treated as one"
     elif len(kept) == 1 and (kept[0][1] - kept[0][0] + 1) >= 0.9 * n:
         note = "one continuous bout: the clip is a single stretch of play"
 
-    series = BoutSeries(fps=fps, n_frames=n, note=note)
+    series = BoutSeries(fps=fps, n_frames=n, note=note, not_segmented=not_segmented)
     for a, b in kept:
         seg = positions[a : b + 1]
         ok = np.isfinite(seg).all(axis=1)

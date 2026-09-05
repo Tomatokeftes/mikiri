@@ -106,6 +106,7 @@ class ProjectSession:
         self._track: CourtTrack | None = None
         self._racket: RacketSeries | None = None
         self._strokes: StrokeSeries | None = None
+        self._footwork: FootworkSeries | None = None
         self.last_export: dict | None = None
         #: Why camera recovery from the net posts failed, if it did. The court
         #: calibration stays usable either way, so this is a note, not an error.
@@ -316,6 +317,7 @@ class ProjectSession:
         self._track = None
         self._racket = None
         self._strokes = None
+        self._footwork = None
 
     def raw_keypoints(self) -> np.ndarray | None:
         """Raw tracked keypoints ``(n, 26, 3)`` or ``None`` before tracking."""
@@ -582,13 +584,18 @@ class ProjectSession:
         """Split steps and the moves they prepared, or ``None`` without a court.
 
         Needs court speed to know what a move is, so it appears with the
-        calibration.
+        calibration. Memoised like the other derived series: the running median
+        behind the split-step signal costs about 10 ms on a forty-second clip,
+        and ``state()`` is called on every interaction.
         """
+        if self._footwork is not None:
+            return self._footwork
         track = self.court_track()
         eff = self.effective_keypoints()
         if track is None or eff is None:
             return None
-        return analyse_split_steps(eff[0], track, self.project.conf_threshold)
+        self._footwork = analyse_split_steps(eff[0], track, self.project.conf_threshold)
+        return self._footwork
 
     def footwork_summary(self) -> dict | None:
         """JSON-friendly split-step figures, or ``None`` without a court."""
@@ -1233,6 +1240,8 @@ class ProjectSession:
             racket=self.racket(),
             strokes=self.strokes(),
             coaching=self.coaching(limit=0),
+            bouts=self.bouts_summary(),
+            split_steps=self.footwork_summary(),
         )
 
         def progress(frac: float, msg: str) -> None:
