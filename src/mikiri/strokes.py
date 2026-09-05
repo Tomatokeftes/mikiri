@@ -208,10 +208,44 @@ def swing_signal(
 
     w1, w2, w3 = SIGNAL_WEIGHTS
     sig = w1 * speed_of("wrist") + w2 * speed_of("elbow") + w3 * speed_of("shoulder")
+    win = _smoothing_window(fps)
     if np.isfinite(sig).sum() >= 5:
-        win = max(5, int(round(0.1 * fps)) | 1)
         sig = savgol(fill_gaps(sig), window=win, polyorder=2)
+
+    # A swing needs the hitting wrist *seen*. ``fill_gaps`` bridges a dropout
+    # with a straight line and ``np.gradient`` turns that line into velocity,
+    # so a wrist that vanishes and is re-acquired a few frames later somewhere
+    # else reads as a swing whose speed is the jump divided by the gap. On the
+    # far player of the Lin Dan clip, whose wrist is trusted on 70% of frames,
+    # sixteen of thirty detected "contacts" sat within three frames of such a
+    # gap and twelve sat exactly on one; the same figure for the near player,
+    # trusted on 96% of frames, was three of twenty-three. The gap itself and
+    # the frames the smoother smears it into are therefore no evidence, and go
+    # to ``nan`` so no peak can land there.
+    seen = kp[:, KP[f"{side}_wrist"], 2] >= conf_thr
+    if not seen.all():
+        margin = gap_margin_frames(fps)
+        hidden = np.zeros(n, dtype=bool)
+        for i in np.flatnonzero(~seen):
+            hidden[max(0, i - margin) : i + margin + 1] = True
+        sig = sig.copy()
+        sig[hidden] = np.nan
     return sig
+
+
+def _smoothing_window(fps: float) -> int:
+    """Odd Savitzky-Golay window of about a tenth of a second, at least five frames."""
+    return max(5, int(round(0.1 * fps)) | 1)
+
+
+def gap_margin_frames(fps: float) -> int:
+    """How far a wrist dropout contaminates the swing signal on either side.
+
+    Half the smoothing window, plus one frame for the central difference the
+    gradient takes. Derived rather than fixed so it stays right at any frame
+    rate: three frames at 30 fps, four at 60.
+    """
+    return _smoothing_window(fps) // 2 + 1
 
 
 def _peaks(sig: np.ndarray, fps: float, min_speed: float, min_prominence: float) -> list[int]:

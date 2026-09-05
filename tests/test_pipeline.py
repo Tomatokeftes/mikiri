@@ -205,3 +205,27 @@ def test_a_short_gap_inside_play_is_tracked_in_full():
     result, backend = _run(plan, segment=True)
     assert len(backend.seen) == len(plan), "a short gap must cost nothing in fidelity"
     assert not any(m.skipped for m in result.meta)
+
+
+def test_the_result_cache_keeps_the_clip_states(tmp_path):
+    """Guards a cached run giving a different answer from a fresh one.
+
+    The clip states travel in ``extra`` and bouts take their boundaries from
+    them. The cache used to drop ``extra`` entirely, so opening a video whose
+    run was already cached came back with speed-only bouts and quietly
+    re-merged the points that segmentation had cut apart.
+    """
+    from mikiri.pipeline import load_result, save_result
+
+    plan = _plan(("still", 20.0), ("play", 5.0), ("still", 20.0))
+    result, _ = _run(plan, segment=True)
+    runs = result.extra["segments"]["runs"]
+    assert runs, "the fixture must produce clip states to round-trip"
+
+    path = tmp_path / "run.npz"
+    save_result(path, result)
+    back = load_result(path)
+    assert back is not None
+    assert back.extra["segments"]["runs"] == runs
+    assert back.extra["segments"]["start"] == result.extra["segments"]["start"]
+    assert back.extra["skipped_frames"] == result.extra["skipped_frames"]

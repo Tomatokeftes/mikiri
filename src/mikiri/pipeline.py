@@ -247,6 +247,12 @@ def save_result(path: Path, result: TrackingResult) -> None:
         side=np.array(result.side or ""),
         others_keypoints=others_kp,
         others=np.array(others_json),
+        # The clip states ride in ``extra`` and bouts take their boundaries
+        # from them. Dropping them here meant a cached run came back with
+        # speed-only bouts, quietly re-merging the points that segmentation
+        # had cut apart -- a different answer from the same video depending
+        # on whether the cache was warm.
+        extra=np.array(json.dumps(result.extra, default=str)),
     )
     result.cache_file = str(path)
 
@@ -271,6 +277,11 @@ def load_result(path: Path) -> TrackingResult | None:
                         )
                     )
             side = str(data["side"]) if "side" in data else ""
+            extra: dict = {}
+            if "extra" in data:
+                loaded = json.loads(str(data["extra"]))
+                if isinstance(loaded, dict):
+                    extra = loaded
             return TrackingResult(
                 start=int(data["start"]),
                 end=int(data["end"]),
@@ -282,6 +293,7 @@ def load_result(path: Path) -> TrackingResult | None:
                 cache_file=str(path),
                 side=side or None,
                 others=others,
+                extra=extra,
             )
     except (OSError, ValueError, KeyError, IndexError):
         return None

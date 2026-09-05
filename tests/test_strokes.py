@@ -118,10 +118,46 @@ def test_signal_is_scale_invariant():
 
 
 def test_signal_survives_missing_keypoints():
+    """A short dropout costs exactly the gap plus its smear, and nothing else."""
+    from mikiri.strokes import gap_margin_frames
+
     kp = _add_swing(_pose(60), at=30)
     kp[20:24, KP["right_wrist"], 2] = 0.0  # a short dropout
     sig = swing_signal(kp, FPS)
-    assert np.isfinite(sig).sum() > 50
+    dropout = 4
+    assert np.isfinite(sig).sum() == 60 - dropout - 2 * gap_margin_frames(FPS)
+    # The swing itself, well clear of the gap, is still there to be found.
+    assert abs(int(np.nanargmax(sig)) - 30) <= 3
+
+
+def test_a_wrist_that_vanishes_and_reappears_elsewhere_is_not_a_swing():
+    """Guards the far-player false contacts on the Lin Dan clip.
+
+    The wrist is lost for a few frames and picked up again some distance
+    away -- an occlusion behind the other player, or a keypoint snapping to
+    the wrong limb. Bridging the gap with a line and differentiating it
+    manufactures a velocity equal to the jump over the gap, which on a small
+    far player clears the contact threshold comfortably. Sixteen of thirty
+    "contacts" on that clip were this.
+    """
+    from mikiri.strokes import gap_margin_frames
+
+    kp = _pose(60)  # a still figure: nothing here is a swing
+    kp[28:32, KP["right_wrist"], 2] = 0.0
+    kp[32:, KP["right_wrist"], 0] += 150.0  # re-acquired well to the right
+    sig = swing_signal(kp, FPS)
+    margin = gap_margin_frames(FPS)
+    assert np.isnan(sig[28 - margin : 32 + margin]).all()
+    assert detect_strokes(kp, FPS).strokes == []
+
+
+def test_a_dropout_away_from_the_swing_does_not_hide_it():
+    """The other direction: masking the gap must not eat a real contact elsewhere."""
+    kp = _add_swing(_pose(60), at=30)
+    kp[5:8, KP["right_wrist"], 2] = 0.0
+    strokes = detect_strokes(kp, FPS).strokes
+    assert len(strokes) == 1
+    assert abs(strokes[0].frame - 30) <= 3
 
 
 def test_signal_handles_empty_and_unusable_input():
