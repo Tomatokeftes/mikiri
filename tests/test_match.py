@@ -30,6 +30,8 @@ from mikiri.rally import Bout, BoutSeries
 from mikiri.strokes import Stroke, StrokeSeries
 from mikiri.tracking import SIDE_FAR, SIDE_NEAR
 
+SIDES_ORDER = (SIDE_NEAR, SIDE_FAR)
+
 FPS = 30.0
 NEAR, FAR = SIDE_NEAR, SIDE_FAR
 R, L = COURT_RIGHT, COURT_LEFT
@@ -438,3 +440,69 @@ def test_a_recovered_contact_is_asked_about_instead_of_the_pair_it_explains():
     assert got[0].frame == dropped.frame and got[0].side == players[1].side
     assert "not detected but inferred" in got[0].question
     assert got[0].detail == recovered.evidence
+
+
+# --- the review queue ---------------------------------------------------------------
+
+
+def test_a_double_contact_is_asked_with_the_three_things_it_can_mean():
+    """The queue offers exactly the answers that would settle the question."""
+    from mikiri.match import (
+        ACTION_ADD_CONTACT,
+        ACTION_REMOVE_CONTACT,
+        review_items,
+    )
+
+    bouts, players = scripted(CONSISTENT)
+    far = players[1].strokes
+    assert far is not None
+    dropped = far.strokes.pop(1)
+    chain = build_chain(bouts, players, FPS)
+    items = [i for i in review_items(chain, FPS) if i["kind"] == ISSUE_DOUBLE_CONTACT]
+    assert len(items) == 1
+    item = items[0]
+    actions = [(o["action"], o["side"], o["frame"]) for o in item["options"]]
+    near_frames = sorted(c.frame for c in chain.rallies[0].contacts if c.side == players[0].side)
+    later = next(f for f in near_frames if f > dropped.frame)
+    earlier = max(f for f in near_frames if f < later)
+    assert actions == [
+        (ACTION_ADD_CONTACT, players[1].side, None),  # at the frame the user is on
+        (ACTION_REMOVE_CONTACT, players[0].side, later),
+        (ACTION_REMOVE_CONTACT, players[0].side, earlier),
+    ]
+    assert item["frame"] == later and item["id"].startswith(ISSUE_DOUBLE_CONTACT)
+
+
+def test_an_open_outcome_is_asked_as_a_choice_of_winner_and_can_be_left():
+    from mikiri.match import ACTION_CONFIRM_WINNER, ISSUE_OPEN_OUTCOME, review_items
+
+    bouts, players = scripted(CONSISTENT)
+    chain = build_chain(bouts, players, FPS)
+    open_items = [i for i in review_items(chain, FPS) if i["kind"] == ISSUE_OPEN_OUTCOME]
+    assert len(open_items) == 1
+    item = open_items[0]
+    assert [o["action"] for o in item["options"]] == [ACTION_CONFIRM_WINNER] * 2
+    assert {o["side"] for o in item["options"]} == set(SIDES_ORDER)
+    # Leaving it takes it out of the queue but not out of the chain.
+    left = review_items(chain, FPS, dismissed=[(item["kind"], item["frame"], item["side"])])
+    assert all(i["id"] != item["id"] for i in left)
+    assert any(i.kind == ISSUE_OPEN_OUTCOME for i in chain.issues)
+
+
+def test_a_confirmed_recovered_contact_is_no_longer_a_question():
+    """Once the user says a recovered contact is real, it is confirmed and the queue moves on."""
+    from mikiri.match import CONFIRMED, ISSUE_RECOVERED_CONTACT, gather_contacts
+
+    bouts, players = scripted(CONSISTENT)
+    far = players[1].strokes
+    assert far is not None
+    dropped = far.strokes.pop(1)
+    recovered = _stroke(dropped.frame)
+    recovered.recovered = True
+    recovered.confirmed = True
+    far.strokes.insert(1, recovered)
+    chain = build_chain(bouts, players, FPS)
+    assert _issues(chain, ISSUE_RECOVERED_CONTACT) == []
+    assert _issues(chain, ISSUE_DOUBLE_CONTACT) == []
+    hows = {c.frame: c.how for c in gather_contacts(players)}
+    assert hows[dropped.frame] == CONFIRMED

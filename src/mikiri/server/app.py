@@ -110,6 +110,15 @@ class ScoreStartBody(BaseModel):
     far: int | None = None
 
 
+class ReviewBody(BaseModel):
+    """One answer from the review queue: what to record, at which absolute frame, for which side."""
+
+    action: str
+    frame: int
+    side: str | None = None
+    kind: str | None = None
+
+
 class EventUpdateBody(BaseModel):
     """Rename/move an event."""
 
@@ -690,6 +699,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 s.set_score_start(None)
             else:
                 s.set_score_start((body.near, body.far))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return s.state()
+
+    @app.put("/api/projects/{pid}/review")
+    def answer_review(pid: str, body: ReviewBody) -> dict:
+        s = session(pid)
+        try:
+            s.answer_review(body.action, body.frame, body.side, body.kind)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return s.state()

@@ -122,6 +122,35 @@ rather than one at every serve after.
   separated the two cases when one was tried, so they are left to the queue:
   a recovered contact is a proposed answer with a frame, not a fact.
 
+## The review queue
+
+The chain's questions are asked one at a time, in rally order, in the Review
+panel: the video seeks to the frame in question, the panel shows the two facts
+that disagree, and the answers it admits are numbered so a keypress settles it.
+`d` leaves a question -- it stays raised in the chain and drops out of the
+queue. Each kind of question admits only the answers that would settle it:
+
+* a **recovered contact** is a hit or it is not;
+* a **double contact** is one of the three things it can mean -- the other side
+  hit between the two, at the frame the user has scrubbed to; the later one is
+  not a contact; the earlier one is not a contact;
+* an **open outcome** is a choice of winner;
+* a **doubtful service or receiver court** is a choice of server.
+
+Answers are recorded on the project under `match_review`, keyed by absolute
+frame like the rally confirmations, so they survive the contacts and rallies
+being recomputed. Contact answers become `ContactEdit`s and are applied last,
+after detection and recovery, when the chain's contacts are built
+(`session.chain_strokes`): a removal drops the contact nearest its frame
+within a quarter of a second, a confirmation marks it, and an addition
+confirms one within reach or describes a new one at the frame. A confirmed
+contact carries `confirmed` provenance through the chain and is never asked
+about again. The subject's footwork figures never see any of this: they use
+the detected contacts alone, on purpose.
+
+The queue is a single endpoint, `PUT /api/projects/{id}/review`, taking the
+action, the absolute frame and the side, and returning the new state.
+
 ## Sides own events, players are an attribution
 
 Every contact records the **side** of the net first and the **player** as a

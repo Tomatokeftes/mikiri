@@ -183,6 +183,30 @@ class RallyConfirmation(BaseModel):
     value: Literal["near", "far", "left", "right"]
 
 
+class ContactEdit(BaseModel):
+    """A contact the user added, removed or confirmed, keyed by an absolute frame.
+
+    ``remove`` and ``confirm`` apply to that side's detected or recovered
+    contact nearest the frame, within a quarter of a second; ``add`` puts a
+    contact at the frame itself, or confirms one already within reach of it.
+    Frame-keyed for the same reason as :class:`RallyConfirmation`: contacts
+    are recomputed whenever the tracking, the trim or the court changes, and
+    an answer has to survive that.
+    """
+
+    frame: int
+    side: Literal["near", "far"]
+    action: Literal["add", "remove", "confirm"]
+
+
+class IssueDismissal(BaseModel):
+    """A question the user chose to leave. It stays raised and stays out of the queue."""
+
+    kind: str
+    frame: int
+    side: str | None = None
+
+
 class MatchReview(BaseModel):
     """What the user has told the rally chain; see :mod:`mikiri.match`.
 
@@ -193,6 +217,8 @@ class MatchReview(BaseModel):
 
     score_start: list[int] | None = None
     confirmations: list[RallyConfirmation] = Field(default_factory=list)
+    contact_edits: list[ContactEdit] = Field(default_factory=list)
+    dismissed: list[IssueDismissal] = Field(default_factory=list)
 
 
 class Project(BaseModel):

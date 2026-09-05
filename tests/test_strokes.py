@@ -659,3 +659,75 @@ def test_nothing_is_recovered_when_the_other_signal_is_flat():
     b = StrokeSeries(strokes=[], signal=np.full(n, 0.2), fps=FPS)
     _, b2 = recover_alternation(a, b, (a_kp, _pose(n)), FPS, ("right", "right"), 0.3)
     assert b2.strokes == []
+
+
+# --- what the user said about the contacts ----------------------------------------
+
+
+def _edit(frame: int, action: str):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(frame=frame, action=action)
+
+
+def test_a_removal_reaches_only_the_contact_nearest_its_frame():
+    """An answer lands within a few frames of the contact it is about, never further."""
+    from mikiri.strokes import CONTACT_EDIT_TOLERANCE_S, apply_contact_edits
+
+    kp = _add_swing(_add_swing(_pose(120), at=30), at=90)
+    series = detect_strokes(kp, FPS)
+    frames = [s.frame for s in series.strokes]
+    assert len(frames) == 2
+    tol = int(round(CONTACT_EDIT_TOLERANCE_S * FPS))
+
+    near = apply_contact_edits(
+        series, [_edit(frames[0] + tol - 1, "remove")], kp, "right", 0.3, FPS
+    )
+    assert [s.frame for s in near.strokes] == frames[1:]
+    far = apply_contact_edits(series, [_edit(frames[0] + tol + 5, "remove")], kp, "right", 0.3, FPS)
+    assert [s.frame for s in far.strokes] == frames, "an answer about nothing does nothing"
+    assert [s.frame for s in series.strokes] == frames, "the input is not modified"
+
+
+def test_confirming_marks_a_contact_without_touching_the_detected_series():
+    """The detected series is shared with the biomechanical figures, so it stays as found."""
+    from mikiri.strokes import apply_contact_edits
+
+    kp = _add_swing(_pose(60), at=30)
+    series = detect_strokes(kp, FPS)
+    f = series.strokes[0].frame
+    out = apply_contact_edits(series, [_edit(f, "confirm")], kp, "right", 0.3, FPS)
+    assert out.strokes[0].confirmed and not series.strokes[0].confirmed
+
+
+def test_adding_describes_a_confirmed_contact_at_the_frame_or_confirms_one_within_reach():
+    """Guards a queue answer inventing a duplicate next to a contact that was already there."""
+    from mikiri.strokes import apply_contact_edits
+
+    kp = _add_swing(_pose(120), at=30)
+    series = detect_strokes(kp, FPS)
+    assert len(series.strokes) == 1
+    # Away from anything: a new contact, described from the pose at that frame.
+    out = apply_contact_edits(series, [_edit(90, "add")], kp, "right", 0.3, FPS)
+    assert [s.frame for s in out.strokes] == [series.strokes[0].frame, 90]
+    added = out.strokes[1]
+    assert added.confirmed and added.evidence == "added by the user"
+    assert added.height_class in ("overhead", "sidearm", "underarm")
+    # Next to the detected one: that one is confirmed, nothing is duplicated.
+    out = apply_contact_edits(
+        series, [_edit(series.strokes[0].frame + 2, "add")], kp, "right", 0.3, FPS
+    )
+    assert len(out.strokes) == 1 and out.strokes[0].confirmed
+
+
+def test_edit_frames_are_absolute_and_the_series_is_relative():
+    """Answers are keyed like events, in video frames; the pose array may start later."""
+    from mikiri.strokes import apply_contact_edits
+
+    kp = _add_swing(_pose(60), at=30)
+    series = detect_strokes(kp, FPS)
+    f = series.strokes[0].frame
+    out = apply_contact_edits(
+        series, [_edit(f + 1000, "remove")], kp, "right", 0.3, FPS, pose_start=1000
+    )
+    assert out.strokes == []

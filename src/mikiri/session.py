@@ -41,7 +41,21 @@ from mikiri.export import ExportInputs, ExportOptions, export_pack
 from mikiri.footwork import FootworkSeries, analyse_split_steps
 from mikiri.jobs import Job
 from mikiri.keypoints import KEYPOINT_NAMES, KP, SKELETON_EDGES, body_height_px, swap_left_right
-from mikiri.match import CONFIRMABLE, Confirmation, MatchChain, SidePlayer, build_chain
+from mikiri.match import (
+    ACTION_ADD_CONTACT,
+    ACTION_CONFIRM_CONTACT,
+    ACTION_CONFIRM_SERVER,
+    ACTION_CONFIRM_WINNER,
+    ACTION_DISMISS,
+    ACTION_REMOVE_CONTACT,
+    CONFIRMABLE,
+    SIDES,
+    Confirmation,
+    MatchChain,
+    SidePlayer,
+    build_chain,
+    review_items,
+)
 from mikiri.movements import (
     PROFILES,
     MetricContext,
@@ -60,8 +74,10 @@ from mikiri.pipeline import (
 )
 from mikiri.project import (
     Calibration,
+    ContactEdit,
     Correction,
     EventMarker,
+    IssueDismissal,
     Project,
     RallyConfirmation,
     SmoothingSettings,
@@ -73,7 +89,12 @@ from mikiri.rally import BoutSeries, segment_bouts
 from mikiri.segments import STATE_PLAY
 from mikiri.settings import Settings
 from mikiri.smoothing import apply_corrections, interpolate_joint, smooth_keypoints
-from mikiri.strokes import StrokeSeries, detect_strokes, recover_alternation
+from mikiri.strokes import (
+    StrokeSeries,
+    apply_contact_edits,
+    detect_strokes,
+    recover_alternation,
+)
 from mikiri.strokes import summarise as stroke_summary
 from mikiri.tracking import SIDE_FAR
 from mikiri.video import FrameCache, VideoInfo, VideoReader, fit_size, probe_video
@@ -853,6 +874,39 @@ class ProjectSession:
                     self.project.conf_threshold,
                     (self.court_track(), track),
                 )
+        # The user's word comes last and outranks both detection and recovery.
+        review = self.project.match_review
+        if review.contact_edits:
+            fps = self.info.fps
+            start = self.pose_start
+
+            def edits_for(side: str | None) -> list:
+                return [e for e in review.contact_edits if e.side == side]
+
+            if subject is not None and eff is not None and self.subject_side is not None:
+                subject = apply_contact_edits(
+                    subject,
+                    edits_for(self.subject_side),
+                    eff[0],
+                    self.project.racket_hand,
+                    self.project.conf_threshold,
+                    fps,
+                    start,
+                    track=self.court_track(),
+                )
+            for k, (o, track) in enumerate(zip(self.others(), self.other_tracks())):
+                if others[k] is None or o.side is None:
+                    continue
+                others[k] = apply_contact_edits(
+                    others[k],
+                    edits_for(o.side),
+                    o.keypoints,
+                    "right",
+                    self.project.conf_threshold,
+                    fps,
+                    start,
+                    track=track,
+                )
         self._chain_strokes = (subject, others)
         return self._chain_strokes
 
@@ -907,6 +961,84 @@ class ProjectSession:
         """JSON-friendly rally chain, or ``None`` when there is no chain to run."""
         m = self.match()
         return None if m is None else m.summary()
+
+    def edit_contact(self, frame: int, side: str, action: str) -> None:
+        """Record that the user added, removed or confirmed a contact at ``frame``.
+
+        ``frame`` is absolute, like an event's. The edit is applied the next
+        time the chain's contacts are built, after detection and recovery.
+        """
+        if side not in SIDES:
+            raise ValueError(f"no such side {side!r}")
+        if action not in ("add", "remove", "confirm"):
+            raise ValueError(f"cannot {action!r} a contact")
+        with self.lock:
+            self.project.match_review.contact_edits.append(
+                ContactEdit(frame=int(frame), side=side, action=action)  # type: ignore[arg-type]
+            )
+            self._chain_strokes = None
+            self._match = None
+
+    def dismiss_issue(self, kind: str, frame: int, side: str | None) -> None:
+        """Leave a question: it stays raised in the chain and leaves the queue."""
+        with self.lock:
+            self.project.match_review.dismissed.append(
+                IssueDismissal(kind=str(kind), frame=int(frame), side=side)
+            )
+
+    def answer_review(
+        self, action: str, frame: int, side: str | None, kind: str | None = None
+    ) -> None:
+        """Record one answer from the queue as the fact it settles.
+
+        Raises ``ValueError`` for an action the queue does not offer, or an
+        answer missing the side it needs.
+        """
+        contact_actions = {
+            ACTION_CONFIRM_CONTACT: "confirm",
+            ACTION_REMOVE_CONTACT: "remove",
+            ACTION_ADD_CONTACT: "add",
+        }
+        if action in contact_actions:
+            if side is None:
+                raise ValueError("a contact answer needs a side")
+            self.edit_contact(frame, side, contact_actions[action])
+        elif action == ACTION_CONFIRM_WINNER:
+            self.confirm_rally(frame, "winner", side)
+        elif action == ACTION_CONFIRM_SERVER:
+            self.confirm_rally(frame, "server", side)
+        elif action == ACTION_DISMISS:
+            if not kind:
+                raise ValueError("leaving a question needs its kind")
+            self.dismiss_issue(kind, frame, side)
+        else:
+            raise ValueError(f"the queue has no answer {action!r}")
+
+    def review_queue(self) -> dict:
+        """The open questions, one at a time, with the answers each admits.
+
+        Frames are absolute here, like everywhere the UI touches, and an
+        option whose frame is ``None`` means "the frame the user is on".
+        """
+        review = self.project.match_review
+        answered = (
+            len(review.contact_edits)
+            + len(review.confirmations)
+            + len(review.dismissed)
+            + (1 if review.score_start is not None else 0)
+        )
+        m = self.match()
+        if m is None:
+            return {"open": [], "n_open": 0, "answered": answered}
+        start = self.pose_start
+        dismissed = [(d.kind, int(d.frame) - start, d.side) for d in review.dismissed]
+        items = review_items(m, self.info.fps, dismissed)
+        for item in items:
+            item["frame"] = int(item["frame"]) + start
+            for opt in item["options"]:
+                if opt.get("frame") is not None:
+                    opt["frame"] = int(opt["frame"]) + start
+        return {"open": items, "n_open": len(items), "answered": answered}
 
     def confirm_rally(self, frame: int, field: str, value: str | None) -> None:
         """Record what the user settled about the rally containing ``frame``.
@@ -1492,6 +1624,7 @@ class ProjectSession:
             "strokes": (stroke_summary(sv) if (sv := self.strokes()) is not None else None),
             "bouts": self.bouts_summary(),
             "match": self.match_summary(),
+            "review": self.review_queue(),
             "split_steps": self.footwork_summary(),
             "coaching": self.coaching(),
             "coach_level": p.coach_level,

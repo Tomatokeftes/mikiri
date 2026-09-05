@@ -513,3 +513,32 @@ def test_a_clip_with_its_intervals_cut_out_is_detected_and_its_rests_disowned():
     assert result.rests_edited
     assert result.work_rest() is None
     assert "edited out" in result.note
+
+
+def test_answering_a_recovered_contact_confirms_it_and_shortens_the_queue(match_session):
+    """The queue end to end on real footage: one answer, one fewer question, one confirmed fact.
+
+    The module-scoped session is restored afterwards, because the other tests
+    on this footage assume nobody has answered anything.
+    """
+    s = match_session
+    review = s.state()["review"]
+    recovered = [i for i in review["open"] if i["kind"] == "recovered_contact"]
+    assert recovered, "the clip has recovered contacts to ask about"
+    item = recovered[0]
+    assert item["frame"] == item["options"][0]["frame"]
+    n_before = review["n_open"]
+    try:
+        s.answer_review(item["options"][0]["action"], item["options"][0]["frame"], item["side"])
+        after = s.state()
+        assert after["review"]["n_open"] == n_before - 1
+        assert all(i["id"] != item["id"] for i in after["review"]["open"])
+        m = s.match()
+        confirmed = [
+            c for r in m.rallies for c in r.contacts if c.frame == item["frame"] - s.pose_start
+        ]
+        assert confirmed and confirmed[0].how == "confirmed"
+    finally:
+        s.project.match_review.contact_edits.clear()
+        s._chain_strokes = None
+        s._match = None

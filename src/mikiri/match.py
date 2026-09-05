@@ -112,6 +112,23 @@ ISSUE_OPEN_OUTCOME = "open_outcome"
 #: the queue can confirm or reject it: it rests on less than a detection.
 ISSUE_RECOVERED_CONTACT = "recovered_contact"
 
+#: What an answer from the review queue can do. Each maps to one thing the
+#: session knows how to record, keyed by frame so it survives re-segmentation.
+ACTION_CONFIRM_CONTACT = "confirm_contact"
+ACTION_REMOVE_CONTACT = "remove_contact"
+ACTION_ADD_CONTACT = "add_contact"
+ACTION_CONFIRM_WINNER = "confirm_winner"
+ACTION_CONFIRM_SERVER = "confirm_server"
+ACTION_DISMISS = "dismiss"
+ACTIONS = (
+    ACTION_CONFIRM_CONTACT,
+    ACTION_REMOVE_CONTACT,
+    ACTION_ADD_CONTACT,
+    ACTION_CONFIRM_WINNER,
+    ACTION_CONFIRM_SERVER,
+    ACTION_DISMISS,
+)
+
 
 def other_side(side: str) -> str:
     """The side of the net facing ``side``."""
@@ -459,6 +476,7 @@ def gather_contacts(players: Sequence[SidePlayer]) -> list[Contact]:
                     player=p.player,
                     stroke=s,
                     position=_position_at(p.track, int(s.frame)),
+                    how=CONFIRMED if getattr(s, "confirmed", False) else AUTO,
                 )
             )
     out.sort(key=lambda c: (c.frame, c.side))
@@ -646,6 +664,98 @@ def _check_alternation(r: Rally, fps: float) -> None:
         )
 
 
+def _option(action: str, side: str | None, frame: int | None, label: str) -> dict:
+    """One answer the queue can offer. ``frame`` of ``None`` means the frame the user is on."""
+    return {"action": action, "side": side, "frame": frame, "label": label}
+
+
+def _options_for(issue: Issue, rally: Rally) -> list[dict]:
+    """The answers a question admits, each one thing the session can record.
+
+    Every kind gets the answers that would settle it and nothing that would
+    not: an open outcome is a choice of winner, a doubtful service court is a
+    choice of server, and a double contact is one of the three things it can
+    mean. The queue adds "leave it" to all of them.
+    """
+    side = issue.side
+    if issue.kind == ISSUE_RECOVERED_CONTACT and side:
+        return [
+            _option(ACTION_CONFIRM_CONTACT, side, issue.frame, f"Yes, the {side} side hit here"),
+            _option(ACTION_REMOVE_CONTACT, side, issue.frame, "No, there is no contact here"),
+        ]
+    if issue.kind == ISSUE_DOUBLE_CONTACT and side:
+        other = other_side(side)
+        earlier = max(
+            (c.frame for c in rally.contacts if c.side == side and c.frame < issue.frame),
+            default=None,
+        )
+        out = [
+            _option(
+                ACTION_ADD_CONTACT,
+                other,
+                None,
+                f"The {other} side hit between them, at the frame I am on",
+            ),
+            _option(
+                ACTION_REMOVE_CONTACT, side, issue.frame, f"The later {side} one is not a contact"
+            ),
+        ]
+        if earlier is not None:
+            out.append(
+                _option(
+                    ACTION_REMOVE_CONTACT, side, earlier, f"The earlier {side} one is not a contact"
+                )
+            )
+        return out
+    if issue.kind == ISSUE_OPEN_OUTCOME:
+        return [_option(ACTION_CONFIRM_WINNER, s, issue.frame, f"The {s} side won") for s in SIDES]
+    if issue.kind in (ISSUE_SERVICE_COURT, ISSUE_RECEIVER_COURT):
+        return [
+            _option(ACTION_CONFIRM_SERVER, s, issue.frame, f"The {s} side served") for s in SIDES
+        ]
+    return []
+
+
+def review_items(
+    chain: MatchChain, fps: float, dismissed: Iterable[tuple[str, int, str | None]] = ()
+) -> list[dict]:
+    """The chain's open questions the way the queue asks them.
+
+    One record per question, in rally order, each carrying the frame to
+    scrub to, the two facts that disagree, and the answers it admits. A
+    question the user chose to leave is left out here and stays raised in
+    the chain, so a panel that lists everything still shows it.
+
+    Args:
+        chain: The rally chain.
+        fps: Frames per second, for the wording.
+        dismissed: ``(kind, frame, side)`` triples the user has left, with the
+            frame relative to the pose array like the issues' own.
+
+    Returns:
+        A list of JSON-friendly dicts.
+    """
+    skip = {(k, int(f), s) for k, f, s in dismissed}
+    out: list[dict] = []
+    for r in chain.rallies:
+        for issue in r.issues:
+            if (issue.kind, int(issue.frame), issue.side) in skip:
+                continue
+            out.append(
+                {
+                    "id": f"{issue.kind}:{int(issue.frame)}:{issue.side or ''}",
+                    "kind": issue.kind,
+                    "rally": int(r.index),
+                    "frame": int(issue.frame),
+                    "side": issue.side,
+                    "question": issue.question,
+                    "detail": issue.detail,
+                    "options": _options_for(issue, r),
+                }
+            )
+    return out
+
+
 def _flag_recovered(r: Rally, fps: float) -> None:
     """A recovered contact is a question, not a detection.
 
@@ -655,7 +765,7 @@ def _flag_recovered(r: Rally, fps: float) -> None:
     keeps it at ``auto`` and asks.
     """
     for c in r.contacts:
-        if not getattr(c.stroke, "recovered", False):
+        if not getattr(c.stroke, "recovered", False) or getattr(c.stroke, "confirmed", False):
             continue
         other = other_side(c.side)
         r.issues.append(

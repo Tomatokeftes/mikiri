@@ -641,7 +641,7 @@ function renderAll() {
   if (!S.state) return;
   renderInfo(); renderTrim(); renderEvents(); renderOptions();
   renderVideo(); renderTimeline(); renderPlots(); renderCourt();
-  renderStrokes(); renderRallies(); renderMatch(); renderCoaching(); renderCameraView();
+  renderStrokes(); renderRallies(); renderMatch(); renderReview(); renderCoaching(); renderCameraView();
 }
 
 async function refreshTabs() {
@@ -1067,9 +1067,47 @@ function renderMatch() {
   const notes = [];
   notes.push(m.headline ? m.headline.charAt(0).toUpperCase() + m.headline.slice(1) + '.' : `No result is stated: ${m.headline_withheld}.`);
   notes.push('Who won a rally is read off who serves next; the serve is the first detected contact of a bout. Confirmed means you answered it, inferred means the rules of the game derived it from confirmed facts, auto means unreviewed detection.');
-  if (m.n_issues) notes.push(`${m.n_issues} question${m.n_issues === 1 ? '' : 's'} the chain could not settle, listed below; the review queue that will ask them is not built yet.`);
+  if (m.n_issues) notes.push(`${m.n_issues} question${m.n_issues === 1 ? '' : 's'} the chain could not settle, listed below and asked one at a time in the Review panel.`);
   if (m.note) notes.push(m.note.charAt(0).toUpperCase() + m.note.slice(1) + '.');
   $('#match-note').textContent = notes.join(' ');
+}
+
+// The review queue: one question at a time, the video already at its frame,
+// answered by a number key. Only the first open question is shown; answering
+// or leaving it brings the next. The panel seeks once per question, so the
+// user can scrub away to find a hit for "at the frame I am on".
+function renderReview() {
+  const panel = $('#review-panel');
+  const q = S.state && S.state.review;
+  const has = !!(q && q.n_open);
+  panel.classList.toggle('hidden', !has);
+  if (!has) { S.review = null; return; }
+  const item = q.open[0];
+  S.review = item;
+  if (S.reviewSeekId !== item.id) { S.reviewSeekId = item.id; seek(item.frame); }
+  $('#review-progress').textContent = `${q.n_open} open, ${q.answered} answered`;
+  $('#review-question').textContent = item.question;
+  $('#review-detail').textContent = item.detail;
+  $('#review-options').innerHTML = item.options.map((o, i) =>
+    `<button data-i="${i}"><b>${i + 1}</b> ${o.label}</button>`).join(' ')
+    + ' <button data-i="d"><b>d</b> leave it</button>';
+  for (const b of $('#review-options').querySelectorAll('button')) {
+    b.addEventListener('click', () => answerReview(b.dataset.i === 'd' ? 'd' : Number(b.dataset.i)));
+  }
+}
+
+async function answerReview(choice) {
+  const item = S.review;
+  if (!item) return;
+  let body;
+  if (choice === 'd') body = { action: 'dismiss', frame: item.frame, side: item.side, kind: item.kind };
+  else {
+    const o = item.options[choice];
+    if (!o) return;
+    body = { action: o.action, frame: o.frame == null ? S.frame : o.frame, side: o.side, kind: item.kind };
+  }
+  try { applyState(await api('PUT', `/api/projects/${S.pid}/review`, body)); setStatus('Answered'); }
+  catch (e) { setStatus(e.message, true); }
 }
 
 function renderCoaching() {
@@ -1362,6 +1400,12 @@ function bindUI() {
     if (e.key === 'Escape' && (S.courtPick || S.calibPick)) {
       S.courtPick = null; S.calibPick = null;
       setStatus('Calibration cancelled'); renderVideo(); renderCourt(); e.preventDefault(); return;
+    }
+    // The review queue answers by number, and leaves a question with d. Only
+    // while a question is showing, so the keys mean nothing otherwise.
+    if (S.review && !$('#review-panel').classList.contains('hidden') && !e.ctrlKey && !e.metaKey) {
+      if (/^[1-9]$/.test(e.key)) { answerReview(Number(e.key) - 1); e.preventDefault(); return; }
+      if (e.key === 'd' || e.key === 'D') { answerReview('d'); e.preventDefault(); return; }
     }
     const mult = e.shiftKey ? 10 : 1;
     if (e.key === 'ArrowLeft') { step(-mult); e.preventDefault(); }

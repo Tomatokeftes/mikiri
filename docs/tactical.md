@@ -372,10 +372,20 @@ The amended rule opens doors; it does not open all of them.
    rule itself, marked as recovered and raised as their own questions
    (`recovered_contact`); see `docs/match.md`. Still open here: the other
    player's racket hand is assumed right -- wrong for the far player on the
-   benchmark, and correcting it did not help -- and no contact can yet be
-   added or removed by hand, which is the queue's job.
+   benchmark, and correcting it did not help. Contacts can now be added,
+   removed and confirmed by hand through the queue.
 4. **The review queue**, which is where this becomes a product rather than a
-   pipeline.
+   pipeline. *Done, first version:* the chain's questions are asked one at a
+   time in a Review panel, the video seeks to the frame, and a number key
+   answers -- a recovered contact is confirmed or removed, a double contact
+   is settled by adding the missing hit at the frame the user is on or
+   removing one of the pair, an open outcome by naming the winner, a doubtful
+   court by naming the server; `d` leaves a question. Answers are stored on
+   the project keyed by frame, contact answers are applied after detection
+   and recovery, and a confirmed contact carries `confirmed` provenance and
+   is never asked about again. See `docs/match.md`. Still open: undoing an
+   answer from the panel, and every answer feeding the per-player classifier
+   of step 5, which is the reason the queue exists.
 5. **Shot naming** through the three sources, with per-pair confusion reporting.
 6. **Analytics and trends**, which are straightforward once the events are
    trustworthy, and are where the visible value sits.

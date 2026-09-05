@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -80,6 +80,12 @@ MIN_PEAK_PROMINENCE_BH = 0.7
 #: pause, where nothing is a swing, sits at 0.71 at the 90th percentile, so
 #: this is the lowest floor that clears it.
 RECOVERY_MIN_SPEED_BH = 0.75
+#: How far, in seconds, a user's answer may sit from the contact it is about.
+#: An answer is given at the frame the video was scrubbed to, which lands
+#: within a few frames of the contact the question pointed at. A quarter of a
+#: second is under the refractory gap between one player's contacts, so an
+#: answer can only ever reach one of them.
+CONTACT_EDIT_TOLERANCE_S = 0.25
 #: Half-width of the window described around a contact, seconds.
 STROKE_WINDOW_S = 0.5
 
@@ -112,6 +118,9 @@ class Stroke:
     #: player's contacts either side of it; see :func:`recover_alternation`.
     #: Weaker evidence than a detection, and the chain says so.
     recovered: bool = False
+    #: True when the user added or confirmed this contact. The chain reports
+    #: it as ``confirmed`` and asks nothing more about it.
+    confirmed: bool = False
 
     def descriptor(self) -> str:
         """The always-defensible label, e.g. ``"overhead forehand from rearcourt"``."""
@@ -134,6 +143,7 @@ class Stroke:
             "descriptor": self.descriptor(),
             "label": self.label(),
             "recovered": bool(self.recovered),
+            "confirmed": bool(self.confirmed),
             "racket_speed_bh": round(float(self.racket_speed_bh), 2),
             "racket_speed_mps": None
             if self.racket_speed_mps is None
@@ -664,6 +674,84 @@ def recover_alternation(
         strokes = sorted(list(series[k].strokes) + added[k], key=lambda s: s.frame)
         out.append(StrokeSeries(strokes=strokes, signal=series[k].signal, fps=series[k].fps))
     return out[0], out[1]
+
+
+def apply_contact_edits(
+    series: StrokeSeries,
+    edits: Sequence,
+    keypoints: np.ndarray,
+    racket_hand: str,
+    conf_thr: float,
+    fps: float,
+    pose_start: int = 0,
+    track=None,
+    tolerance_s: float = CONTACT_EDIT_TOLERANCE_S,
+) -> StrokeSeries:
+    """Apply what the user said about one player's contacts, in the order they said it.
+
+    The user's word outranks detection and recovery alike, so this runs last.
+    Each edit carries an absolute frame, a side the caller has already
+    filtered on, and an action: ``remove`` drops the contact nearest the frame
+    within :data:`CONTACT_EDIT_TOLERANCE_S`; ``confirm`` marks it confirmed;
+    ``add`` confirms one already within reach or, failing that, describes a
+    new contact at the frame itself. An edit that reaches nothing is ignored,
+    so an answer given about a contact that a later re-run no longer finds
+    does no harm.
+
+    Args:
+        series: The player's contacts, detected and recovered.
+        edits: Objects with ``frame`` and ``action`` attributes.
+        keypoints: The player's effective keypoints, for describing an added
+            contact.
+        racket_hand: ``"right"`` or ``"left"``.
+        conf_thr: Minimum keypoint confidence.
+        fps: Frames per second.
+        pose_start: Absolute frame index of ``keypoints[0]``.
+        track: Optional court track, for the zone of an added contact.
+        tolerance_s: How far an answer may sit from the contact it is about.
+
+    Returns:
+        A new series. The input and its strokes are not modified, because the
+        detected series is shared with the biomechanical figures.
+    """
+    strokes = [replace(s) for s in series.strokes]
+    tol = max(1, int(round(tolerance_s * fps)))
+    n = int(np.asarray(keypoints).shape[0])
+
+    def nearest(rel: int) -> int | None:
+        best: int | None = None
+        for i, s in enumerate(strokes):
+            d = abs(s.frame - rel)
+            if d <= tol and (best is None or d < abs(strokes[best].frame - rel)):
+                best = i
+        return best
+
+    for e in edits:
+        rel = int(e.frame) - int(pose_start)
+        i = nearest(rel)
+        if e.action == "remove":
+            if i is not None:
+                strokes.pop(i)
+        elif e.action == "confirm":
+            if i is not None:
+                strokes[i].confirmed = True
+        elif e.action == "add":
+            if i is not None:
+                strokes[i].confirmed = True
+            elif 0 <= rel < n:
+                added = describe_contact(
+                    keypoints,
+                    rel,
+                    racket_hand,
+                    conf_thr,
+                    track=track,
+                    confidence=1.0,
+                    evidence="added by the user",
+                )
+                added.confirmed = True
+                strokes.append(added)
+    strokes.sort(key=lambda s: s.frame)
+    return StrokeSeries(strokes=strokes, signal=series.signal, fps=series.fps)
 
 
 def _contact_height(

@@ -196,10 +196,12 @@ Known gaps:
   that side -- and no signal-level rule separated them when tried, so they
   stay questions. Their movement and contacts extend the rallies the chain runs
   over (`session.rallies()`); the footwork figures and the bouts panel are
-  still the subject's alone, on purpose. No contact can yet
-  be added, moved or removed by hand, on either side, and the questions the
-  chain raises are listed but not yet asked one at a time: that is the
-  review queue, step 4.
+  still the subject's alone, on purpose. The questions the chain raises are
+  asked one at a time in the Review panel and answered by keypress; contact
+  answers are `ContactEdit`s on the project, keyed by frame, applied after
+  detection and recovery (`docs/match.md`). Not yet: undoing an answer from
+  the panel, moving a contact rather than removing and adding, and the
+  answers feeding the per-player classifier, which is what they are for.
 * Bouts take a veto from `segments.py`, so a fast walk-back no longer merges
   two points, but only the *veto* direction is wired: the clip states can end
   a bout and can never start one. A rally played slowly enough for the motion
