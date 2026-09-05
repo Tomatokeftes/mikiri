@@ -517,10 +517,12 @@ def segment_clip(
 
     Returns:
         A :class:`ClipSegments` covering the whole scanned range. When the clip
-        cannot be split, the whole range comes back as one
-        :data:`STATE_PLAY` segment with ``not_segmented`` set and a note
-        saying why: claiming there is no play at all would be a stronger
-        statement than the signal supports.
+        cannot be split -- no contrast to threshold on, or nothing long enough
+        to be a rally -- every court frame comes back as :data:`STATE_PLAY`
+        with ``not_segmented`` set and a note saying which of the two happened.
+        Claiming there is no play at all would be a stronger statement than the
+        signal supports, and it would hand the caller an empty clip
+        indistinguishable from one that really is empty.
     """
     fps = float(scan.fps) or 30.0
     n = scan.n_frames
@@ -585,7 +587,22 @@ def segment_clip(
         for a, b in kept:
             play[a : b + 1] = True
         if not kept:
-            notes.append("no stretch of play was long enough to keep; nothing to analyse")
+            # Something moved, but no stretch of it was long enough to be a
+            # rally. Returning nothing to analyse would be the one outcome this
+            # module must never produce on its own initiative: it hands the
+            # caller an empty clip and no way to tell that from a clip with
+            # genuinely no play in it. A short clip of a single movement is
+            # also exactly what the biomechanical module is given, so treating
+            # "too short to be a rally" as "nothing here" would delete its
+            # input. Fall back to keeping the court frames and say why.
+            not_segmented = True
+            notes.append(
+                "movement was found but no stretch of it was long enough to be a rally, "
+                "so all of it is kept; per-minute and per-rally figures are not comparable"
+            )
+            for (a, b), is_court in zip(shots, on_court):
+                if is_court:
+                    play[a : b + 1] = True
 
     # Frames belonging to another scene outrank the play/idle split: they are
     # not a quiet moment on this court, they are a different picture, and

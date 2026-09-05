@@ -130,6 +130,23 @@ def test_a_flurry_shorter_than_a_rally_is_not_counted_as_play():
     assert plays[0].seconds == 6.0
 
 
+def test_a_clip_whose_only_movement_is_too_short_keeps_it_rather_than_nothing():
+    """Guards the module returning an empty clip on its own initiative.
+
+    Found on the synthetic demo clip, which is four seconds of one jump: the
+    movement was real but shorter than a rally, so every frame was dropped and
+    the caller was handed nothing to analyse with no way to tell that from a
+    clip with genuinely no play in it. A short clip of a single movement is
+    also exactly what the biomechanical module is given.
+    """
+    result = segment_clip(
+        _scan([(2.0, QUIET), (MIN_PLAY_S / 2, BUSY), (2.0, QUIET)]),
+    )
+    assert result.not_segmented
+    assert "long enough" in result.note
+    assert result.analysable_mask().all()
+
+
 def test_a_clip_already_trimmed_to_play_is_not_segmented_and_says_so():
     """Guards inventing a boundary in a clip that has none.
 
