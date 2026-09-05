@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from mikiri.pipeline import IDLE_TRACK_HZ, RunRequest, run_tracking
+from mikiri.pipeline import IDLE_TRACK_HZ, MIN_SKIP_RUN_S, RunRequest, run_tracking
 from mikiri.pose.base import Detection, PoseFrame
 
 FPS = 30.0
@@ -112,7 +112,7 @@ def _run(plan: list[str], segment: bool):
 
 def test_without_segmentation_every_frame_reaches_the_model():
     """The behaviour before segmentation existed, kept reachable as an escape hatch."""
-    plan = _plan(("still", 5.0), ("play", 5.0))
+    plan = _plan(("still", 20.0), ("play", 5.0))
     result, backend = _run(plan, segment=False)
     assert len(backend.seen) == len(plan)
     assert result.n_frames == len(plan)
@@ -126,7 +126,7 @@ def test_segmentation_samples_the_rests_instead_of_tracking_them_in_full():
     tracker coming back on the wrong person, which this app has been bitten by
     before, so the rests are sampled rather than dropped.
     """
-    plan = _plan(("still", 5.0), ("play", 5.0))
+    plan = _plan(("still", 20.0), ("play", 5.0))
     result, backend = _run(plan, segment=True)
 
     assert len(backend.seen) < len(plan)
@@ -136,14 +136,14 @@ def test_segmentation_samples_the_rests_instead_of_tracking_them_in_full():
 
     # The rests were sampled, not abandoned: the gaps between tracked frames in
     # the still half sit at the idle stride rather than spanning the whole rest.
-    still_seen = [f for f in backend.seen if f < 150]
+    still_seen = [f for f in backend.seen if f < 600]
     assert len(still_seen) >= 2
     assert max(np.diff(still_seen)) <= round(FPS / IDLE_TRACK_HZ) + 1
 
 
 def test_the_first_frame_is_always_tracked_whatever_the_segmentation_says():
     """Guards the tracker's identity, which comes from the frame the user clicked."""
-    plan = _plan(("still", 5.0), ("play", 5.0))
+    plan = _plan(("still", 20.0), ("play", 5.0))
     _, backend = _run(plan, segment=True)
     assert backend.seen[0] == 0
     assert not _run(plan, segment=True)[0].meta[0].skipped
@@ -168,7 +168,7 @@ def test_a_skipped_frame_is_marked_skipped_and_not_lost():
     ``lost`` means the tracker looked and failed; ``skipped`` means it never
     looked, and the two carry completely different claims.
     """
-    plan = _plan(("still", 5.0), ("play", 5.0))
+    plan = _plan(("still", 20.0), ("play", 5.0))
     result, _ = _run(plan, segment=True)
     skipped = [m for m in result.meta if m.skipped]
     assert skipped
@@ -178,7 +178,7 @@ def test_a_skipped_frame_is_marked_skipped_and_not_lost():
 
 def test_the_run_reports_what_it_skipped_and_why():
     """Guards a silent saving: a run that quietly ignored half the clip must say so."""
-    plan = _plan(("still", 5.0), ("play", 5.0))
+    plan = _plan(("still", 20.0), ("play", 5.0))
     result, _ = _run(plan, segment=True)
     assert result.extra["skipped_frames"] > 0
     assert result.extra["segments"]["play_seconds"] > 0
@@ -189,3 +189,19 @@ def test_segmentation_changes_the_cache_key():
     a = RunRequest(start=0, end=100, segment=True)
     b = RunRequest(start=0, end=100, segment=False)
     assert a.key("backend") != b.key("backend")
+
+
+def test_a_short_gap_inside_play_is_tracked_in_full():
+    """Guards the rule that segmentation may save time and may not move a number.
+
+    A six-second pause inside the forty-second Lin Dan clip was being sampled
+    at the idle rate, which thinned the court track enough that rally.py split
+    one bout into two. The new answer may even have been the better one, but it
+    was reached by degrading data, and that is the one way this must never
+    change a result. Gaps short enough to sit inside the region a metric reads
+    are therefore tracked at full rate.
+    """
+    plan = _plan(("play", 5.0), ("still", MIN_SKIP_RUN_S - 2.0), ("play", 5.0))
+    result, backend = _run(plan, segment=True)
+    assert len(backend.seen) == len(plan), "a short gap must cost nothing in fidelity"
+    assert not any(m.skipped for m in result.meta)

@@ -29,9 +29,15 @@ ruff format src tests && ruff check src tests && pytest
 ```
 
 That is the whole check, and it is the one to run before committing. `pytest`
-runs everything -- unit tests, the real pose pipeline on the demo clip and two
-benchmark clips, and the Playwright UI smoke test -- in about two minutes on
-this machine.
+runs everything -- unit tests, the real pose pipeline on the demo clip and the
+benchmark clips, and the Playwright UI smoke test -- in about three minutes on
+this machine when the benchmark footage is present, and well under a minute
+when it is not. Roughly forty seconds of that is clip segmentation scanning
+real video, both in its own tests and ahead of every tracking run.
+Segmentation is deliberately left on in the real-footage tests rather than
+switched off to buy the time back: having it on is what caught it splitting a
+rally in two. Times vary a lot if anything else is using the machine -- one
+run measured eight minutes with two video scans running alongside it.
 Subsets:
 
 ```bash
@@ -172,16 +178,21 @@ Known gaps:
   and is tested, but nothing calls it: there is no way to load an earlier
   session, so the comparator the split-step numbers point at -- the same
   player against themselves over time -- is not reachable from the app.
-* `segments.py` has been checked on two real clips. The two-minute phone
-  drill in `benchmarks/` is pinned in `tests/test_real_footage.py`: the rest
-  and the drill split correctly, and people walking close to the lens read as
-  play, because a large slow mover changes more pixels than a small fast one.
-  That error only costs pose time, so the thresholds stand. The twelve-minute
-  broadcast compilation `benchmarks/lindan_source.mp4` was checked by hand
-  (two minutes to scan, so not in the suite): its title card was excluded, a
-  whole-frame flash was not, and the rallies came out as play. Neither clip
-  has adverts or replays, and a club recording with several rests has not
-  been through it.
+* `segments.py` has been calibrated against two real clips and is pinned in
+  `tests/test_real_footage.py`, but only for the *play* split. On the
+  two-minute phone drill the rest comes out idle, and people walking close
+  to the lens read as play, because a large slow mover changes more pixels
+  than a small fast one; that error only costs pose time, so it stands. The
+  first two minutes of `benchmarks/lindan_source.mp4` pin the merge gap: at
+  2.5 s consecutive points fused into 47 s blobs, at 1.5 s the rallies come
+  out at a median near the published length. Two things remain unmeasured.
+  `scan_motion` takes a `mask` for restricting motion to the court, nothing
+  passes one, and on arena footage the crowd never stops moving -- whether
+  that defeats the play/rest split could not be settled on `lindan_source`,
+  because that clip has its intervals edited out and so has no real rests to
+  find (the segmenter detects that and disowns the rests). And the
+  not-badminton path has only ever met a title card, a lens occlusion and a
+  run of black frames, never an actual advert or replay.
 
 ## Where it is going
 

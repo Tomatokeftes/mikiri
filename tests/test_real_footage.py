@@ -8,6 +8,7 @@ and ``tests/test_benchmarks.py`` is what stops that skip from being silent.
 from __future__ import annotations
 
 import csv
+import functools
 from pathlib import Path
 
 import numpy as np
@@ -330,10 +331,18 @@ def test_a_raw_phone_recording_is_cut_into_its_drill_and_its_rest(phone_segments
     the far end for twenty seconds, then one runs a jump-smash drill for over a
     minute with short pauses between feeds, and they walk off. The boundaries
     in the manifest were read off a contact sheet by eye. The rest has to come
-    out idle, and the drill has to come out as one stretch of play rather than
-    a fragment per smash, which is what a higher ``PLAY_LEVEL`` or a shorter
-    ``MERGE_GAP_S`` would produce: the drill's motion dips under the threshold
-    between feeds and the merge gap is what holds it together.
+    out idle, and the drill has to come out as a few stretches of play rather
+    than a fragment per smash, which is what a higher ``PLAY_LEVEL`` would
+    produce.
+
+    It was first pinned as *one* stretch, and that claim did not survive the
+    broadcast footage. The pauses between feeds here run 1.6 to 2.5 s, and the
+    walk-back between two points on ``lindan_source`` runs 1.6 to 2.9 s, so
+    no merge gap keeps this drill whole without fusing that match's rallies
+    into thirty-second blobs. Rally boundaries are what the tactical module
+    consumes; a drill cut at its feed pauses costs nothing, because gaps that
+    short are tracked in full anyway (``MIN_SKIP_RUN_S``). So the drill is
+    allowed to split at the feeds, and must not split anywhere else.
     """
     seg = phone_segments
     assert not seg.not_segmented, seg.note
@@ -346,11 +355,15 @@ def test_a_raw_phone_recording_is_cut_into_its_drill_and_its_rest(phone_segments
         )
     for a, b in PHONE_STATES["play"]:
         window = play[_inside(seg, a, b)]
-        assert window.size and window.all(), f"drill {a}-{b} s was broken into pieces"
-    # The clip is mostly drill, and the drill is a handful of stretches, not dozens.
+        assert window.size and window.mean() > 0.8, (
+            f"drill {a}-{b} s came out {window.mean():.0%} play"
+        )
+    # The clip is mostly drill, and the drill is a handful of stretches, not
+    # dozens: eight for the whole clip when this was measured, with the walk-on
+    # and walk-off among them.
     summary = seg.summary()
     assert 0.5 < summary["play_share"] < 0.9, summary
-    assert summary["n_play"] <= 6, summary
+    assert summary["n_play"] <= 10, summary
 
 
 def test_a_single_continuous_phone_shot_has_no_camera_cuts(phone_segments):
@@ -361,3 +374,66 @@ def test_a_single_continuous_phone_shot_has_no_camera_cuts(phone_segments):
     """
     assert "camera cut" not in phone_segments.note
     assert STATE_NOT_BADMINTON not in {s.state for s in phone_segments.segments}
+
+
+def test_an_unedited_recording_is_not_accused_of_being_edited(phone_segments):
+    """The other side of the edited-clip guard, and the reason a ratio was rejected.
+
+    A drill clip legitimately holds more play than rest, so play-to-rest
+    cannot be the test. What separates the two is that an unedited recording
+    eventually contains a real break: this clip's longest gap is over 20 s.
+    """
+    assert not phone_segments.rests_edited, phone_segments.note
+    assert phone_segments.work_rest() is not None
+
+
+# --- the broadcast the rally was cut from: twelve minutes with its intervals cut --
+
+
+@functools.lru_cache(maxsize=4)
+def _segment_prefix(clip_id: str, n_frames: int | None = None):
+    """Scan the first ``n_frames`` of a benchmark clip and segment them.
+
+    Cached: the scan decodes real video, and two tests below ask the same
+    question of the same prefix.
+    """
+    from mikiri.segments import scan_motion, segment_clip
+    from mikiri.video import VideoReader
+
+    path = clip_path(clip_id)
+    if path is None:
+        pytest.skip(f"benchmark clip {clip_id!r} not present")
+    reader = VideoReader(path)
+    end = reader.info.n_frames - 1 if n_frames is None else min(n_frames, reader.info.n_frames) - 1
+    return segment_clip(scan_motion(reader, 0, end))
+
+
+def test_segmentation_finds_real_rallies_in_the_match_source():
+    """Guards the merge gap, which was briefly set by argument and was wrong.
+
+    At 2.5 s the pre-serve pause was swallowed and consecutive points fused
+    into stretches of 47 s. A men's singles rally is 8.8 +/- 2.0 s published,
+    so a median anywhere near that is the signal the merge gap is sane; a
+    median in the tens of seconds means it is joining points again.
+    """
+    from mikiri.segments import STATE_PLAY
+
+    result = _segment_prefix("lindan_source", 3600)
+    plays = [s.seconds for s in result.segments if s.state == STATE_PLAY]
+    assert len(plays) >= 5, f"two minutes of match play holds several rallies, found {len(plays)}"
+    median = float(np.median(plays))
+    assert 6.0 < median < 20.0, f"median stretch {median:.1f}s is not a rally length"
+
+
+def test_a_clip_with_its_intervals_cut_out_is_detected_and_its_rests_disowned():
+    """Guards work-to-rest being computed from an editor's cut length.
+
+    lindan_source has its between-point intervals removed, leaving only the
+    couple of seconds before each serve. The rallies are still real, so they
+    stay usable; the rests are not, and a plausible-looking work-to-rest built
+    from them would describe whoever cut the video.
+    """
+    result = _segment_prefix("lindan_source", 3600)
+    assert result.rests_edited
+    assert result.work_rest() is None
+    assert "edited out" in result.note

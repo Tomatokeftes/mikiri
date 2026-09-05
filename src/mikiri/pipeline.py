@@ -19,7 +19,13 @@ from mikiri.jobs import Job
 from mikiri.keypoints import N_KEYPOINTS
 from mikiri.paths import cache_dir
 from mikiri.pose.base import PoseBackend, get_backend
-from mikiri.segments import STATE_NOT_BADMINTON, scan_motion, segment_clip
+from mikiri.segments import (
+    STATE_IDLE,
+    STATE_INTERVAL,
+    STATE_NOT_BADMINTON,
+    scan_motion,
+    segment_clip,
+)
 from mikiri.settings import Settings
 from mikiri.tracking import SIDES, FrameMeta, PlayersTracker
 from mikiri.video import FrameCache, VideoReader, downscale, video_id
@@ -35,6 +41,27 @@ CACHE_VERSION = 5  # the side constraint changes the subject's track; others are
 #: a walk cycle is about a second -- so the court track through a rest stays
 #: honest and :mod:`mikiri.rally` can still tell walking from playing.
 IDLE_TRACK_HZ = 4.0
+
+#: Shortest stretch of not-play worth sampling sparsely, in seconds. Shorter
+#: gaps are tracked at full rate.
+#:
+#: The principle this enforces is that **segmentation may save time and may
+#: not move a number.** It was found by a test rather than by reasoning: the
+#: forty-second Lin Dan clip began reading as two bouts instead of one,
+#: because a six-second pause inside it was called idle, sampled at
+#: :data:`IDLE_TRACK_HZ`, and the thinned court track then fell under the
+#: speed threshold in :mod:`mikiri.rally` for long enough to split it. The new
+#: answer may even have been the better one -- that clip does appear to hold
+#: more than one point -- but it was reached by degrading the data, which is
+#: the one way this module is never allowed to change a result.
+#:
+#: So the line sits above any pause that could fall *inside* the region a
+#: downstream metric reads: within-rally lulls run a second or two, and the
+#: gap between points on a clip whose intervals were cut runs two to six.
+#: A genuine rest is far longer -- elite between-point rest is 22.9 +/- 10.6 s
+#: and club rest is longer still -- so the saving is untouched, and it is now
+#: taken only where nothing is measuring.
+MIN_SKIP_RUN_S = 15.0
 
 
 @dataclass
@@ -318,10 +345,14 @@ def run_tracking(
         seg = segment_clip(scan_motion(reader, req.start, req.end))
         segments_summary = seg.summary()
         skip_mask = seg.state_mask(STATE_NOT_BADMINTON)
-        play = seg.analysable_mask()
-        stride_mask = ~play & ~skip_mask
         fps = float(getattr(reader.info, "fps", 0.0) or 30.0)
         stride = max(1, int(round(fps / IDLE_TRACK_HZ)))
+        # Only long stretches of not-play are sampled sparsely; see
+        # MIN_SKIP_RUN_S for the rally this protects.
+        stride_mask = np.zeros(seg.n_frames, dtype=bool)
+        for s in seg.segments:
+            if s.state in (STATE_IDLE, STATE_INTERVAL) and s.seconds >= MIN_SKIP_RUN_S:
+                stride_mask[s.start - seg.start : s.end - seg.start + 1] = True
         if job is not None:
             job.check_cancel()
 

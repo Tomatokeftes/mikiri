@@ -61,23 +61,25 @@ and where the signal is unreadable the answer is to keep everything and say so
 rather than to guess.
 
 **What real footage showed.** The thresholds were argued from how club play
-behaves and then checked on two minutes of phone footage of a jump-smash drill
-(``jump_smashes_phone`` in ``benchmarks/clips.json``, pinned in
-``tests/test_real_footage.py``). The twenty-second rest came out idle and the
-seventy-second drill came out as one stretch of play, held together across the
-pauses between feeds by :data:`MERGE_GAP_S`; a higher :data:`PLAY_LEVEL` cut
-the drill into pieces. The one thing it got wrong is instructive: people
-walking on and off close to the lens read as play, because a large slow mover
-near the camera changes more pixels than a small fast one at the far end, and
-no threshold on a difference map can tell those apart. Speed in metres can,
-and that is the court track's job downstream. Here it costs pose time and
-nothing else, which is the direction every error in this module is meant to
-lean. The twelve-minute broadcast compilation that ``lindan_rally`` was cut
-from was scanned as well, by hand rather than in the suite because the scan
-alone takes two minutes: its closing title card was excluded as another scene,
-a whole-frame flash mid-match was not, and the rallies came out as play with
-the walk-backs between them as idle. It has no adverts or replays, so the
-scene test has still only ever excluded a title card.
+behaves and then checked on two clips (both in ``benchmarks/clips.json``,
+pinned in ``tests/test_real_footage.py``). On two minutes of phone footage of
+a jump-smash drill the twenty-second rest came out idle and the drill came out
+as a few stretches of play, cut at the pauses between feeds; a higher
+:data:`PLAY_LEVEL` cut it into a piece per smash. The one thing it got wrong
+is instructive: people walking on and off close to the lens read as play,
+because a large slow mover near the camera changes more pixels than a small
+fast one at the far end, and no threshold on a difference map can tell those
+apart. Speed in metres can, and that is the court track's job downstream. Here
+it costs pose time and nothing else, which is the direction every error in
+this module is meant to lean. The first two minutes of the broadcast that
+``lindan_rally`` was cut from set :data:`MERGE_GAP_S`, and showed that the
+drill and the match pull against each other: the pauses between feeds and the
+walk-backs between points are the same length, so a gap that keeps the drill
+whole fuses the match's points into thirty-second blobs. The match wins, for
+the reason given on the constant. That clip's closing title card was excluded
+as another scene, a whole-frame flash mid-match was not, and it has no
+adverts or replays, so the scene test has still only ever excluded a title
+card.
 
 **What this cannot do yet.** Warm-up is the hard case, and it is deliberately
 not attempted here. Two people hitting a shuttle at speed looks exactly like
@@ -139,10 +141,24 @@ BUSY_PERCENTILE = 90.0
 MIN_CONTRAST = 0.25
 #: Pauses shorter than this stay inside a stretch of play. A rally contains
 #: lulls -- a high lift, a shuttle drifting out, a moment of hesitation -- and
-#: cutting on them turns one rally into three. Generous, because merging keeps
-#: frames and the cost of merging two rallies into one is a miscounted rally
-#: while the cost of splitting one is a deleted one.
-MERGE_GAP_S = 2.5
+#: cutting on them turns one rally into three.
+#:
+#: Measured, not argued. This was briefly 2.5 s on the reasoning that merging
+#: is the safe direction, and on `benchmarks/lindan_source.mp4` that fused
+#: consecutive points into blobs of 47 s. The gap between one point ending and
+#: the next serve -- the player walking back, settling, serving -- runs about
+#: 2.7 s on that footage, so the merge gap has to sit clearly below it or it
+#: joins rallies together. At 1.5 s the same clip yields 45 stretches with a
+#: median of 10.3 s, against a published men's singles rally of 8.8 +/- 2.0 s,
+#: and the idle total matches 45 setups at 2.7 s to within two seconds.
+#:
+#: The price is paid on drills. A feeding drill pauses 1.6 to 2.5 s between
+#: feeds -- the same length as that walk-back -- so at this value the phone
+#: drill in the benchmarks is cut into a few stretches where 2.5 s kept it
+#: whole. That costs nothing: gaps this short are tracked in full anyway
+#: (:data:`mikiri.pipeline.MIN_SKIP_RUN_S`), and a rally count is what the
+#: tactical module reads from here, while nothing reads a drill count.
+MERGE_GAP_S = 1.5
 #: A stretch of play shorter than this is not a rally. Lower than
 #: :data:`mikiri.rally.MIN_BOUT_S` on purpose: club rallies are short, a
 #: three-shot exchange is over in a couple of seconds, and this threshold
@@ -158,6 +174,28 @@ MIN_PLAY_S = 1.5
 #: starts meaning somebody walked off. The cost of being wrong here is only a
 #: label, since nothing downstream drops frames on it.
 INTERVAL_S = 120.0
+#: A clip with several points in it whose longest rest is shorter than this
+#: has had its intervals cut out rather than played that way. Between points a
+#: player collects the shuttle, walks back and serves when ready: elite men's
+#: singles rests 22.9 +/- 10.6 s and club play rests longer still, so somebody
+#: eventually takes a proper break and any unedited recording contains one.
+#: Set well below the elite mean less a standard deviation so that fast,
+#: continuous play is never accused of being edited.
+#:
+#: Measured on the benchmarks: `lindan_source.mp4`, whose between-point
+#: intervals were cut, has 45 rests clustered between 1.5 and 2.5 s with a
+#: longest of 6.2 s -- the editor's cut length, not a player's. The unedited
+#: phone clip has 8 rests running from 0 to 21.7 s, because life is variable.
+#: The play segments stay usable either way; it is the *rests* of an edited
+#: clip that measure the editor, which is the same defence
+#: :data:`mikiri.rally.MIN_REST_SHARE` makes one level up. A ratio was tried
+#: first and rejected: drills legitimately hold more play than rest, so it
+#: accused the phone clip too.
+EDITED_MAX_REST_S = 8.0
+#: Rests needed before the clip is judged edited at all. Below this the clip is
+#: too short to have earned a long rest yet, and calling it edited would be a
+#: guess about what was not filmed.
+EDITED_MIN_RESTS = 6
 #: Two cuts closer together than this are treated as one. A single bright
 #: frame, a flash or a dropped frame otherwise reads as a cut straight back,
 #: producing a camera shot one frame long.
@@ -280,6 +318,11 @@ class ClipSegments:
     start: int = 0
     note: str = ""
     not_segmented: bool = False
+    #: True when the clip holds more play than rest, which no real recording
+    #: does -- the rests have been cut out. The play segments are still good;
+    #: anything derived from the *rests* is measuring the editor and must be
+    #: withheld. See :data:`EDITED_WORK_REST`.
+    rests_edited: bool = False
 
     def state_mask(self, *states: str) -> np.ndarray:
         """Boolean mask over the scanned range, True in any of ``states``."""
@@ -315,9 +358,23 @@ class ClipSegments:
                 out[f"{state}_seconds"] = round(secs, 1)
         if total > 0 and not self.not_segmented:
             out["play_share"] = round(play / total, 3)
+        if self.rests_edited:
+            out["rests_edited"] = True
         if self.note:
             out["note"] = self.note
         return out
+
+    def work_rest(self) -> float | None:
+        """Play time divided by rest time, or ``None`` when there is no rest.
+
+        Withheld rather than returned when :attr:`rests_edited` is set: on a
+        clip whose intervals were cut this number describes the editing, and a
+        plausible-looking ratio is worse than no ratio at all.
+        """
+        rest = self.seconds_in(STATE_IDLE) + self.seconds_in(STATE_INTERVAL)
+        if rest <= 0 or self.not_segmented or self.rests_edited:
+            return None
+        return self.seconds_in(STATE_PLAY) / rest
 
     def to_dict(self) -> dict:
         """JSON-friendly view."""
@@ -673,15 +730,30 @@ def segment_clip(
             f"{off} shot{plural} showed another scene and {'were' if off > 1 else 'was'} excluded"
         )
 
-    return ClipSegments(
+    result = ClipSegments(
         segments=segments,
         motion=motion,
         fps=fps,
         n_frames=n,
         start=scan.start,
-        note="; ".join(notes),
         not_segmented=not_segmented,
     )
+
+    # In an unedited recording somebody eventually takes a proper break. When
+    # a clip has plenty of rests and not one of them is long, its intervals
+    # were cut and what survives between the rallies is the couple of seconds
+    # before each serve. Those seconds are genuine, so the play segmentation
+    # stands and only the rests are disowned.
+    rests = [s.seconds for s in result.segments if s.state in (STATE_IDLE, STATE_INTERVAL)]
+    if not not_segmented and len(rests) >= EDITED_MIN_RESTS and max(rests) < EDITED_MAX_REST_S:
+        result.rests_edited = True
+        notes.append(
+            f"no gap in this clip reaches {EDITED_MAX_REST_S:.0f} s, so its intervals have "
+            "been edited out; the rallies are usable and anything derived from the rests is not"
+        )
+
+    result.note = "; ".join(notes)
+    return result
 
 
 def segment_video(reader, start: int = 0, end: int | None = None, **kwargs) -> ClipSegments:
