@@ -119,7 +119,8 @@ class ReviewBody(BaseModel):
     frame: int
     side: str | None = None
     kind: str | None = None
-    #: For a shot label: the shot, in the user's own words.
+    #: For a shot label the shot, and for a racket hand the hand, both in the
+    #: user's own words.
     value: str | None = None
 
 

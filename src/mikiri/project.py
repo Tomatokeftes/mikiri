@@ -233,6 +233,13 @@ class MatchReview(BaseModel):
     contact_edits: list[ContactEdit] = Field(default_factory=list)
     dismissed: list[IssueDismissal] = Field(default_factory=list)
     shot_labels: list[ShotLabel] = Field(default_factory=list)
+    #: Which hand each side's player holds the racket in, once the user has
+    #: said. Keyed by side rather than by player, like every other event in
+    #: the chain: in singles the two are the same thing, and in doubles no
+    #: contact is attributed to one partner yet, so a per-partner hand would
+    #: be a field nothing could fill. An absent side has not been answered
+    #: and is assumed right-handed.
+    racket_hands: dict[str, Literal["right", "left"]] = Field(default_factory=dict)
 
 
 class Project(BaseModel):

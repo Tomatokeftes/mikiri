@@ -737,3 +737,67 @@ def test_the_same_broadcast_without_a_court_is_left_whole_rather_than_split_back
         "keeping the clip whole must leave more of it to track than the court test does, or "
         "the refusal is throwing rallies away rather than declining to find them"
     )
+
+
+def test_the_queue_asks_which_hand_each_player_holds_the_racket_in_before_anything_else(
+    match_session,
+):
+    """Guards a left-hander being detected as a right-hander in silence.
+
+    The far player of this clip is Lin Dan, who is left-handed; both players
+    of the benchmark broadcast are too. Until now every player but the subject
+    was detected right-handed with no way to say otherwise, and no panel said
+    an assumption was being made. The question comes before the contact
+    questions because every contact on a side is found from the arm it names,
+    so answering it afterwards would re-detect the contacts under the answers
+    already given.
+
+    What this does not claim is that the answer finds more contacts. On this
+    footage it does not -- the far player's misses are prominence failures on
+    a small, foreshortened swing and his count fell from 16 to 13 when the
+    left hand was used, which is recorded in the manifest. The defect being
+    fixed is that the app assumed and did not say so.
+    """
+    from mikiri.match import ISSUE_RACKET_HAND
+
+    s = match_session
+    before = s.project.match_review.model_copy(deep=True)
+    hand_before = s.project.racket_hand
+    try:
+        queue = s.state()["review"]
+        hands = [i for i in queue["open"] if i["kind"] == ISSUE_RACKET_HAND]
+        assert {i["side"] for i in hands} == {"near", "far"}, (
+            "both sides have contacts on this clip, so both hands are asked about"
+        )
+        assert queue["open"][0]["kind"] == ISSUE_RACKET_HAND, "the hand is asked first"
+        for item in hands:
+            assert {o["value"] for o in item["options"]} == {"right", "left"}
+            # The video goes to a real contact of that side, not to frame zero.
+            assert item["frame"] == item["options"][0]["frame"]
+            contacts = [
+                c.frame + s.pose_start
+                for r in s.match().rallies
+                for c in r.contacts
+                if c.side == item["side"]
+            ]
+            assert item["frame"] in contacts
+
+        far = next(i for i in hands if i["side"] == "far")
+        s.answer_review("set_racket_hand", far["frame"], "far", value="left")
+        assert s.racket_hand_for("far") == "left"
+        assert s.racket_hand_for("near") == "right", "answering one side leaves the other assumed"
+        summary = {p["side"]: p for p in s.players_summary()}
+        assert summary["far"]["racket_hand"] == "left" and summary["far"]["hand_known"]
+        assert not summary["near"]["hand_known"], "an assumed hand must say it is assumed"
+        after = s.state()["review"]
+        assert not [
+            i for i in after["open"] if i["kind"] == ISSUE_RACKET_HAND and i["side"] == "far"
+        ]
+        # And the far player's contacts really were re-detected from the other
+        # arm: the same detector on the same pose, a different signal.
+        assert s.other_strokes()[0] is not None
+    finally:
+        s.project.match_review = before
+        s.project.racket_hand = hand_before
+        s._review_undo.clear()
+        s._invalidate_derived()

@@ -370,10 +370,15 @@ The amended rule opens doors; it does not open all of them.
    double-contact questions. The hits a small, foreshortened player's signal
    is too flat to clear the detector with are recovered from the alternation
    rule itself, marked as recovered and raised as their own questions
-   (`recovered_contact`); see `docs/match.md`. Still open here: the other
-   player's racket hand is assumed right -- wrong for the far player on the
-   benchmark, and correcting it did not help. Contacts can now be added,
-   removed and confirmed by hand through the queue.
+   (`recovered_contact`); see `docs/match.md`. Contacts can now be added,
+   removed and confirmed by hand through the queue, and each side's racket
+   hand is a fact the queue asks for before any of them: it used to be
+   assumed right for everyone but the subject, which is wrong for the far
+   player of `lindan_rally` and for *both* players of the benchmark
+   broadcast. It is asked rather than measured because it cannot be measured
+   here -- on four players whose hand is known the two wrists' speed at the
+   swings votes 47% to 55% left, a coin flip -- which is the amended rule
+   working exactly as it is meant to.
 4. **The review queue**, which is where this becomes a product rather than a
    pipeline. *Done, first version:* the chain's questions are asked one at a
    time in a Review panel, the video seeks to the frame, and a number key

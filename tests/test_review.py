@@ -113,3 +113,55 @@ def test_moving_a_contact_is_two_edits_and_one_step_back(tracked_session):
     assert edits == [(50, "near", "remove"), (57, "near", "add")]
     s.answer_review("undo", 0, None)
     assert s.project.match_review.contact_edits == []
+
+
+def test_a_racket_hand_is_recorded_per_side_and_survives_a_save(tracked_session):
+    """Guards the assumption that cost the broadcast its contacts.
+
+    Every player but the subject was detected right-handed, hard-coded in four
+    places, and both players of the benchmark broadcast are left-handers. The
+    hand is now a fact per side of the net, answered in the queue and stored
+    with the other answers.
+    """
+    s = tracked_session
+    assert s.racket_hand_for("far") == "right", "an unanswered side is assumed, not known"
+    s.answer_review("set_racket_hand", 10, "far", value="left")
+    assert s.racket_hand_for("far") == "left"
+    assert s.racket_hand_for("near") == "right", "one side's answer says nothing about the other"
+    with pytest.raises(ValueError):
+        s.answer_review("set_racket_hand", 10, "far", value="either")
+    with pytest.raises(ValueError):
+        s.answer_review("set_racket_hand", 10, None, value="left")
+    back = Project.model_validate_json(s.project.model_dump_json())
+    assert back.match_review.racket_hands == {"far": "left"}
+
+
+def test_the_subjects_hand_is_one_fact_however_it_was_set(tracked_session):
+    """Guards the queue and the options panel disagreeing about the same player.
+
+    The subject's hand has always lived on the project because the movement
+    metrics read it there. An answer in the queue has to reach that field, and
+    a change in the options panel has to reach the queue's record, or whichever
+    was written second would be quietly overridden by the other.
+    """
+    s = tracked_session
+    s.project.tracking.side = "near"  # a court was calibrated after all
+    assert s.subject_side == "near"
+    s.answer_review("set_racket_hand", 10, "near", value="left")
+    assert s.project.racket_hand == "left"
+    assert s.racket_hand_for("near") == "left"
+    s.set_options(racket_hand="right")
+    assert s.project.match_review.racket_hands["near"] == "right"
+    assert s.racket_hand_for("near") == "right"
+
+
+def test_a_racket_hand_answer_can_be_taken_back(tracked_session):
+    """Undo has to reach the project field too, or the subject's hand outlives its own answer."""
+    s = tracked_session
+    s.project.tracking.side = "near"
+    s.answer_review("set_racket_hand", 10, "near", value="left")
+    assert s.project.racket_hand == "left"
+    s.undo_review()
+    assert s.project.racket_hand == "right"
+    assert "near" not in s.project.match_review.racket_hands
+    assert s.racket_hand_for("near") == "right"

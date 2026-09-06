@@ -61,7 +61,9 @@ from mikiri.match import (
     ACTION_LABEL_SHOT,
     ACTION_MOVE_CONTACT,
     ACTION_REMOVE_CONTACT,
+    ACTION_SET_RACKET_HAND,
     CONFIRMABLE,
+    ISSUE_RACKET_HAND,
     SIDES,
     Confirmation,
     MatchChain,
@@ -205,7 +207,10 @@ class ProjectSession:
         #: an answer can be taken back whatever it changed. Kept for the
         #: open session only: the project file holds the answers, not the
         #: history of giving them.
-        self._review_undo: list[MatchReview] = []
+        #: One step per answer: the review as it was, and the subject's
+        #: racket hand, which lives on the project rather than in the
+        #: review and would otherwise survive its own undo.
+        self._review_undo: list[tuple[MatchReview, str]] = []
         self._match: MatchChain | None = None
         self.last_export: dict | None = None
         #: Why camera recovery from the net posts failed, if it did. The court
@@ -559,21 +564,39 @@ class ProjectSession:
     def players_summary(self) -> list[dict]:
         """One entry per tracked person, the subject first.
 
-        Says which side each one stood on and how often the tracker found them
+        Says which side each one stood on, how often the tracker found them
         in the frames it looked at, so the UI can tell a player who was barely
-        there from one who was tracked throughout.
+        there from one who was tracked throughout, and which hand their
+        contacts were read from -- with ``hand_known`` false while that is the
+        right-handed assumption rather than the user's answer.
         """
         if self.project.tracking is None:
             return []
+        answered = self.project.match_review.racket_hands
+
+        def hand(side: str | None) -> dict:
+            return {
+                "racket_hand": self.racket_hand_for(side),
+                "hand_known": side in answered,
+            }
+
         out = [
             {
                 "side": self.subject_side,
                 "subject": True,
                 "found_share": _found_share(self.project.frame_meta or []),
+                **hand(self.subject_side),
             }
         ]
         for o in self.others():
-            out.append({"side": o.side, "subject": False, "found_share": _found_share(o.meta)})
+            out.append(
+                {
+                    "side": o.side,
+                    "subject": False,
+                    "found_share": _found_share(o.meta),
+                    **hand(o.side),
+                }
+            )
         return out
 
     def angles(self) -> AngleTable | None:
@@ -604,7 +627,7 @@ class ProjectSession:
             eff[0],
             self.info.fps,
             events,
-            racket_hand=self.project.racket_hand,
+            racket_hand=self.racket_hand_for(self.subject_side),
             lead_leg=self.project.lead_leg,
             px_per_cm=self.px_per_cm(),
             conf_thr=self.project.conf_threshold,
@@ -863,15 +886,60 @@ class ProjectSession:
 
     # -- the rally chain ---------------------------------------------------
 
+    def racket_hand_for(self, side: str | None) -> str:
+        """Which hand the player on ``side`` holds the racket in.
+
+        The user's answer where there is one, then the subject's project
+        option for the subject's own side, and ``"right"`` otherwise -- an
+        assumption, and the reason the queue asks.
+
+        **Nothing here is inferred from the pose, and that is measured.** The
+        obvious estimator is that the racket wrist is the faster one at the
+        swings, and on the four benchmark players whose hand is known (three
+        left-handers and one right-hander) it votes left on 47% to 55% of
+        each player's sixty fastest swings -- a coin flip, with no margin to
+        set a threshold in. Whole-clip statistics are no better: peak wrist
+        speed picks left for all four, so it separates the hands not at all
+        and merely reproduces its own bias. The pose model's left and right
+        are stable enough for it (its shoulder order flips 1.4 to 6.9 times
+        per hundred frames, and follows the player's facing as it should), so
+        the failure is in the signal and not the labelling: at 160 to 420
+        pixels of body height the non-racket arm swings for balance about as
+        fast as the racket arm swings at the shuttle. Asking is therefore the
+        only defendable answer, per ``docs/tactical.md``.
+        """
+        answered = self.project.match_review.racket_hands.get(side or "")
+        if answered in ("right", "left"):
+            return answered
+        # ``None`` is the subject on a clip with no court, where there is no
+        # side to be on and the project option is the only answer there is.
+        if side is None or side == self.subject_side:
+            return self.project.racket_hand
+        return "right"
+
+    def set_racket_hand(self, side: str, hand: str) -> None:
+        """Record which hand a side's player holds the racket in."""
+        if hand not in ("right", "left"):
+            raise ValueError(f"a racket hand is right or left, not {hand!r}")
+        if side not in SIDES:
+            raise ValueError(f"unknown side {side!r}")
+        with self.lock:
+            self.project.match_review.racket_hands[side] = hand  # type: ignore[assignment]
+            # The subject's hand is one fact with two homes: the biomechanical
+            # panels read the project option, so an answer here has to reach it
+            # or the two would disagree about the same player.
+            if side == self.subject_side:
+                self.project.racket_hand = hand  # type: ignore[assignment]
+            self._invalidate_derived()
+
     def other_strokes(self) -> list[StrokeSeries | None]:
         """Detected contacts of each other player, aligned with :meth:`others`.
 
         The same detector as the subject's, on their own court track so the
-        zones are in their own frame. Their racket hand is not known -- it is
-        a project option for the subject only -- so the right hand is assumed,
-        which weakens the swing signal for a left-hander rather than breaking
-        it: the elbow and shoulder terms still move. No contact height in
-        metres, for the reason given in :meth:`strokes`.
+        zones are in their own frame, and with that side's racket hand from
+        :meth:`racket_hand_for` -- the user's answer where the queue has one
+        and the right hand until it does. No contact height in metres, for
+        the reason given in :meth:`strokes`.
         """
         if self._other_strokes is not None:
             return self._other_strokes
@@ -885,7 +953,7 @@ class ProjectSession:
                     o.keypoints,
                     self.info.fps,
                     None,
-                    "right",
+                    self.racket_hand_for(o.side),
                     self.project.conf_threshold,
                     track=track,
                 )
@@ -922,7 +990,7 @@ class ProjectSession:
                     series,
                     (eff[0], o.keypoints),
                     self.info.fps,
-                    (self.project.racket_hand, "right"),
+                    (self.racket_hand_for(self.subject_side), self.racket_hand_for(o.side)),
                     self.project.conf_threshold,
                     (self.court_track(), track),
                 )
@@ -940,7 +1008,7 @@ class ProjectSession:
                     subject,
                     edits_for(self.subject_side),
                     eff[0],
-                    self.project.racket_hand,
+                    self.racket_hand_for(self.subject_side),
                     self.project.conf_threshold,
                     fps,
                     start,
@@ -953,7 +1021,7 @@ class ProjectSession:
                     others[k],
                     edits_for(o.side),
                     o.keypoints,
-                    "right",
+                    self.racket_hand_for(o.side),
                     self.project.conf_threshold,
                     fps,
                     start,
@@ -976,7 +1044,7 @@ class ProjectSession:
                 labels_for(self.subject_side),
                 eff[0],
                 self.info.fps,
-                self.project.racket_hand,
+                self.racket_hand_for(self.subject_side),
                 self.project.conf_threshold,
                 self.court_track(),
             )
@@ -989,7 +1057,7 @@ class ProjectSession:
                 labels_for(o.side),
                 o.keypoints,
                 self.info.fps,
-                "right",
+                self.racket_hand_for(o.side),
                 self.project.conf_threshold,
                 track,
             )
@@ -1194,7 +1262,9 @@ class ProjectSession:
         if action == ACTION_UNDO:
             self.undo_review()
             return
-        self._review_undo.append(self.project.match_review.model_copy(deep=True))
+        self._review_undo.append(
+            (self.project.match_review.model_copy(deep=True), self.project.racket_hand)
+        )
         del self._review_undo[:-MAX_REVIEW_UNDO]
         if action == ACTION_MOVE_CONTACT:
             if side is None or value is None:
@@ -1206,6 +1276,11 @@ class ProjectSession:
             if side is None or value is None:
                 raise ValueError("a shot label needs a side and a shot")
             self.label_shot(frame, side, value)
+            return
+        if action == ACTION_SET_RACKET_HAND:
+            if side is None or value is None:
+                raise ValueError("a racket hand needs a side and the hand")
+            self.set_racket_hand(side, value)
             return
         contact_actions = {
             ACTION_CONFIRM_CONTACT: "confirm",
@@ -1235,9 +1310,8 @@ class ProjectSession:
         if not self._review_undo:
             raise ValueError("nothing to undo")
         with self.lock:
-            self.project.match_review = self._review_undo.pop()
-            self._chain_strokes = None
-            self._match = None
+            self.project.match_review, self.project.racket_hand = self._review_undo.pop()  # type: ignore[assignment]
+            self._invalidate_derived()
 
     def review_queue(self) -> dict:
         """The open questions, one at a time, with the answers each admits.
@@ -1250,6 +1324,7 @@ class ProjectSession:
             len(review.contact_edits)
             + len(review.confirmations)
             + len(review.dismissed)
+            + len(review.racket_hands)
             + (1 if review.score_start is not None else 0)
         )
         can_undo = bool(self._review_undo)
@@ -1264,7 +1339,64 @@ class ProjectSession:
             for opt in item["options"]:
                 if opt.get("frame") is not None:
                     opt["frame"] = int(opt["frame"]) + start
+        # Which hand each player holds the racket in comes first, because every
+        # contact on that side was detected from the arm it names: answering it
+        # after the contact questions would re-detect the contacts underneath
+        # the answers already given.
+        items = self._racket_hand_items(m) + items
         return {"open": items, "n_open": len(items), "answered": answered, "can_undo": can_undo}
+
+    def _racket_hand_items(self, m: MatchChain) -> list[dict]:
+        """One question per side whose racket hand nobody has stated yet.
+
+        Asked once per side and only where that side has a contact to look
+        at, with the video put on the first one so the answer is read off a
+        swing rather than remembered. Left-handers are common enough in
+        badminton that assuming otherwise is a real error and not a corner
+        case: both players in the benchmark broadcast are left-handed, and so
+        is the far player of ``lindan_rally``.
+        """
+        review = self.project.match_review
+        dismissed = {(d.kind, d.side) for d in review.dismissed if d.kind == ISSUE_RACKET_HAND}
+        first: dict[str, int] = {}
+        for r in m.rallies:
+            for c in r.contacts:
+                if c.side is not None:
+                    first.setdefault(c.side, int(c.frame))
+        out: list[dict] = []
+        for side in SIDES:
+            if side not in first or side in review.racket_hands:
+                continue
+            if (ISSUE_RACKET_HAND, side) in dismissed:
+                continue
+            whose = "do you" if side == self.subject_side else f"does the player at the {side} end"
+            out.append(
+                {
+                    "id": f"{ISSUE_RACKET_HAND}:{side}",
+                    "kind": ISSUE_RACKET_HAND,
+                    "rally": None,
+                    "frame": first[side] + self.pose_start,
+                    "side": side,
+                    "question": f"Which hand {whose} hold the racket in?",
+                    "detail": (
+                        "Every contact on this side is found from the hitting arm, so the "
+                        "wrong hand costs hits. It is asked and not measured: the two wrists "
+                        "swing at the same speed to within a few per cent on the footage "
+                        "here, which is no basis for a guess."
+                    ),
+                    "options": [
+                        {
+                            "action": ACTION_SET_RACKET_HAND,
+                            "side": side,
+                            "frame": first[side] + self.pose_start,
+                            "value": hand,
+                            "label": f"{hand.capitalize()}-handed",
+                        }
+                        for hand in ("right", "left")
+                    ],
+                }
+            )
+        return out
 
     def confirm_rally(self, frame: int, field: str, value: str | None) -> None:
         """Record what the user settled about the rally containing ``frame``.
@@ -1333,7 +1465,7 @@ class ProjectSession:
             eff[0],
             self.info.fps,
             self.racket(),
-            self.project.racket_hand,
+            self.racket_hand_for(self.subject_side),
             self.project.conf_threshold,
             track=self.court_track(),
             homography=None if far else self.homography(),
@@ -1414,7 +1546,7 @@ class ProjectSession:
         self._racket = racket_series(
             eff[0],
             self.info.fps,
-            self.project.racket_hand,
+            self.racket_hand_for(self.subject_side),
             self.project.conf_threshold,
             self.px_per_cm(),
         )
@@ -1515,6 +1647,10 @@ class ProjectSession:
                 self.project.movement = movement
             if racket_hand in ("right", "left"):
                 self.project.racket_hand = racket_hand  # type: ignore[assignment]
+                # The same fact in its other home, or the queue's older answer
+                # would keep overriding what the user just chose here.
+                if self.subject_side is not None:
+                    self.project.match_review.racket_hands[self.subject_side] = racket_hand  # type: ignore[assignment]
             if lead_leg in ("auto", "left", "right"):
                 self.project.lead_leg = lead_leg  # type: ignore[assignment]
             if camera_side in ("left", "right", "unknown"):

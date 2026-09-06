@@ -706,7 +706,28 @@ function renderOptions() {
   $('#save-btn').disabled = false; $('#export-btn').disabled = !S.state.has_pose; $('#compare-btn').disabled = false;
   const t = S.state.tracking;
   const share = (p) => (p.found_share == null ? '' : ` (found in ${Math.round(p.found_share * 100)}% of the frames looked at)`);
-  const others = (S.state.players || []).filter((p) => !p.subject).map((p) => `the ${p.side || 'other'} player${share(p)}`);
+  const players = S.state.players || [];
+  const seen = new Set();
+  $('#player-hands').innerHTML = players.filter((p) => p.side && !seen.has(p.side) && seen.add(p.side)).map((p) =>
+    `<label title="Contacts on this side are found from this arm. Mikiri cannot measure which it is, so it asks.">`
+    + `${p.subject ? 'Your' : `The ${p.side} player's`} racket hand `
+    + `<select data-side="${p.side}" class="player-hand">`
+    + `<option value="right"${p.racket_hand === 'right' ? ' selected' : ''}>right</option>`
+    + `<option value="left"${p.racket_hand === 'left' ? ' selected' : ''}>left</option>`
+    + `</select></label>`
+    + (p.hand_known ? '' : ' <span class="muted small-text">assumed</span>')).join(' ');
+  for (const sel of $('#player-hands').querySelectorAll('select.player-hand')) {
+    sel.addEventListener('change', async () => {
+      try {
+        applyState(await api('PUT', `/api/projects/${S.pid}/review`, {
+          action: 'set_racket_hand', frame: S.frame, side: sel.dataset.side, value: sel.value,
+        }));
+        await loadPose();
+        renderAll();
+      } catch (e) { setStatus(e.message, true); }
+    });
+  }
+  const others = players.filter((p) => !p.subject).map((p) => `the ${p.side || 'other'} player${share(p)}`);
   const who = t && t.side ? ` The subject is on the ${t.side} side${others.length ? ', and ' + others.join(', ') + ' was tracked too' : ''}.` : '';
   $('#tracking-info').textContent = t ? `Tracked frames ${t.start}-${t.end} with ${t.model} in ${t.seconds ?? '?'} s (${t.processed_at}).${who}` : 'Not tracked yet. Set the in/out points, then Run tracking.';
   const cs = S.state.corrections;
@@ -1546,6 +1567,7 @@ async function answerReview(choice) {
     const o = item.options[choice];
     if (!o) return;
     body = { action: o.action, frame: o.frame == null ? S.frame : o.frame, side: o.side, kind: item.kind };
+    if (o.value != null) body.value = o.value;
     // A move keeps the contact's own frame and takes the user's as the destination.
     if (o.moves) body.value = String(S.frame);
   }

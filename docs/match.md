@@ -137,7 +137,9 @@ queue. Each kind of question admits only the answers that would settle it:
   not a contact; the later one belongs at the frame the user is on; the
   earlier one is not a contact;
 * an **open outcome** is a choice of winner;
-* a **doubtful service or receiver court** is a choice of server.
+* a **doubtful service or receiver court** is a choice of server;
+* a **racket hand** is right or left, asked once per side and asked first,
+  because every contact on that side is found from the arm it names.
 
 `u` takes the last answer back, whatever it changed -- a contact edit, a
 dismissal, a shot label, a move -- for as long as the project is open; the
@@ -159,7 +161,9 @@ The queue is a single endpoint, `PUT /api/projects/{id}/review`, taking the
 action, the absolute frame and the side, and returning the new state. The
 same endpoint takes shot labels from the panel's Tag shots mode
 (`action: label_shot`, with the shot in `value`), which are the training data
-for the per-player classifier described in `docs/classifier.md`.
+for the per-player classifier described in `docs/classifier.md`, and racket
+hands from either the queue or the project panel (`action: set_racket_hand`,
+with the hand in `value`).
 
 ## Sides own events, players are an attribution
 
@@ -179,9 +183,21 @@ rewrite of this module.
   contacts, as the footwork figures use, plus the opponent's. The opponent's
   contact is proof of play even in the second the subject stands still under
   a clear.
-* The opponent's contacts come from the same detector as the subject's. Their
-  racket hand is unknown, so the right hand is assumed, which weakens the
-  signal for a left-hander rather than breaking it.
+* The opponent's contacts come from the same detector as the subject's, from
+  whichever arm that side's racket hand names.
+* **Which hand each side holds the racket in is the queue's first question,
+  and the only one it asks that is not a contradiction.** Every contact on a
+  side is found from the hitting arm, so answering it after the contact
+  questions would re-detect the contacts underneath the answers already
+  given. It is asked rather than measured because it cannot be measured
+  here: on the four benchmark players whose hand is known -- three of them
+  left-handed -- the two wrists' speed at each player's sixty fastest swings
+  votes 47% to 55% left, which is a coin flip, and a whole-clip peak picks
+  left for all four and so separates nothing. Until it is answered the right
+  hand is assumed and the app says so, in the queue and beside each player
+  in the project panel. The answer is stored per side in `match_review`
+  with the others, and the subject's is the same fact as the project's own
+  `racket_hand`, written through to it so the two cannot disagree.
 
 The panel in the app lists the rallies with server, court, winner and its
 provenance, the running score or points-in-clip, how many serves stood where

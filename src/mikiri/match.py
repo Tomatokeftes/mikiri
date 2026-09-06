@@ -111,6 +111,12 @@ ISSUE_OPEN_OUTCOME = "open_outcome"
 #: inserted with the swing signal's own weak peak as its evidence. Raised so
 #: the queue can confirm or reject it: it rests on less than a detection.
 ISSUE_RECOVERED_CONTACT = "recovered_contact"
+#: Which hand a side's player holds the racket in. Not a contradiction the
+#: chain derives but a fact it needs before any of the others mean anything,
+#: since every contact on that side is detected from the hitting arm. It is
+#: asked rather than measured because it cannot be measured here: see
+#: :meth:`mikiri.session.ProjectSession.racket_hand_for`.
+ISSUE_RACKET_HAND = "racket_hand"
 
 #: What an answer from the review queue can do. Each maps to one thing the
 #: session knows how to record, keyed by frame so it survives re-segmentation.
@@ -126,6 +132,10 @@ ACTION_MOVE_CONTACT = "move_contact"
 #: Not a question the chain asks but an answer the tagger records: what shot
 #: a contact was, in the user's own words, for the per-player classifier.
 ACTION_LABEL_SHOT = "label_shot"
+#: Which hand a side holds the racket in, in the user's own words. The value
+#: rides in the answer's ``value`` rather than its side, because the side
+#: says whose hand it is and the value says which one.
+ACTION_SET_RACKET_HAND = "set_racket_hand"
 ACTIONS = (
     ACTION_LABEL_SHOT,
     ACTION_CONFIRM_CONTACT,
@@ -133,6 +143,7 @@ ACTIONS = (
     ACTION_ADD_CONTACT,
     ACTION_CONFIRM_WINNER,
     ACTION_CONFIRM_SERVER,
+    ACTION_SET_RACKET_HAND,
     ACTION_DISMISS,
 )
 

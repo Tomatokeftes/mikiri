@@ -190,13 +190,27 @@ Known gaps:
   attributed to one partner, and no real doubles footage has been through
   it -- the four-player path is exercised on scripted people only. The
   formation figures need no identity and are the doubles deliverable so far.
-  The other player's contacts are detected with the racket
-  hand assumed right. On `lindan_rally` that assumption is wrong -- the far
-  player is the left-hander, read by eye from full-resolution crops and
-  recorded in the manifest -- and correcting it did not help: his contact
-  count fell from 16 to 13. His misses are prominence failures on a small,
-  foreshortened swing whose signal never drops far enough between hits, not
-  the wrong arm. The alternation rule now recovers those hits
+  Each side's racket hand is now a fact the review queue asks for before
+  any contact question, and every contact on that side is detected from the
+  arm it names. It is asked and not measured, and that is measured: on the
+  four benchmark players whose hand is known (three left-handers), the two
+  wrists' speed at each player's sixty fastest swings votes 47% to 55%
+  left, a coin flip with no margin to threshold on, and whole-clip peak
+  speed picks left for all four and so separates nothing. The pose model's
+  own left and right are stable enough (its shoulder order flips 1.4 to 6.9
+  times per hundred frames and follows the player's facing), so the failure
+  is the signal, not the labelling: at 160 to 420 px of body height the
+  balance arm swings about as fast as the racket arm.
+  Answering it matters. On `lindan_rally` it does not raise the far
+  player's contact count (16 to 13, since his misses are prominence
+  failures on a small, foreshortened swing, not the wrong arm), but on game
+  one of the broadcast, where *both* players are left-handed, answering
+  both moved contacts from 693 to 624 for 29 points, cut the chain's
+  questions from 244 to 188, and made serve parity testable on 28 of 32
+  rallies instead of 17. It did not make the point split truer -- 8-23
+  became 15-16 against a real 8-21 -- which is the reminder that a split
+  resting on 188 unsettled questions is withheld for a reason.
+  The alternation rule recovers the hits a flat signal misses
   (`strokes.recover_alternation`): contacts come out 21 a side and the
   double-contact questions fall from fourteen to six, with nine recovered
   contacts raised as their own questions, six of them real by eye. The three

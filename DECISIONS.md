@@ -243,6 +243,25 @@ Three consequences that are easy to get wrong later:
   everything at a reduced rate so identity survives, and the warm-up -- useless
   for tactics -- is the best training data in the clip for a per-player
   classifier, being repetitive, unpressured and undisguised.
+* **Which hand a player holds the racket in is asked, never guessed.** Every
+  contact on a side is found from that side's hitting arm, and until now
+  every player but the subject was detected right-handed with nothing in the
+  UI admitting it. Badminton has a lot of left-handers: the far player of
+  `lindan_rally` is one, and *both* players of the benchmark broadcast are.
+  The obvious estimator -- the racket wrist is the faster one at the swings
+  -- was measured on those four players and is a coin flip: it votes left on
+  47% to 55% of each player's sixty fastest swings, and whole-clip peak wrist
+  speed picks left for all four, so it reproduces its own bias rather than
+  separating the hands. The pose model's left and right are stable enough to
+  build on (its shoulder order flips 1.4 to 6.9 times per hundred frames and
+  follows the player's facing), so the failure is the signal: at the 160 to
+  420 pixels of body height this footage gives, the balance arm swings about
+  as fast as the racket arm. Under the amended rule that leaves asking, so
+  the hand is the review queue's first question per side, stored per side of
+  the net like every other event, and editable afterwards in the project
+  panel with an unanswered one labelled "assumed". On the broadcast,
+  answering both as left cut the chain's questions from 244 to 188 and made
+  serve parity testable on 28 of 32 rallies instead of 17.
 * **A sentence that explains a number is hidden by default; a sentence that
   withholds one is not.** The panels had grown a subtitle each, a paragraph
   under most and a two-sentence help line, and the user's verdict after the
