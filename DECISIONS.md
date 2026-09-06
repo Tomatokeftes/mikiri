@@ -181,6 +181,17 @@ Three consequences that are easy to get wrong later:
   rewrite, and doubles is a real target -- it is also where the app can be
   strongest, because doubles tactics are formation and rotation, which are
   court-position questions, and court position is the best measurement we have.
+* **The video reader seeks only for a long jump.** OpenCV's frame-number
+  seek lands tens of frames off on variable-rate phone clips, so the reader
+  has always read in order and reopened from the start to go back, which is
+  exact. On a 55-minute broadcast that is twenty seconds a frame and a black
+  viewer. A jump over 7500 frames now seeks to sixty frames before the target
+  and reads the rest in order; on the broadcast this is identical to the
+  in-order frame and sixty to two hundred times faster. Anything shorter,
+  which is every phone clip, stays on the exact path, and the tracking
+  pipeline reads in order regardless. The frame cache is filled ahead only to
+  a budget on opening, for the same clip's sake: the whole of it would be
+  eight gigabytes of JPEGs.
 * **Motion is scanned over the whole frame, not the court.** `scan_motion`
   can take a court mask, and the obvious use is a moving crowd behind the
   court. Measured on the twelve minutes of `lindan_source`, the whole-frame

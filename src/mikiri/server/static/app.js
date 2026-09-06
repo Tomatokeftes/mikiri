@@ -201,6 +201,15 @@ function renderVideo() {
   prefetch(S.frame);
   const msg = $('#video-overlay-msg');
   if (e.failed) { msg.textContent = 'Frame not available'; msg.classList.remove('hidden'); } else msg.classList.add('hidden');
+  // A frame that is not here yet is being decoded: on a long clip that can
+  // be a second or two, and a black picture with no word is a broken app.
+  clearTimeout(S.loadingTimer);
+  if (!e.ready && !e.failed) {
+    S.loadingTimer = setTimeout(() => {
+      const cur = getImage(S.frame);
+      if (!cur.ready && !cur.failed) { msg.textContent = `Loading frame ${S.frame}...`; msg.classList.remove('hidden'); }
+    }, 250);
+  }
   const kp = keypointsAt(S.frame);
   if (kp && S.showSkeleton) {
     let drawn = kp;

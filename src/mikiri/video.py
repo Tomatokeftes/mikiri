@@ -146,21 +146,46 @@ def probe_video(path: str | Path) -> VideoInfo:
     )
 
 
+#: Frames the reader grabs through rather than seeks over. Grabbing runs at
+#: a few thousand frames a second on 1080p, so this is about three seconds of
+#: waiting, and it keeps every clip under roughly five minutes on the
+#: sequential path, whose frame indices are exact whatever the container's
+#: frame timing. A 55-minute broadcast is the case it exists for: reading its
+#: frame 40000 in order took twenty seconds, and a step backwards a minute,
+#: which is a viewer that stays black.
+SEEK_OVER_FRAMES = 7500
+#: Frames to land before the target when seeking, so the last stretch is
+#: decoded in order from wherever the demuxer's keyframe put us.
+SEEK_LEAD = 60
+
+
 class VideoReader:
-    """Frame-accurate sequential access with a persistent capture.
+    """Frame-accurate access with a persistent capture, sequential where it can be.
 
     Seeking by frame number is unreliable in OpenCV for variable-frame-rate
     files (phone screen recordings, WhatsApp re-encodes): the target index is
     converted to a timestamp with the average rate and can land tens of
-    frames off. The reader therefore never seeks: forward reads grab through
-    the intermediate frames, backward reads reopen the file and grab from the
-    start. Combined with the on-disk JPEG cache every frame is decoded at
-    most a couple of times. Thread-safe via an internal lock.
+    frames off. The reader therefore grabs through the intermediate frames
+    for any jump under :data:`SEEK_OVER_FRAMES`, and reopens the file and
+    grabs from the start for a short jump backwards, which is exact. Only a
+    jump longer than that seeks -- to :data:`SEEK_LEAD` frames before the
+    target, then in order the rest of the way -- because on a long clip the
+    alternative is tens of seconds a frame. A variable-rate clip long enough
+    to seek in can land off by a few frames on such a jump; the tracking
+    pipeline reads in order and is never affected. Combined with the on-disk
+    JPEG cache every frame is decoded at most a couple of times. Thread-safe
+    via an internal lock.
     """
 
-    def __init__(self, path: str | Path, info: VideoInfo | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        info: VideoInfo | None = None,
+        seek_over: int = SEEK_OVER_FRAMES,
+    ) -> None:
         self.path = str(path)
         self.info = info or probe_video(path)
+        self.seek_over = int(seek_over)
         self._cap: cv2.VideoCapture | None = None
         self._auto = False
         self._next_idx = 0
@@ -182,14 +207,31 @@ class VideoReader:
         """Index of the frame the next sequential read would return."""
         return self._next_idx
 
+    def _seek(self, cap: cv2.VideoCapture, idx: int) -> bool:
+        """Jump to shortly before ``idx``; False when the capture would not say where it landed."""
+        target = max(0, idx - SEEK_LEAD)
+        if not cap.set(cv2.CAP_PROP_POS_FRAMES, target):
+            return False
+        landed = int(round(cap.get(cv2.CAP_PROP_POS_FRAMES)))
+        if landed < 0 or landed > idx:
+            return False
+        self._next_idx = landed
+        return True
+
     def read(self, idx: int) -> np.ndarray | None:
         """Return frame ``idx`` in display orientation, or ``None`` past the end."""
         if idx < 0:
             return None
         with self._lock:
             if self._cap is not None and idx < self._next_idx:
-                self.close()
+                # Backwards: exact from the start when that is cheap, a seek
+                # when it is not.
+                if idx <= self.seek_over or not self._seek(self._cap, idx):
+                    self.close()
             cap = self._ensure_open()
+            if idx - self._next_idx > self.seek_over and not self._seek(cap, idx):
+                self.close()
+                cap = self._ensure_open()
             while self._next_idx < idx:
                 if not cap.grab():
                     self.close()

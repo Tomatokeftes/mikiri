@@ -117,6 +117,14 @@ from mikiri.tactics import tactics_summary, trends
 from mikiri.tracking import SIDE_FAR
 from mikiri.video import FrameCache, VideoInfo, VideoReader, fit_size, probe_video
 
+#: The frame cache is filled ahead only this far on opening a clip: eight
+#: minutes at 25 fps, which covers any clip a phone records and the start of
+#: a long one; the rest is cached as it is scrubbed. Past this a match
+#: broadcast turns into gigabytes of JPEGs the user never looks at.
+PREFETCH_MAX_FRAMES = 12000
+#: And never more than this many bytes of JPEG per opening, whatever the
+#: frame count says.
+PREFETCH_MAX_BYTES = 1_500_000_000
 #: The answer that takes the last one back; the queue's, not the chain's.
 ACTION_UNDO = "undo"
 #: How many answers a session keeps to take back. Nobody undoes fifty.
@@ -287,25 +295,34 @@ class ProjectSession:
         check_cancel: Callable[[], None] | None = None,
         progress: Callable[[float, str], None] | None = None,
     ) -> int:
-        """Decode the whole clip once (own capture) and fill the JPEG cache.
+        """Decode the clip once (own capture) and fill the JPEG cache, up to a budget.
 
         Also verifies the frame count: containers sometimes lie, so the count
-        and duration are corrected to what the decoder actually produced.
-        Returns the number of frames decoded.
+        and duration are corrected to what the decoder actually produced --
+        but only when the whole clip was decoded. The budget is what stops a
+        55-minute broadcast from turning into eight gigabytes of JPEGs before
+        the user has scrubbed anywhere; past it frames are cached as they
+        are asked for. Returns the number of frames decoded.
         """
         cache = self.frame_cache
         expected = max(self.info.n_frames, 1)
         n = 0
+        written = 0
+        complete = False
         with VideoReader(self.info.path, self.info) as reader:
             for idx, frame in reader.iter_all():
                 if check_cancel is not None:
                     check_cancel()
                 if not cache.has(idx):
-                    cache.put(idx, frame)
+                    written += len(cache.put(idx, frame))
                 n = idx + 1
                 if progress is not None and idx % 25 == 0:
                     progress(min(n / expected, 0.99), f"Caching frame {idx}")
-        if n > 0 and n != self.info.n_frames:
+                if n >= PREFETCH_MAX_FRAMES or written >= PREFETCH_MAX_BYTES:
+                    break
+            else:
+                complete = True
+        if complete and n > 0 and n != self.info.n_frames:
             with self.lock:
                 self.info.n_frames = n
                 self.info.duration_s = n / self.info.fps if self.info.fps > 0 else 0.0

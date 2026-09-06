@@ -129,6 +129,22 @@
       "note": "Twelve minutes and 228 MB, so tests use a prefix rather than the whole thing; the first 3600 frames give 7 stretches at a 10.5 s median and are enough to pin the behaviour."
     },
     {
+      "id": "momota_lindan_broadcast",
+      "file": "YTDown.com_YouTube_QF-MS-Kento-MOMOTA-JPN-3-vs-LIN-Dan-CHN-_Media_iGDcBeztMHY_001_1080p.mp4",
+      "title": "Kento Momota v Lin Dan, quarter-final, a full broadcast (55 minutes)",
+      "source": "Broadcast footage from YouTube, added by the user on 2026-09-06. Third party: kept locally, never committed or redistributed.",
+      "view": "broadcast production: the main camera raised behind one end, with cuts to replays, close-ups, the crowd and graphics",
+      "resolution": "1920x1080",
+      "fps": 25.0,
+      "frames": 82025,
+      "duration_s": 3281.0,
+      "edited": false,
+      "guards": [
+        "random access stays under a quarter of a second anywhere in the clip: reading frame 40000 in order took twenty seconds and a step backwards a minute, which is the black viewer the reader's seek exists to prevent"
+      ],
+      "note": "The first full match with a real broadcast's cuts, replays and adverts, which the not-badminton path of the segmenter had never met, and 785 MB, so nothing here decodes the whole of it: the reader test seeks, and the frame cache fills ahead only to its budget. Not yet run through segmentation, tracking or the chain."
+    },
+    {
       "id": "side_on_smash",
       "file": "VID_20260616_073553_226.mp4",
       "title": "Side-on jump smash, portrait",
