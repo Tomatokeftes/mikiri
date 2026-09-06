@@ -22,6 +22,18 @@ python -m playwright install chromium
 mikiri
 ```
 
+The editable install points at the main checkout, so `mikiri` or
+`python -m mikiri` run inside a worktree serves *main's* code, not the
+branch. To run the branch's own code, from the checkout's root:
+
+```bash
+python scripts/devserver.py 8766
+```
+
+That is what `.claude/launch.json` runs for the desktop app's Browser pane
+(`preview_start` with the `mikiri` configuration), and it is tracked, so
+every worktree has it.
+
 ## Proving it still works
 
 ```bash
