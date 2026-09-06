@@ -298,3 +298,59 @@ def test_scanning_reports_motion_only_where_the_picture_changed():
     moving = scan.motion[7:12]
     assert np.nanmax(still) < np.nanmin(moving)
     assert np.isnan(scan.motion[0])
+
+
+class _CountingReader:
+    """Blank frames with a moving square, counting how many were decoded."""
+
+    def __init__(self, n: int):
+        self.n = n
+        self.decoded = 0
+        self.info = SimpleNamespace(fps=FPS, n_frames=n, width=64, height=48)
+
+    def iter_range(self, start, end):
+        for idx in range(int(start), min(int(end), self.n - 1) + 1):
+            self.decoded += 1
+            frame = np.zeros((48, 64, 3), dtype=np.uint8)
+            x = (idx * 3) % 56
+            frame[20:28, x : x + 8] = 200
+            yield idx, frame
+
+
+def test_a_cancel_during_the_scan_stops_it_within_a_few_dozen_frames():
+    """Guards a cancel pressed during the scan of a long clip waiting for the whole decode."""
+    from mikiri.jobs import JobCancelledError
+
+    calls = {"n": 0}
+
+    def check_cancel():
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            raise JobCancelledError()
+
+    reader = _CountingReader(2000)
+    seen = []
+    try:
+        scan_motion(
+            reader, 0, 1999, check_cancel=check_cancel, progress=lambda f, m: seen.append(f)
+        )
+    except JobCancelledError:
+        pass
+    else:
+        raise AssertionError("the scan ran to the end through a cancel")
+    assert reader.decoded < 200, reader.decoded
+    assert seen and all(0.0 <= f < 0.2 for f in seen)
+
+
+def test_a_saved_scan_loads_back_equal_and_a_missing_one_is_none(tmp_path):
+    from mikiri.segments import load_scan, save_scan
+
+    scan = scan_motion(_CountingReader(90), 0, 89)
+    path = tmp_path / "scan.npz"
+    save_scan(path, scan)
+    back = load_scan(path)
+    assert back is not None
+    assert np.array_equal(back.motion, scan.motion, equal_nan=True)
+    assert np.array_equal(back.signature, scan.signature, equal_nan=True)
+    assert back.start == scan.start and back.fps == scan.fps
+    assert load_scan(tmp_path / "nothing.npz") is None

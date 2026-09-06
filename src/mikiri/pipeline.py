@@ -20,9 +20,12 @@ from mikiri.keypoints import N_KEYPOINTS
 from mikiri.paths import cache_dir
 from mikiri.pose.base import PoseBackend, get_backend
 from mikiri.segments import (
+    SCAN_LONGEST,
     STATE_IDLE,
     STATE_INTERVAL,
     STATE_NOT_BADMINTON,
+    load_scan,
+    save_scan,
     scan_motion,
     segment_clip,
 )
@@ -224,6 +227,16 @@ def pose_cache_path(video_path: str | Path, req: RunRequest, bkey: str) -> Path:
     return video_cache_dir(video_path) / f"pose_{req.key(bkey)}.npz"
 
 
+def scan_cache_path(video_path: str | Path, start: int, end: int) -> Path:
+    """Where the motion scan of ``start..end`` is cached.
+
+    The scan depends on the clip and the range and on nothing the user can
+    change, so a second run over the same range -- the other player added,
+    a setting changed -- must not decode the clip again for it.
+    """
+    return video_cache_dir(video_path) / f"scan_{int(start)}_{int(end)}_{SCAN_LONGEST}.npz"
+
+
 def save_result(path: Path, result: TrackingResult) -> None:
     """Write a :class:`TrackingResult` as ``.npz``."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -356,7 +369,25 @@ def run_tracking(
     segment_runs: list[dict] = []
     if req.segment:
         progress(-1.0, "Scanning the clip for play")
-        seg = segment_clip(scan_motion(reader, req.start, req.end))
+        video_path = getattr(getattr(reader, "info", None), "path", None) or getattr(
+            reader, "path", None
+        )
+        scan_path = scan_cache_path(video_path, req.start, req.end) if video_path else None
+        scan = load_scan(scan_path) if scan_path is not None else None
+        if scan is None:
+            scan = scan_motion(
+                reader,
+                req.start,
+                req.end,
+                check_cancel=None if job is None else job.check_cancel,
+                progress=lambda f, m: progress(0.05 * f, m),
+            )
+            if scan_path is not None:
+                try:
+                    save_scan(scan_path, scan)
+                except OSError:
+                    pass  # a cache that cannot be written costs one more scan later
+        seg = segment_clip(scan)
         segments_summary = seg.summary()
         segment_runs = [x.to_dict() for x in seg.segments]
         skip_mask = seg.state_mask(STATE_NOT_BADMINTON)

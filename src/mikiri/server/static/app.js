@@ -799,9 +799,13 @@ function nextStep() {
   const court = st.court && st.court.image_points && st.court.image_points.length >= 4;
   const players = st.players || [];
   const q = st.review;
-  if (!st.has_pose) return { text: 'Set the in and out points, then run tracking on the player you want measured.', btn: 'Run tracking', act: openRunModal };
-  if (!court) return { text: 'Calibrate the court, four clicks on its corners, for footwork in metres, rallies and the match figures. Skip it for a clip that does not show the court.', btn: 'Court calibration', act: openCourtModal };
-  if (players.length < 2) return { text: 'Track the player at the other end too: that is what lets serves, outcomes and the score be read off the rally chain.', btn: 'Run tracking', act: openRunModal };
+  // The court comes first: with it, one tracking run follows everyone on
+  // it, and a second run to add the other player is a whole clip decoded
+  // and tracked again.
+  if (!court && !st.has_pose) return { text: 'Calibrate the court first: four clicks on its corners, then one tracking run follows everyone on it. Skip it for a clip that does not show the court.', btn: 'Court calibration', act: openCourtModal };
+  if (!st.has_pose) return { text: 'Set the in and out points, then run tracking; with the court in, tick the other end too.', btn: 'Run tracking', act: openRunModal };
+  if (!court) return { text: 'Calibrate the court, four clicks on its corners, for footwork in metres, rallies and the match figures.', btn: 'Court calibration', act: openCourtModal };
+  if (players.length < 2) return { text: 'Only one player was tracked. Run tracking again with the other end ticked for serves, outcomes and the score.', btn: 'Run tracking', act: openRunModal };
   if (q && q.n_open) return { text: `${q.n_open} question${q.n_open === 1 ? '' : 's'} the rally chain could not settle ${q.n_open === 1 ? 'is' : 'are'} waiting in Review; a keypress answers each.`, btn: 'Open Review', act: () => showSidePage('match') };
   if (!st.project_path) return { text: 'Save the project to keep this session; the next clip of the same player is read against it in Over time.', btn: 'Save', act: () => saveProject(false) };
   return null;

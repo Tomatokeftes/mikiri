@@ -240,6 +240,35 @@ Known gaps:
   not-badminton path has only ever met a title card, a lens occlusion and a
   run of black frames, never an actual advert or replay.
 
+## Feedback to act on
+
+From the user's first hands-on session with the tactical work (2026-09-06),
+in their words as far as possible; each is a real defect, not a preference:
+
+* **Cancelling is too slow, worst on long clips.** Partly fixed: the motion
+  scan before tracking now checks for cancel every forty frames and is
+  cached per clip and range, so a cancel during the scan of a 55-minute
+  clip no longer waits for the whole decode, and a second run does not
+  rescan. Still not interruptible: loading the pose models on the first
+  frame (several seconds) and the inference of one frame. The shuttle search
+  and the frame-cache fill check per frame already. Measure the time from
+  Cancel to the job reading cancelled on the broadcast clip before calling
+  this done.
+* **Far too much text.** Every panel carries a subtitle, most carry a note,
+  the Next line is two sentences, the Match panel ends in a paragraph, the
+  strokes and tactics notes are paragraphs, the review help is two
+  sentences. The user wants the numbers, not the explanations; move the
+  explanations behind hover titles or a single "what this means" toggle and
+  leave one short line where a withholding has to be stated.
+* **Choose everyone before one run.** A run tracks the subject alone or the
+  subject plus the other end (or both pairs), and the pose cache is keyed by
+  the player count, so a subject-only run followed by a both-players run
+  decodes and tracks the clip twice. The Next line now puts the court
+  before the first run so one run can follow everyone; the remaining gap is
+  reusing a subject-only track when the other player is added, and letting
+  the user pick each person to track in the run dialog rather than "the
+  largest on the other side".
+
 ## Where it is going
 
 Mikiri is becoming two modules over one tracking run and one court

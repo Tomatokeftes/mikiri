@@ -88,8 +88,9 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         expect(page.locator("#video-info")).to_contain_text("30.000 fps")
         page.wait_for_timeout(600)
         page.screenshot(path=str(SCREENSHOTS / "01_loaded.png"))
-        # The next-step line walks a new user through the flow: tracking first.
-        expect(page.locator("#next-step")).to_contain_text("run tracking")
+        # The next-step line walks a new user through the flow: the court
+        # first, so one tracking run can follow everyone on it.
+        expect(page.locator("#next-step")).to_contain_text("Calibrate the court first")
         expect(page.locator("#side-tab-match")).to_have_class("side-tab empty")
 
         # Trim with the numeric inputs.

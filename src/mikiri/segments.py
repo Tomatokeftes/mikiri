@@ -93,7 +93,9 @@ appear later without the state set changing shape.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -430,6 +432,8 @@ def scan_motion(
     end: int | None = None,
     longest: int = SCAN_LONGEST,
     mask: np.ndarray | None = None,
+    check_cancel: Callable[[], None] | None = None,
+    progress: Callable[[float, str], None] | None = None,
 ) -> MotionScan:
     """Measure per-frame motion over a clip in one sequential pass.
 
@@ -445,6 +449,11 @@ def scan_motion(
         start: First frame to scan.
         end: Last frame, inclusive. ``None`` scans to the end of the video.
         longest: Longest side to scale frames to before comparing.
+        check_cancel: Called every few dozen frames; raising from it stops
+            the scan. Without it a cancel pressed during the scan of a long
+            clip waited for the whole clip to be decoded.
+        progress: Called with the fraction scanned and a message, at the same
+            cadence.
         mask: Optional boolean mask in *scaled* frame coordinates, True where
             pixels should be counted. Meant for restricting motion to the
             court in front of a moving crowd, and unused by the pipeline:
@@ -476,8 +485,13 @@ def scan_motion(
     for idx, frame in reader.iter_range(start, end):
         if idx < start or idx > end:
             continue
-        small, _ = downscale(frame, longest)
         i = idx - start
+        if i % 40 == 0:
+            if check_cancel is not None:
+                check_cancel()
+            if progress is not None:
+                progress(i / n, f"Scanning the clip for play ({idx})")
+        small, _ = downscale(frame, longest)
         signature[i] = scene_signature(small)
         if prev is not None and prev.shape == small.shape:
             diff = difference_map(small, prev)
@@ -488,6 +502,38 @@ def scan_motion(
                     changed[i] = float(np.count_nonzero(flat > CHANGED_DELTA) / flat.size)
         prev = small
     return MotionScan(motion=motion, changed=changed, signature=signature, start=start, fps=fps)
+
+
+def save_scan(path: str | Path, scan: MotionScan) -> None:
+    """Keep a scan on disk: it costs a decode of the whole clip and depends on nothing else."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        p,
+        motion=scan.motion,
+        changed=scan.changed,
+        signature=scan.signature,
+        start=np.array([scan.start]),
+        fps=np.array([scan.fps]),
+    )
+
+
+def load_scan(path: str | Path) -> MotionScan | None:
+    """A scan saved by :func:`save_scan`, or ``None`` when there is none to load."""
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        z = np.load(p)
+        return MotionScan(
+            motion=z["motion"],
+            changed=z["changed"],
+            signature=z["signature"],
+            start=int(z["start"][0]),
+            fps=float(z["fps"][0]),
+        )
+    except (OSError, ValueError, KeyError):
+        return None
 
 
 def _court_shots(shots: list[tuple[int, int]], signature: np.ndarray) -> list[bool]:
