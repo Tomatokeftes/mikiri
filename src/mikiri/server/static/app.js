@@ -1260,7 +1260,7 @@ function renderStrokes() {
   const dist = (obj) => Object.entries(obj || {}).map(([k, v]) => `${k} ${v}`).join(', ');
   const rows = [kv('contacts', String(sum.n_strokes ?? sv.strokes.length))];
   if (sum.by_height) rows.push(kv('contact height', dist(sum.by_height)));
-  if (sum.by_side) rows.push(kv('side', dist(sum.by_side)));
+  if (sum.by_side) rows.push(kv('side', dist(sum.by_side) + ' <span class="muted small-text">(unvalidated)</span>'));
   if (sum.by_zone) rows.push(kv('from', dist(sum.by_zone)));
   if (sum.n_rallies) rows.push(kv('rallies', `${sum.n_rallies}, mean ${sum.mean_rally_s ?? '-'} s`));
   if (sum.peak_racket_speed_bh) rows.push(kv('racket speed', `peak ${sum.peak_racket_speed_bh}, mean ${sum.mean_racket_speed_bh} body heights/s`));
@@ -1272,8 +1272,9 @@ function renderStrokes() {
   const ev = sv.strokes.map((x) => x.evidence || '');
   const named = sv.strokes.filter((x) => x.shot).length;
   const searched = ev.some((e) => !e.startsWith('no shuttle evidence'));
+  const sideCaution = 'Forehand and backhand are unvalidated: on the one match clip checked they came out 90% forehand.';
   if (!searched) {
-    $('#strokes-note').textContent = 'No shot named: a name needs the shuttle. Press Find shuttle.';
+    $('#strokes-note').textContent = 'No shot named: a name needs the shuttle. Press Find shuttle. ' + sideCaution;
     $('#strokes-explain').textContent = 'Find shuttle looks for it in the frames after each contact. Until it does, these are descriptions of the swing rather than shot types.';
   } else {
     $('#strokes-explain').textContent = "A name needs the shuttle's own path out of the contact, and a side-on view to read it from.";
@@ -1291,6 +1292,7 @@ function renderStrokes() {
     if (other > 0) why.push(`${other} whose launch fits no shot the shuttle alone can prove`);
     if (why.length) parts.push('Not named: ' + why.join('; ') + '.');
     parts.push('A recovered launch is not evidence the shuttle was found: on the one clip these have been checked against, the detections sat on the player.');
+    parts.push(sideCaution);
     $('#strokes-note').textContent = parts.join(' ');
   }
 

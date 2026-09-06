@@ -10,8 +10,8 @@ the shuttle trajectory alone out-performs the whole body pose.
 
 So this module reports two tiers and never blurs them.
 
-**The descriptor** is always produced and is close to always right, because
-each axis is a coarse geometric fact about the body at contact:
+**The descriptor** is always produced, from three coarse geometric facts
+about the body at contact:
 
 * contact height -- overhead, sidearm or underarm, from the wrist against the
   shoulder and hip;
@@ -19,8 +19,26 @@ each axis is a coarse geometric fact about the body at contact:
   torso midline, which needs no knowledge of which way the player faces;
 * court zone -- rear, mid or front, from the homography-projected feet.
 
-That yields "overhead forehand from the rearcourt": a true statement, useful
-for coaching, and free of invented precision.
+That yields "overhead forehand from the rearcourt": free of invented
+precision, and until 2026-09-06 described here as close to always right.
+
+**The side axis is not, and this is measured.** On game one of the Momota v
+Lin Dan broadcast it calls 211 of 242 near contacts and 242 of 268 far
+contacts *forehand* -- around 90% each, which no singles match looks like, and
+a strip of one rally's contacts shows postures a person calls backhand at a
+glance labelled forehand. The measure saturates: the median contact has the
+wrist more than two half-shoulder-widths from the midline, so the sign is set
+by which way the arm is reaching rather than by whether it crossed the body,
+and the normalisation explodes when the shoulder line is foreshortened -- 37%
+of near contacts have under 0.15 body heights between the shoulders, and one
+reaches 222. It has never been checked against a human's call on any real
+clip, and the 90% is the first check it has faced. Treat the side as
+unvalidated until it has been; the height and the zone are not implicated.
+
+Some of that is the contacts rather than the axis. The same strip shows
+several "contacts" where the player is running, not hitting, which the
+detection bar lets through (see :data:`MIN_PEAK_SPEED_BH`), and a descriptor
+of a moment that is not a hit describes nothing.
 
 **The shot name** (smash, clear, drop, ...) is only attached when there is
 evidence for it beyond the body, which in practice means the shuttle's launch

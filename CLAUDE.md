@@ -177,6 +177,23 @@ Not verified, and the module docstrings say so:
 
 * The split-step detector against hand-labelled frames. It finds a two-footed
   rise before a move, which is a split step *or* a recovery push-off.
+* **The stroke descriptor's forehand/backhand axis is wrong on this footage,
+  and the contact bar still lets non-contacts through.** Two defects the user
+  found by watching the showcase clip, both measured afterwards. On game one
+  the side comes out *forehand* for 211 of 242 near and 242 of 268 far
+  contacts -- about 90% each, which no singles match looks like -- and a strip
+  of one rally's contacts shows postures anyone calls backhand labelled
+  forehand. The measure saturates: the median contact has the wrist more than
+  two half-shoulder-widths from the midline, so the sign follows the direction
+  the arm is reaching rather than whether it crossed the body, and the
+  normalisation explodes when the shoulders are foreshortened (37% of near
+  contacts under 0.15 body heights between them; one value reaches 222). The
+  same strip shows several "contacts" where the player is running, which is
+  `MIN_PEAK_SPEED_BH` being a club-footage bar as already noted. Height and
+  zone are not implicated. Both are now stated in `strokes.py`, in the Strokes
+  panel and by their absence from the showcase clip; fixing either needs
+  hand-labelled contacts on a broadcast rally, which is the same blocker as
+  the detection bar.
 * **The shuttle search has still never recovered a launch from real footage,
   and on this broadcast it fails confidently, which is worse than failing.**
   It *returns* launches here where it returned none anywhere else: 33 of 36
