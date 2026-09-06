@@ -177,8 +177,25 @@ Not verified, and the module docstrings say so:
 
 * The split-step detector against hand-labelled frames. It finds a two-footed
   rise before a move, which is a split step *or* a recovery push-off.
-* The shuttle search has never recovered a launch from real footage, so shot
-  naming has not been exercised end to end on a real clip.
+* **The shuttle search has still never recovered a launch from real footage,
+  and on this broadcast it fails confidently, which is worse than failing.**
+  It *returns* launches here where it returned none anywhere else: 33 of 36
+  contacts across two long rallies, three to eight detections each,
+  confidences up to 0.76. Every one of them was then cropped at full
+  resolution and looked at, and the detections sit on the player -- a shoe, a
+  thigh, a hip, the back of a head, the racket frame -- and never on the
+  shuttle. Near the racket head, where the search looks, the largest thing
+  that differs from the background plate is the player's own body, and the
+  size, speed and straightness gates do not throw it out at this scale. The
+  confidence does not separate the false flights from anything, so nothing
+  downstream can filter them.
+  This was found by drawing them: the overlay is what made it visible, and a
+  count of recovered launches is what hid it. **Do not read `n_points` or a
+  launch confidence as evidence that the shuttle was found.** Anything a
+  launch feeds -- a shot name, a launch speed, an elevation -- is unsafe on
+  this footage until the search is fixed or gated, and the one contact
+  `shots.py` names of 223 is suspect for the same reason. The contact sheet
+  is in the 2026-09-06 session.
 
 Known gaps:
 

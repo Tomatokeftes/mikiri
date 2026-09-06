@@ -22,7 +22,11 @@ const S = {
   series: new Set(DEFAULT_SERIES), plots: [],
   compare: null, calibPick: null, courtPick: null, settings: null, suggestions: null,
   timelineDrag: null, selectFrame: null, selectPeople: [],
-  sidePage: 'movement', hideStepFor: null, showShuttle: true,
+  sidePage: 'movement', hideStepFor: null,
+  // Off by default: what the search returns has been checked once and was
+  // the player, not the shuttle, so it is a thing to inspect rather than a
+  // thing to leave on. See docs/shuttle.md.
+  showShuttle: false,
   // The court map shows one rally by default: patterns live inside a rally,
   // and the whole clip is the average of thirty of them.
   courtScope: 'rally', showHeat: true, showPath: true, heat: null, poseKey: '',
@@ -159,31 +163,42 @@ function fitCanvas(canvas, wrap, vw, vh) {
   return { w, h, scale: w / vw, dpr };
 }
 
-//: How many frames of shuttle stay on screen behind the current one. A fifth
-//: of a second at 25 fps: long enough to read the direction off the trail,
-//: short enough that it never becomes a line across the picture.
-const SHUTTLE_TRAIL = 5;
+//: How many frames of a shuttle flight stay on screen. Half a second at 25
+//: fps, which is about as long as the search recovers a flight for, so a hit
+//: is drawn whole and then fades rather than blinking on and off.
+const SHUTTLE_TRAIL = 12;
 
-// The shuttle where the search actually saw it, with the last few sightings
-// fading out behind it. Nothing is drawn between sightings and nothing is
-// interpolated: the search skips frames it found nothing on, and a smooth
-// curve through the gaps would be a drawing of a shuttle rather than a
-// measurement of one.
+// The shuttle where the search actually saw it, as a line that fades out
+// behind the ball. Two rules it follows and would be wrong without: the line
+// is drawn *within* one flight and never between two, because joining one
+// player's hit to the other's draws a path the shuttle never took; and
+// nothing is interpolated across a frame the search missed, because a smooth
+// curve through a gap is a drawing of a shuttle rather than a measurement of
+// one.
 function drawShuttle(ctx, scale) {
-  const pts = (S.pose && S.pose.shuttle) || [];
-  if (!pts.length) return;
-  const lo = S.frame - SHUTTLE_TRAIL;
-  const seen = pts.filter((p) => p[0] > lo && p[0] <= S.frame);
-  if (!seen.length) return;
+  const flights = (S.pose && S.pose.shuttle) || [];
+  if (!flights.length) return;
   const r = Math.max(2.5, scale * S.state.video.width / 320);
-  for (const [f, x, y] of seen) {
-    const age = (S.frame - f) / (SHUTTLE_TRAIL + 1);
-    const fade = 1 - age;
-    ctx.beginPath();
-    ctx.arc(x * scale, y * scale, r * (0.45 + 0.55 * fade), 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255,255,255,${(0.25 + 0.75 * fade).toFixed(3)})`;
-    ctx.fill();
-    if (age === 0) {
+  ctx.lineCap = 'round';
+  for (const flight of flights) {
+    const seen = flight.filter((p) => p[0] > S.frame - SHUTTLE_TRAIL && p[0] <= S.frame);
+    if (seen.length < 1) continue;
+    for (let k = 0; k < seen.length - 1; k++) {
+      const age = (S.frame - seen[k + 1][0]) / SHUTTLE_TRAIL;
+      const fade = Math.pow(1 - age, 1.6);
+      ctx.beginPath();
+      ctx.moveTo(seen[k][1] * scale, seen[k][2] * scale);
+      ctx.lineTo(seen[k + 1][1] * scale, seen[k + 1][2] * scale);
+      ctx.strokeStyle = `rgba(250,252,255,${(0.95 * fade).toFixed(3)})`;
+      ctx.lineWidth = Math.max(1, r * 0.9 * (1 - age));
+      ctx.stroke();
+    }
+    const last = seen[seen.length - 1];
+    if (last[0] === S.frame) {
+      ctx.beginPath();
+      ctx.arc(last[1] * scale, last[2] * scale, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.98)';
+      ctx.fill();
       ctx.lineWidth = Math.max(1, r * 0.4);
       ctx.strokeStyle = 'rgba(255,210,60,0.95)';
       ctx.stroke();
@@ -1275,6 +1290,7 @@ function renderStrokes() {
     if (noLaunch) why.push(`${noLaunch} with no launch found`);
     if (other > 0) why.push(`${other} whose launch fits no shot the shuttle alone can prove`);
     if (why.length) parts.push('Not named: ' + why.join('; ') + '.');
+    parts.push('A recovered launch is not evidence the shuttle was found: on the one clip these have been checked against, the detections sat on the player.');
     $('#strokes-note').textContent = parts.join(' ');
   }
 
@@ -1702,14 +1718,28 @@ function courtRangeLabel(lo, hi) {
   return i >= 0 ? `rally ${i + 1} of ${bouts.length}, ${secs} s` : `the whole clip, ${secs} s`;
 }
 
+// How far into the shown range the playhead has got. A rally is drawn as it
+// was played -- up to here and no further -- because a map that arrives
+// finished on the first frame of a rally is showing what has not happened yet.
+function courtUpto(lo, hi) {
+  if (S.courtScope !== 'rally') return hi;
+  return Math.min(hi, Math.max(lo, poseIndex(S.frame)));
+}
+
 // Visits per cell, coloured cold to hot. Cached: it depends on the track, the
 // range and the canvas size and on nothing that changes as the video plays.
 function heatLayer(tracks, lo, hi, W, Hh, P, scale) {
-  const key = [S.pid, S.poseKey || '', tracks.length, lo, hi, W, Hh].join(':');
+  // A rally is shown as it was played: only up to where the playhead is, and
+  // against the peak the *finished* rally reaches, so the map reddens as the
+  // rally goes on. Normalising against the peak so far would make the first
+  // two positions of a rally as hot as the base position at the end of it.
+  const upto = courtUpto(lo, hi);
+  const key = [S.pid, S.poseKey || '', tracks.length, lo, hi, upto, W, Hh].join(':');
   if (S.heat && S.heat.key === key) return S.heat.canvas;
   const cell = Math.max(2, HEAT_CELL_M * scale);
   const gw = Math.ceil(W / cell), gh = Math.ceil(Hh / cell);
   const counts = new Float32Array(gw * gh);
+  const full = new Float32Array(gw * gh);
   for (const pos of tracks) {
     for (let k = lo; k <= hi && k < pos.length; k++) {
       const p = pos[k];
@@ -1717,10 +1747,11 @@ function heatLayer(tracks, lo, hi, W, Hh, P, scale) {
       const [x, y] = P(p[0], p[1]);
       const cx = Math.floor(x / cell), cy = Math.floor(y / cell);
       if (cx < 0 || cy < 0 || cx >= gw || cy >= gh) continue;
-      counts[cy * gw + cx] += 1;
+      full[cy * gw + cx] += 1;
+      if (k <= upto) counts[cy * gw + cx] += 1;
     }
   }
-  const seen = counts.filter((v) => v > 0).sort((a, b) => a - b);
+  const seen = full.filter((v) => v > 0).sort((a, b) => a - b);
   const peak = seen.length ? seen[Math.min(seen.length - 1, Math.floor(seen.length * HEAT_PEAK_PERCENTILE))] : 1;
   const off = document.createElement('canvas');
   off.width = W; off.height = Hh;
@@ -1788,6 +1819,7 @@ function renderCourt() {
   ctx.strokeStyle = '#222'; ctx.lineWidth = 2.5; line(-0.3, meta.net_y, meta.width + 0.3, meta.net_y);
   const pos = S.pose && S.pose.positions;
   const [lo, hi] = courtRange();
+  const upto = courtUpto(lo, hi);
   if (pos) {
     if (S.showHeat !== false) {
       const tracks = [pos, ...((S.pose.others || []).map((o) => o.positions).filter(Boolean))];
@@ -1798,7 +1830,7 @@ function renderCourt() {
       ctx.strokeStyle = `rgba(255,255,255,${n > 3000 ? 0.16 : n > 1200 ? 0.3 : 0.6})`;
       ctx.lineWidth = n > 1200 ? 0.7 : 1.2;
       ctx.beginPath(); let pen = false;
-      for (let k = lo; k <= hi && k < pos.length; k++) { const p = pos[k]; if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
+      for (let k = lo; k <= upto && k < pos.length; k++) { const p = pos[k]; if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
       ctx.stroke();
     }
     const i = poseIndex(S.frame);
@@ -1817,7 +1849,7 @@ function renderCourt() {
       const n = hi - lo + 1;
       ctx.strokeStyle = `rgba(215,219,227,${n > 3000 ? 0.12 : n > 1200 ? 0.22 : 0.45})`;
       ctx.lineWidth = 0.7; ctx.beginPath(); let pen = false;
-      for (let k = lo; k <= hi && k < o.positions.length; k++) { const p = o.positions[k]; if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
+      for (let k = lo; k <= upto && k < o.positions.length; k++) { const p = o.positions[k]; if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
       ctx.stroke();
     }
     const i = poseIndex(S.frame);

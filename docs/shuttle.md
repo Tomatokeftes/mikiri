@@ -115,3 +115,37 @@ re-run. The general tracker costs roughly a quarter of a second per frame on a
 That is the expected outcome on many clips, and it is reported as such. The
 strokes keep their descriptors, the panel says so, and nothing is invented.
 See [strokes.md](strokes.md) for what the descriptor alone is worth.
+
+## When it finds something, and that is worse
+
+Until the Momota v Lin Dan broadcast this module had found nothing on real
+footage at all. On that clip it finds plenty, and every one of them is wrong.
+
+On two long rallies of game one it returns a launch after **33 of 36
+contacts**, three to eight detections each, confidences up to 0.76, and the
+same 33 come back whether the background plate is built over the rally or over
+the whole trimmed game. That reads exactly like the search finally working on
+the footage it always needed, and it was written up as such before anyone
+looked at it.
+
+Every detection of the four longest flights was then cropped from the
+full-resolution frame. The ring sits on **the player**: a shoe, a thigh, a hip,
+the back of a head, the frame of the racket. Never the shuttle. The reason is
+structural rather than a threshold being a little off. The search looks in a
+window around the racket head just after a contact, and inside that window the
+largest thing differing from the static plate is the player's own arm, torso
+and legs -- moving fast, and roughly straight for the few frames the tracklet
+needs. The size, speed and straightness gates were designed to keep a small
+fast object; they do not throw out a large fast one at this scale.
+
+Three things follow, and they matter more than the failure:
+
+* **A count of recovered launches is not evidence the shuttle was found**, and
+  nor is a launch confidence. These reach 0.76 on flights that are a man's leg.
+  There is nothing in the number for a caller to filter on.
+* **Anything a launch feeds is unsafe on this footage**: a shot name, a launch
+  speed, an elevation. `shots.py` names one contact of 223 here, and that one
+  is suspect for the same reason.
+* **It was found by drawing it.** A number said 33 of 36 and looked like
+  success; putting the detections on the picture made the failure obvious in a
+  single frame. Check this module by looking at it before believing it.

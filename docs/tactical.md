@@ -210,11 +210,15 @@ shuttle and no classifier. It needs two tracked people and a homography.
 Three sources of evidence, taken in order, with the source recorded on every
 shot:
 
-1. **Shuttle launch**, where `shuttle.py` recovers one. This is the existing
-   `shots.py` path and remains the strongest evidence. It is also gated to a
-   side-on camera, which the tactical filming position is not, so in practice
-   it will rarely fire on tactical clips -- and it has never yet recovered a
-   launch from real footage at all.
+1. **Shuttle launch**, where `shuttle.py` recovers one. In principle the
+   strongest evidence, and in practice not yet evidence at all: the search
+   has never recovered a real launch from real footage, and on the Momota v
+   Lin Dan broadcast it does something worse than find nothing. It returns
+   launches after 33 of 36 contacts, and every one of them, cropped at full
+   resolution and looked at, sits on the player -- a shoe, a thigh, a hip,
+   the back of a head -- rather than on the shuttle. Treat this source as
+   unavailable until that is fixed; the count of recovered launches is not
+   evidence that any were found. See `docs/shuttle.md`.
 2. **A per-player learned classifier**, trained on that player's own answers
    from the review queue. The cross-player argument against pose-only
    classification -- that smash, clear and drop share overhead kinematics and
