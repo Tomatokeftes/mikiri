@@ -16,6 +16,7 @@
   <button id="save-btn" class="btn" disabled>Save</button>
   <button id="export-btn" class="btn" disabled>Export pack</button>
   <button id="compare-btn" class="btn" disabled>Compare</button>
+  <button id="explain-btn" class="btn" title="Show the sentence under each panel title and each withheld number">What this means</button>
   <button id="keys-btn" class="btn" title="Keyboard shortcuts (?)">Keys</button>
   <button id="settings-btn" class="btn">Settings</button>
 </header>
@@ -94,6 +95,7 @@
       <div id="next-step" class="next-step hidden">
         <span class="next-label">Next</span>
         <span id="next-step-text"></span>
+        <span class="muted small-text explain" id="next-step-why"></span>
         <button class="btn small primary" id="next-step-btn"></button>
         <button class="btn small" id="next-step-dismiss" title="Hide this for this project">Hide</button>
       </div>
@@ -132,7 +134,7 @@
       </div>
       <div class="tab-page" data-page="movement">
       <div class="panel">
-        <div class="panel-title">Events <span class="muted small-text">(mark on the current frame)</span>
+        <div class="panel-title" title="(mark on the current frame)">Events <span class="muted small-text explain">(mark on the current frame)</span>
           <span class="spacer"></span>
           <label class="small-text">Movement <select id="movement"></select></label>
         </div>
@@ -149,26 +151,27 @@
         <div id="metrics" class="metrics"></div>
       </div>
       <div class="panel" id="assessment-panel">
-        <div class="panel-title">Assessment <span class="muted small-text" id="assessment-sub">against the movement's reference bands</span></div>
+        <div class="panel-title" title="against the movement's reference bands">Assessment <span class="muted small-text explain" id="assessment-sub">against the movement's reference bands</span></div>
         <table id="assessment-table" class="assessment"></table>
         <div id="assessment-cues" class="muted small-text"></div>
       </div>
       <div id="camera-view" class="view-badge"></div>
       <div class="panel hidden" id="court-panel">
-        <div class="panel-title">Court <span class="muted small-text" id="court-sub">footwork in court metres</span></div>
+        <div class="panel-title" title="footwork in court metres">Court <span class="muted small-text explain" id="court-sub">footwork in court metres</span></div>
         <div class="court-row">
           <canvas id="court-canvas"></canvas>
           <div id="footwork-metrics" class="footwork"></div>
         </div>
       </div>
       <div class="panel hidden" id="rally-panel">
-        <div class="panel-title">Rallies <span class="muted small-text" id="rally-sub">bouts of play; click one to seek</span></div>
+        <div class="panel-title" title="bouts of play; click one to seek">Rallies <span class="muted small-text explain" id="rally-sub">bouts of play; click one to seek</span></div>
         <div id="rally-summary" class="footwork"></div>
         <ul id="rally-list" class="events-list"></ul>
         <p class="muted small-text" id="rally-note"></p>
+        <p class="muted small-text explain" id="rally-explain"></p>
       </div>
       <div class="panel hidden" id="coaching-panel">
-        <div class="panel-title">Coaching <span class="muted small-text">what the numbers suggest working on</span>
+        <div class="panel-title" title="what the numbers suggest working on">Coaching <span class="muted small-text explain">what the numbers suggest working on</span>
           <span class="spacer"></span>
           <label class="small-text">Level <select id="coach-level">
             <option value="beginner">beginner</option>
@@ -180,7 +183,7 @@
         <div id="coaching-list"></div>
       </div>
       <div class="panel">
-        <div class="panel-title">Angles <span class="muted small-text">image-plane, degrees; click a plot to seek</span>
+        <div class="panel-title" title="image-plane, degrees; click a plot to seek">Angles <span class="muted small-text explain">image-plane, degrees; click a plot to seek</span>
           <span class="spacer"></span>
           <button class="btn small" id="calib-btn">Scale calibration</button>
           <button class="btn small" id="court-btn">Court calibration</button>
@@ -196,47 +199,53 @@
         <p id="review-question"></p>
         <p class="muted small-text" id="review-detail"></p>
         <div id="review-options"></div>
-        <p class="muted small-text" id="review-help">Press the number to answer, or <b>d</b> to leave this one. The video is at the frame in question; for "at the frame I am on", scrub to the hit first.</p>
+        <p class="muted small-text" id="review-help"></p>
+        <p class="muted small-text explain" id="review-explain"></p>
         <div id="classifier-report" class="muted small-text"></div>
       </div>
       <div class="panel hidden" id="match-panel">
-        <div class="panel-title">Match <span class="muted small-text" id="match-sub">serves, outcomes and score from the rally chain; click one to seek</span></div>
+        <div class="panel-title" title="serves, outcomes and score from the rally chain; click one to seek">Match <span class="muted small-text explain" id="match-sub">serves, outcomes and score from the rally chain; click one to seek</span></div>
         <div id="match-summary" class="footwork"></div>
         <ul id="match-list" class="events-list"></ul>
         <p class="muted small-text" id="match-note"></p>
+        <p class="muted small-text explain" id="match-explain"></p>
         <ul id="match-issues" class="events-list"></ul>
       </div>
       <div class="panel hidden" id="strokes-panel">
-        <div class="panel-title">Strokes <span class="muted small-text" id="strokes-sub">detected contacts; click one to seek</span>
+        <div class="panel-title" title="detected contacts; click one to seek">Strokes <span class="muted small-text explain" id="strokes-sub">detected contacts; click one to seek</span>
           <span class="spacer"></span>
           <button class="btn small" id="shuttle-btn" title="Look for the shuttle just after each contact, which is what lets a shot be named">Find shuttle</button>
         </div>
         <div id="strokes-summary" class="footwork"></div>
         <ul id="strokes-list" class="events-list"></ul>
         <p class="muted small-text" id="strokes-note"></p>
+        <p class="muted small-text explain" id="strokes-explain"></p>
       </div>
       <div class="panel hidden" id="tactics-panel">
-        <div class="panel-title">Tactics <span class="muted small-text">what each side played and whether it worked; every figure carries how it was known</span></div>
+        <div class="panel-title" title="what each side played and whether it worked; every figure carries how it was known">Tactics <span class="muted small-text explain">what each side played and whether it worked; every figure carries how it was known</span></div>
         <div id="tactics-rallies" class="footwork"></div>
         <div id="tactics-sides"></div>
         <p class="muted small-text" id="tactics-note"></p>
+        <p class="muted small-text explain" id="tactics-explain"></p>
       </div>
       <div class="panel hidden" id="doubles-panel">
-        <div class="panel-title">Formation <span class="muted small-text">the shape each pair holds, and whether it fits the shot the pair just played</span></div>
+        <div class="panel-title" title="the shape each pair holds, and whether it fits the shot the pair just played">Formation <span class="muted small-text explain">the shape each pair holds, and whether it fits the shot the pair just played</span></div>
         <div id="doubles-sides"></div>
         <p class="muted small-text" id="doubles-note"></p>
+        <p class="muted small-text explain" id="doubles-explain"></p>
       </div>
         <p class="muted small-text tab-empty" id="match-empty">Nothing here yet. Contacts appear once the clip is tracked and the court calibrated; serves, outcomes and the score need the player at the other end tracked too (Run tracking, tick the other end).</p>
       </div>
       <div class="tab-page hidden" data-page="time">
       <div class="panel hidden" id="trends-panel">
-        <div class="panel-title">Over time <span class="muted small-text">against the same player's kept sessions; saving the project keeps a session</span>
+        <div class="panel-title" title="against the same player's kept sessions; saving the project keeps a session">Over time <span class="muted small-text explain">against the same player's kept sessions; saving the project keeps a session</span>
           <span class="spacer"></span>
           <label class="small-text">Player <input id="player" type="text" placeholder="you" size="12"></label>
         </div>
         <div id="trends-sessions" class="footwork"></div>
         <div id="trends-metrics" class="footwork"></div>
         <p class="muted small-text" id="trends-note"></p>
+        <p class="muted small-text explain" id="trends-explain"></p>
       </div>
         <p class="muted small-text tab-empty" id="time-empty">Nothing here yet. Track the clip and save the project: a saved session is kept, and the next clip of the same player is read against it here.</p>
       </div>

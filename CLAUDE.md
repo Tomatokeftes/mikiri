@@ -258,12 +258,16 @@ in their words as far as possible; each is a real defect, not a preference:
   and the frame-cache fill check per frame already. Measure the time from
   Cancel to the job reading cancelled on the broadcast clip before calling
   this done.
-* **Far too much text.** Every panel carries a subtitle, most carry a note,
-  the Next line is two sentences, the Match panel ends in a paragraph, the
-  strokes and tactics notes are paragraphs, the review help is two
-  sentences. The user wants the numbers, not the explanations; move the
-  explanations behind hover titles or a single "what this means" toggle and
-  leave one short line where a withholding has to be stated.
+* **Far too much text.** Done. Every sentence in a panel was sorted into
+  one of two kinds: what a measurement refuses to say, which stays on the
+  page always, and what merely explains how a number was reached, which
+  carries the class `explain`, sits on the element's `title` for a hover,
+  and is hidden until the one "What this means" button in the header turns
+  the lot on. Eleven panel subtitles, the Match, Formation, Rallies,
+  Strokes, Tactics and Over time paragraphs, both review help lines and
+  every line of the Next step went through that sort. When adding a
+  sentence to a panel, decide which kind it is; a withholding that hides is
+  the regression this was built to avoid.
 * **Choose everyone before one run.** A run tracks the subject alone or the
   subject plus the other end (or both pairs), and the pose cache is keyed by
   the player count, so a subject-only run followed by a both-players run

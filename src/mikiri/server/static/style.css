@@ -88,6 +88,16 @@ canvas#video-canvas, canvas#compare-canvas { display: block; max-width: 100%; ma
 .panel-title { font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* A long subtitle drops to its own line rather than breaking the title in two. */
 .panel-title > .small-text { flex: 1 1 260px; min-width: 0; font-weight: 400; }
+
+/* The panels are for the numbers. Every sentence that explains one rather
+   than stating it is marked .explain: hidden until the reader asks for it
+   with the one toggle in the header, and carried on the element's title so
+   a hover answers a single question without turning the rest back on. What
+   a measurement refuses to say is never marked, and stays on the page. */
+.explain { display: none; }
+body.show-explain .explain { display: block; }
+body.show-explain span.explain { display: inline; }
+#explain-btn[aria-pressed="true"] { border-color: var(--accent); }
 .preset-row { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
 .preset-row .btn { text-transform: capitalize; }
 .events-list { list-style: none; margin: 6px 0; padding: 0; max-height: 160px; overflow-y: auto; }
@@ -186,7 +196,11 @@ kbd { background: var(--bg3); border: 1px solid var(--border); border-radius: 3p
 /* The one line that says what to do next, under the transport. */
 .next-step { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #1c2536; border: 1px solid var(--accent2); border-radius: 6px; font-size: 13px; }
 .next-step .next-label { color: var(--accent); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
-.next-step #next-step-text { flex: 1; }
+.next-step #next-step-text { flex: 0 1 auto; }
+/* The reason takes the rest of the row when it is shown, and nothing when it
+   is not, so the step reads the same width either way. */
+.next-step #next-step-why { flex: 1 1 auto; min-width: 0; }
+body:not(.show-explain) .next-step #next-step-text { flex: 1 1 auto; }
 
 .keys { border-collapse: collapse; font-size: 13px; }
 .keys td { padding: 3px 12px 3px 0; vertical-align: top; }

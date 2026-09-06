@@ -726,6 +726,19 @@ function renderAll() {
   renderSideTabs(); renderNextStep();
 }
 
+// ------------------------------------------------------------ explanations
+
+// One switch for every sentence that explains a number rather than stating
+// it. Off by default: the user asked for the numbers, not the prose. What a
+// measurement refuses to say is not an explanation and never hides.
+function setExplain(on) {
+  document.body.classList.toggle('show-explain', on);
+  const b = $('#explain-btn');
+  b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  b.title = on ? 'Hide the explanations again' : 'Show the sentence under each panel title and each withheld number';
+  try { localStorage.setItem('mikiri.explain', on ? '1' : '0'); } catch (e) { /* private mode */ }
+}
+
 // ---------------------------------------------------------------- folding
 
 function foldedPanels() {
@@ -806,20 +819,24 @@ function nextStep() {
   // The court comes first: with it, one tracking run follows everyone on
   // it, and a second run to add the other player is a whole clip decoded
   // and tracked again.
-  if (!court && !st.has_pose) return { text: 'Calibrate the court first: four clicks on its corners, then one tracking run follows everyone on it. Skip it for a clip that does not show the court.', btn: 'Court calibration', act: openCourtModal };
-  if (!st.has_pose) return { text: 'Set the in and out points, then run tracking; with the court in, tick the other end too.', btn: 'Run tracking', act: openRunModal };
-  if (!court) return { text: 'Calibrate the court, four clicks on its corners, for footwork in metres, rallies and the match figures.', btn: 'Court calibration', act: openCourtModal };
-  if (players.length < 2) return { text: 'Only one player was tracked. Run tracking again with the other end ticked for serves, outcomes and the score.', btn: 'Run tracking', act: openRunModal };
-  if (q && q.n_open) return { text: `${q.n_open} question${q.n_open === 1 ? '' : 's'} the rally chain could not settle ${q.n_open === 1 ? 'is' : 'are'} waiting in Review; a keypress answers each.`, btn: 'Open Review', act: () => showSidePage('match') };
-  if (!st.project_path) return { text: 'Save the project to keep this session; the next clip of the same player is read against it in Over time.', btn: 'Save', act: () => saveProject(false) };
+  if (!court && !st.has_pose) return { text: 'Calibrate the court first.', why: 'Four clicks on its corners, and then one tracking run follows everyone on it. Skip it for a clip that does not show the court.', btn: 'Court calibration', act: openCourtModal };
+  if (!st.has_pose) return { text: 'Set in and out, then run tracking.', why: 'With the court in, tick the other end on the same run.', btn: 'Run tracking', act: openRunModal };
+  if (!court) return { text: 'Calibrate the court.', why: 'Four clicks on its corners, for footwork in metres, rallies and the match figures.', btn: 'Court calibration', act: openCourtModal };
+  if (players.length < 2) return { text: 'Only one player was tracked.', why: 'Run tracking again with the other end ticked, for serves, outcomes and the score.', btn: 'Run tracking', act: openRunModal };
+  if (q && q.n_open) return { text: `${q.n_open} question${q.n_open === 1 ? '' : 's'} waiting in Review.`, why: 'These are the contradictions the rally chain could not settle; a keypress answers each.', btn: 'Open Review', act: () => showSidePage('match') };
+  if (!st.project_path) return { text: 'Save the project to keep this session.', why: 'The next clip of the same player is then read against it in Over time.', btn: 'Save', act: () => saveProject(false) };
   return null;
 }
 
+// One clause on the line and the reason on its hover, so the step reads at a
+// glance and still says why when asked.
 function renderNextStep() {
   const s = nextStep();
   $('#next-step').classList.toggle('hidden', !s);
   if (!s) return;
   $('#next-step-text').textContent = s.text;
+  $('#next-step-text').title = s.why || '';
+  $('#next-step-why').textContent = s.why || '';
   const b = $('#next-step-btn'); b.textContent = s.btn; b.onclick = s.act;
 }
 
@@ -1155,8 +1172,10 @@ function renderStrokes() {
   const named = sv.strokes.filter((x) => x.shot).length;
   const searched = ev.some((e) => !e.startsWith('no shuttle evidence'));
   if (!searched) {
-    $('#strokes-note').textContent = 'Shot names (smash, clear, drop) need the shuttle: Find shuttle looks for it in the frames after each contact. Until then these are honest descriptions, not shot types.';
+    $('#strokes-note').textContent = 'No shot named: a name needs the shuttle. Press Find shuttle.';
+    $('#strokes-explain').textContent = 'Find shuttle looks for it in the frames after each contact. Until it does, these are descriptions of the swing rather than shot types.';
   } else {
+    $('#strokes-explain').textContent = "A name needs the shuttle's own path out of the contact, and a side-on view to read it from.";
     const noLaunch = ev.filter((e) => e.startsWith('no shuttle launch')).length;
     const weak = ev.filter((e) => e.startsWith('shuttle launch too weak'));
     const best = Math.max(0, ...weak.map((e) => Number((e.match(/confidence ([0-9.]+)/) || [])[1] || 0)));
@@ -1225,10 +1244,12 @@ function renderRallies() {
 
   const notes = [];
   if (b.note) notes.push(b.note.charAt(0).toUpperCase() + b.note.slice(1) + '.');
-  if (b.not_segmented) notes.push('No separate bout could be found, so these are whole-clip figures rather than per-rally ones.');
-  else if (b.trimmed_to_play) notes.push('The clip is already cut to the play, so work-to-rest would measure the editing rather than you, and is not reported.');
-  if (sp && sp.n_splits) notes.push('A split step here means a brief two-footed hop before a move, which a recovery push-off can also look like: read it as preparation of some kind, and compare it against your own earlier sessions rather than a published figure.');
+  if (b.not_segmented) notes.push('Whole-clip figures: no separate bout was found.');
+  else if (b.trimmed_to_play) notes.push('Work-to-rest withheld: the clip is already cut to the play.');
   $('#rally-note').textContent = notes.join(' ');
+  $('#rally-explain').textContent = sp && sp.n_splits
+    ? 'A split step here is a brief two-footed hop before a move, which a recovery push-off also looks like: read it as preparation of some kind, and against your own earlier sessions rather than a published figure.'
+    : '';
 }
 
 function renderMatch() {
@@ -1272,10 +1293,10 @@ function renderMatch() {
 
   const notes = [];
   notes.push(m.headline ? m.headline.charAt(0).toUpperCase() + m.headline.slice(1) + '.' : `No result is stated: ${m.headline_withheld}.`);
-  notes.push('Who won a rally is read off who serves next; the serve is the first detected contact of a bout. Confirmed means you answered it, inferred means the rules of the game derived it from confirmed facts, auto means unreviewed detection.');
-  if (m.n_issues) notes.push(`${m.n_issues} question${m.n_issues === 1 ? '' : 's'} the chain could not settle, listed below and asked one at a time in the Review panel.`);
+  if (m.n_issues) notes.push(`${m.n_issues} question${m.n_issues === 1 ? '' : 's'} open in Review.`);
   if (m.note) notes.push(m.note.charAt(0).toUpperCase() + m.note.slice(1) + '.');
   $('#match-note').textContent = notes.join(' ');
+  $('#match-explain').textContent = 'Who won a rally is read off who serves next; the serve is the first detected contact of a bout. Confirmed means you answered it, inferred means the rules of the game derived it from confirmed facts, auto means unreviewed detection.';
 }
 
 // The review queue: one question at a time, the video already at its frame,
@@ -1314,7 +1335,8 @@ function renderReview() {
   $('#review-options').innerHTML = item.options.map((o, i) =>
     `<button class="btn small" data-i="${i}"><b>${i + 1}</b> ${o.label}</button>`).join(' ')
     + ' <button class="btn small" data-i="d"><b>d</b> leave it</button>';
-  $('#review-help').innerHTML = 'Press the number to answer, <b>d</b> to leave this one, <b>u</b> to take the last answer back. The video is at the frame in question; for "at the frame I am on", scrub to the hit first.';
+  $('#review-help').innerHTML = '<b>1-9</b> answer, <b>d</b> leave, <b>u</b> undo.';
+  $('#review-explain').textContent = 'The video is already at the frame in question; for "at the frame I am on", scrub to the hit first.';
   for (const b of $('#review-options').querySelectorAll('button')) {
     b.addEventListener('click', () => answerReview(b.dataset.i === 'd' ? 'd' : Number(b.dataset.i)));
   }
@@ -1358,9 +1380,10 @@ function renderTactics() {
   }
   $('#tactics-sides').innerHTML = blocks.join('');
   const notes = [];
-  if (!t.score_is_absolute) notes.push('Points are those won in this clip; the score at its start is not known.');
+  if (!t.score_is_absolute) notes.push('Points won in this clip; the score at its start is not known.');
   notes.push('Not measured: ' + (t.not_measured || []).join('; ') + '.');
   $('#tactics-note').textContent = notes.join(' ');
+  $('#tactics-explain').textContent = 'Every figure carries how it was known: confirmed by you, inferred through the rules of the game, or auto and unreviewed. A share is withheld below the count it would need.';
 }
 
 // Formation, for each side with two tracked partners: the shape shares,
@@ -1394,7 +1417,8 @@ function renderDoubles() {
     blocks.push(`<div class="panel-title">${label}</div><div class="footwork">${lines.join('')}</div>`);
   }
   $('#doubles-sides').innerHTML = blocks.join('');
-  $('#doubles-note').textContent = 'After a lift the pair should be side-by-side, after a downward shot front-and-back; the direction comes from the shot name where there is one and from an underarm contact otherwise. Not measured: ' + (d.not_measured || []).join('; ') + '.';
+  $('#doubles-note').textContent = 'Not measured: ' + (d.not_measured || []).join('; ') + '.';
+  $('#doubles-explain').textContent = 'After a lift the pair should be side-by-side, after a downward shot front-and-back; the direction comes from the shot name where there is one and from an underarm contact otherwise.';
 }
 
 // Over time: this clip against the same player's kept sessions. A metric
@@ -1445,6 +1469,7 @@ function renderTrends() {
   $('#trends-metrics').innerHTML = rows.join('');
   const notes = (t.notes || []).concat(c && c.n_sessions >= 2 ? (c.notes || []).filter((n) => !(t.notes || []).includes(n)) : []);
   $('#trends-note').textContent = notes.map((n) => n.charAt(0).toUpperCase() + n.slice(1) + '.').join(' ');
+  $('#trends-explain').textContent = 'Each session is one saved project, grouped by the player label; a figure is compared only where both sessions measured it.';
 }
 
 // The tagger: the labelling pass the per-player classifier trains on. It walks
@@ -1467,11 +1492,12 @@ function renderTagging(tg) {
   if (S.tagSeekKey !== key) { S.tagSeekKey = key; seek(next.frame); }
   const guess = next.shot ? ` The app would call it a ${next.shot} (${next.how}, ${Math.round(100 * next.confidence)}%).` : '';
   $('#review-question').textContent = `What shot did the ${next.side} side play at ${(next.frame / fps()).toFixed(1)} s? It reads as ${next.descriptor}.${guess}`;
-  $('#review-detail').textContent = 'Your labels train a classifier for this player alone. It names a shot only when your labels for that shot separate from every other shot you have labelled, and it says how well.';
+  $('#review-detail').textContent = '';
+  $('#review-explain').textContent = 'Your labels train a classifier for this player alone. It names a shot only when your labels for that shot separate from every other shot you have labelled, and it says how well.';
   $('#review-options').innerHTML = tg.shots.map((sh, i) =>
     `<button class="btn small" data-i="${i}"><b>${i + 1}</b> ${sh}</button>`).join(' ')
     + ' <button class="btn small" data-i="s"><b>s</b> skip</button>';
-  $('#review-help').innerHTML = 'Press the number for the shot, <b>s</b> to skip this contact, <b>t</b> to go back to the questions.';
+  $('#review-help').innerHTML = '<b>1-9</b> name the shot, <b>s</b> skip, <b>t</b> back to the questions.';
   for (const b of $('#review-options').querySelectorAll('button')) {
     b.addEventListener('click', () => tagShot(b.dataset.i === 's' ? 's' : Number(b.dataset.i)));
   }
@@ -1776,6 +1802,10 @@ function bindUI() {
   $('#court-btn').addEventListener('click', openCourtModal);
   $('#court-setup-btn').addEventListener('click', openCourtModal);
   $('#keys-btn').addEventListener('click', () => showModal('#modal-keys'));
+  $('#explain-btn').addEventListener('click', () => setExplain(!document.body.classList.contains('show-explain')));
+  let explainOn = false;
+  try { explainOn = localStorage.getItem('mikiri.explain') === '1'; } catch (e) { /* private mode */ }
+  setExplain(explainOn);
   $('#next-step-dismiss').addEventListener('click', () => { S.hideStepFor = S.pid; renderNextStep(); });
   $$('.side-tab').forEach((t) => t.addEventListener('click', () => showSidePage(t.dataset.page)));
   // A video dropped anywhere on the page opens the way an upload does.

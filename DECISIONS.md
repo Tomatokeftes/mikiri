@@ -243,6 +243,19 @@ Three consequences that are easy to get wrong later:
   everything at a reduced rate so identity survives, and the warm-up -- useless
   for tactics -- is the best training data in the clip for a per-player
   classifier, being repetitive, unpressured and undisguised.
+* **A sentence that explains a number is hidden by default; a sentence that
+  withholds one is not.** The panels had grown a subtitle each, a paragraph
+  under most and a two-sentence help line, and the user's verdict after the
+  first hands-on session was "far too much text -- I want the numbers".
+  Deleting the prose was not an option, because much of it is the app saying
+  what it refuses to measure, which is the rule the whole thing is built on.
+  So the sentences were sorted rather than cut: what a measurement will not
+  say stays on the page, always, and what merely explains how a number was
+  reached moves behind one switch in the header and onto the element's own
+  `title`, so a hover answers one question without turning the rest back on.
+  One switch and not a per-panel toggle, because a reader who wants the
+  explanations wants them everywhere and a reader who does not wants them
+  nowhere.
 
 It stays local, offline and free. The comparable commercial product meters
 automatic tracking by the minute and sells a manual tagger as the cheaper path,
