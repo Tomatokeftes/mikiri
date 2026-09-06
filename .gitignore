@@ -29,3 +29,8 @@ benchmarks/**
 *.mikiri.json
 *.jumplab.json
 !demo/*.mikiri.json
+# The desktop app's worktrees and per-user settings live under .claude; only
+# the preview launch config is the repository's business, so it is carved
+# back out of the blanket, negation last as above.
+.claude/*
+!.claude/launch.json
