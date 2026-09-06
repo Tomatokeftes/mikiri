@@ -210,6 +210,24 @@ Known gaps:
   rallies instead of 17. It did not make the point split truer -- 8-23
   became 15-16 against a real 8-21 -- which is the reminder that a split
   resting on 188 unsettled questions is withheld for a reason.
+  Contacts over-triggered badly on the broadcast and are measurably better
+  for one rule: while one player hits, the other splits, lifts the racket and
+  lunges, and on a small player that reaction clears the detection bar a fifth
+  of a second later. `strokes.drop_impossible_pairs` throws those out by the
+  only measurement that settles them -- the shuttle would have to cross the
+  distance between the two players in the time between the two peaks, and
+  above 40 m/s averaged it cannot. On game one that rejects 65 peaks, five of
+  which are two contacts on the *same frame* nine to eleven metres apart, and
+  it takes the chain from 21.5 to 17.6 shots a rally against a published
+  elite 9.9. Recovery is held to the same test, and had to be: rejecting the
+  reaction leaves the hitter's two contacts side by side, and the strongest
+  peak between them is the reaction that was just thrown out, so recovery
+  handed it straight back with better provenance until it was made to check.
+  What remains is the detection bar itself: `MIN_PEAK_SPEED_BH` of 1.1 was
+  set for club footage, and the far player of the broadcast is above it on
+  46% of his play frames, so the bar is not a bar on this footage. Setting it
+  honestly needs hand-labelled contacts on a broadcast rally, which nothing
+  here has.
   The alternation rule recovers the hits a flat signal misses
   (`strokes.recover_alternation`): contacts come out 21 a side and the
   double-contact questions fall from fourteen to six, with nine recovered

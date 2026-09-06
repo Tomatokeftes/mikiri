@@ -243,6 +243,23 @@ Three consequences that are easy to get wrong later:
   everything at a reduced rate so identity survives, and the warm-up -- useless
   for tactics -- is the best training data in the clip for a per-player
   classifier, being repetitive, unpressured and undisguised.
+* **Two contacts the shuttle could not have travelled between are not two
+  contacts.** The largest source of invented contacts on broadcast footage is
+  the receiver, not the hitter: while one player swings, the other splits,
+  lifts the racket and lunges, and on a player 160 pixels tall that reaction
+  clears the detection bar a fifth of a second after the real hit. No signal
+  from one player's own arm can tell that from a swing. The court can, and it
+  is already calibrated: the shuttle has to cover the distance between the two
+  players in the time between the two peaks, and above 40 m/s averaged over
+  the flight it cannot. That bound is set well clear of the fastest credible
+  smash on purpose, because this rule deletes a detection and may only delete
+  an impossible one; a merely surprising pair survives and becomes a question.
+  On game one of the broadcast it rejects 65 peaks of 515 -- five of them two
+  contacts on the same frame with the players nine to eleven metres apart --
+  and takes the chain from 21.5 to 17.6 shots a rally. The alternation
+  recovery is held to the same test, because otherwise the two rules fight:
+  rejecting the reaction leaves a same-side pair, and the best peak between
+  them is the reaction just rejected.
 * **Which hand a player holds the racket in is asked, never guessed.** Every
   contact on a side is found from that side's hitting arm, and until now
   every player but the subject was detected right-handed with nothing in the

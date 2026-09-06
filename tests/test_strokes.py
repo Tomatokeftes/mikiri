@@ -661,6 +661,134 @@ def test_nothing_is_recovered_when_the_other_signal_is_flat():
     assert b2.strokes == []
 
 
+def _at(n: int, where: dict[int, tuple[float, float]], default=(3.0, 3.0)):
+    """Court positions: standing at ``default`` except where told otherwise."""
+    pos = np.tile(np.array(default, dtype=float), (n, 1))
+    for f, xy in where.items():
+        pos[f] = xy
+    return pos
+
+
+def _hit(frame: int, confidence: float = 0.9, confirmed: bool = False):
+    return Stroke(
+        frame=frame,
+        confidence=confidence,
+        height_class="overhead",
+        side="forehand",
+        zone="rear",
+        racket_speed_bh=4.0,
+        confirmed=confirmed,
+    )
+
+
+def test_a_peak_the_shuttle_could_not_have_reached_is_not_a_contact():
+    """Guards the largest source of invented contacts on broadcast footage.
+
+    While one player hits, the other splits, lifts the racket and lunges, and
+    on a small player that reaction clears the detection bar a fifth of a
+    second later. Nothing in one player's own signal can tell that from a hit.
+    The court can: the shuttle would have to cross ten metres in 0.2 s, which
+    is fifty metres a second averaged, and no shuttle flight does that.
+    """
+    from mikiri.strokes import drop_impossible_pairs
+
+    n = 60
+    fps = 25.0
+    a = StrokeSeries(strokes=[_hit(10, confidence=0.95)], fps=fps)
+    b = StrokeSeries(strokes=[_hit(15, confidence=0.6)], fps=fps)
+    ten_apart = (_at(n, {}, default=(3.0, 1.0)), _at(n, {}, default=(3.0, 11.0)))
+    a2, b2 = drop_impossible_pairs(a, b, ten_apart, fps)
+    assert [x.frame for x in a2.strokes] == [10], "the stronger peak of the pair survives"
+    assert b2.strokes == [], "the weaker one cannot have been a contact"
+    assert (a2.rejected, b2.rejected) == (0, 1)
+    assert len(b.strokes) == 1, "the input series is not modified"
+
+
+def test_a_pair_the_shuttle_could_have_crossed_is_left_alone():
+    """Only the impossible is removed; the merely surprising becomes a question.
+
+    Ten metres in 0.6 s is under 17 m/s, which is an ordinary clear, so both
+    contacts stand even though they are close together.
+    """
+    from mikiri.strokes import drop_impossible_pairs
+
+    n = 60
+    fps = 25.0
+    a = StrokeSeries(strokes=[_hit(10)], fps=fps)
+    b = StrokeSeries(strokes=[_hit(25)], fps=fps)
+    ten_apart = (_at(n, {}, default=(3.0, 1.0)), _at(n, {}, default=(3.0, 11.0)))
+    a2, b2 = drop_impossible_pairs(a, b, ten_apart, fps)
+    assert [x.frame for x in a2.strokes] == [10]
+    assert [x.frame for x in b2.strokes] == [25]
+    assert (a2.rejected, b2.rejected) == (0, 0)
+
+
+def test_a_net_exchange_survives_a_gap_that_would_fail_across_the_court():
+    """The bound is on the shuttle's speed, not on the time, which is the point.
+
+    Two players a metre apart at the net can hit a tenth of a second apart --
+    ten metres a second -- and the same tenth of a second across the court
+    cannot happen. A rule on the gap alone would have to choose one of those
+    and be wrong about the other.
+    """
+    from mikiri.strokes import drop_impossible_pairs
+
+    n = 60
+    fps = 25.0
+    close = (_at(n, {}, default=(3.0, 6.2)), _at(n, {}, default=(3.0, 7.2)))
+    a = StrokeSeries(strokes=[_hit(10)], fps=fps)
+    b = StrokeSeries(strokes=[_hit(12)], fps=fps)
+    a2, b2 = drop_impossible_pairs(a, b, close, fps)
+    assert len(a2.strokes) == 1 and len(b2.strokes) == 1
+
+    far = (_at(n, {}, default=(3.0, 1.0)), _at(n, {}, default=(3.0, 11.0)))
+    a3, b3 = drop_impossible_pairs(a, b, far, fps)
+    assert len(a3.strokes) + len(b3.strokes) == 1
+
+
+def test_a_contact_the_user_confirmed_is_never_the_one_dropped():
+    """The user's word outranks the geometry, so the other peak of the pair goes."""
+    from mikiri.strokes import drop_impossible_pairs
+
+    n = 60
+    fps = 25.0
+    a = StrokeSeries(strokes=[_hit(10, confidence=0.99)], fps=fps)
+    b = StrokeSeries(strokes=[_hit(15, confidence=0.2, confirmed=True)], fps=fps)
+    ten_apart = (_at(n, {}, default=(3.0, 1.0)), _at(n, {}, default=(3.0, 11.0)))
+    a2, b2 = drop_impossible_pairs(a, b, ten_apart, fps)
+    assert a2.strokes == [] and [x.frame for x in b2.strokes] == [15]
+
+
+def test_dropping_one_peak_exposes_the_next_pair_and_that_is_checked_too():
+    """Guards a single pass leaving an impossible pair behind it.
+
+    Three peaks in a row, each a couple of frames from the next: removing the
+    middle one brings the outer two together, and they are no more possible
+    than the pair that was just settled.
+    """
+    from mikiri.strokes import drop_impossible_pairs
+
+    n = 60
+    fps = 25.0
+    a = StrokeSeries(strokes=[_hit(10, confidence=0.5), _hit(14, confidence=0.95)], fps=fps)
+    b = StrokeSeries(strokes=[_hit(12, confidence=0.6)], fps=fps)
+    ten_apart = (_at(n, {}, default=(3.0, 1.0)), _at(n, {}, default=(3.0, 11.0)))
+    a2, b2 = drop_impossible_pairs(a, b, ten_apart, fps)
+    assert [x.frame for x in a2.strokes] == [14]
+    assert b2.strokes == []
+
+
+def test_nothing_is_dropped_without_the_court():
+    """The rule is a distance measurement, so with no positions it stands down."""
+    from mikiri.strokes import drop_impossible_pairs
+
+    fps = 25.0
+    a = StrokeSeries(strokes=[_hit(10)], fps=fps)
+    b = StrokeSeries(strokes=[_hit(11)], fps=fps)
+    a2, b2 = drop_impossible_pairs(a, b, (None, None), fps)
+    assert len(a2.strokes) == 1 and len(b2.strokes) == 1
+
+
 # --- what the user said about the contacts ----------------------------------------
 
 
@@ -731,3 +859,55 @@ def test_edit_frames_are_absolute_and_the_series_is_relative():
         series, [_edit(f + 1000, "remove")], kp, "right", 0.3, FPS, pose_start=1000
     )
     assert out.strokes == []
+
+
+def test_a_rebuilt_series_keeps_what_it_knows_about_itself():
+    """Guards the bug that hid the rejection count on its first run.
+
+    Recovery, contact edits and shot naming each hand back a series with a
+    different list of strokes, and each built a fresh one, which reset every
+    other field to its default. The count of rejected peaks then read zero
+    however many had been thrown out.
+    """
+    from mikiri.strokes import drop_impossible_pairs, recover_alternation
+
+    n = 60
+    fps = 25.0
+    a = StrokeSeries(strokes=[_hit(10, confidence=0.95)], signal=np.zeros(n), fps=fps)
+    b = StrokeSeries(strokes=[_hit(12, confidence=0.4)], signal=np.zeros(n), fps=fps)
+    apart = (_at(n, {}, default=(3.0, 1.0)), _at(n, {}, default=(3.0, 11.0)))
+    a, b = drop_impossible_pairs(a, b, apart, fps)
+    assert (a.rejected, b.rejected) == (0, 1)
+    a, b = recover_alternation(a, b, (_pose(n), _pose(n)), fps, ("right", "right"), 0.3)
+    assert (a.rejected, b.rejected) == (0, 1), "recovery must not reset the count"
+    assert a.with_strokes([]).rejected == 0 and b.with_strokes([]).rejected == 1
+
+
+def test_recovery_does_not_hand_back_the_peak_the_geometry_rejected():
+    """Guards the two rules fighting each other, which is what they did at first.
+
+    Rejecting the receiver's reaction leaves the hitter's two contacts side by
+    side, and the strongest peak between them is that same reaction. Without
+    the reachability check recovery inserted it again, with a better
+    provenance than the detection it replaced, and the count came out higher
+    than before anything was rejected.
+    """
+    from mikiri.strokes import drop_impossible_pairs, recover_alternation
+
+    n = 120
+    fps = 25.0
+    # The near player hits at 10 and 40; a reaction peak sits at 12.
+    near_kp = _add_swing(_add_swing(_pose(n), at=10), at=40)
+    a = StrokeSeries(strokes=[_hit(10), _hit(40)], signal=swing_signal(near_kp, fps), fps=fps)
+    reaction = np.full(n, 0.2)
+    reaction[10:15] = [0.8, 1.2, 1.5, 1.2, 0.8]
+    b = StrokeSeries(strokes=[_hit(12, confidence=0.55)], signal=reaction, fps=fps)
+    apart = (_at(n, {}, default=(3.0, 1.0)), _at(n, {}, default=(3.0, 11.0)))
+
+    a, b = drop_impossible_pairs(a, b, apart, fps)
+    assert b.strokes == [] and b.rejected == 1
+    a2, b2 = recover_alternation(
+        a, b, (near_kp, _pose(n)), fps, ("right", "right"), 0.3, positions=apart
+    )
+    assert b2.strokes == [], "the pair stays a question rather than getting its reaction back"
+    assert [x.frame for x in a2.strokes] == [10, 40]

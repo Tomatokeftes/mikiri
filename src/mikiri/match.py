@@ -357,6 +357,11 @@ class MatchChain:
     #: Contacts that fell outside every rally: warm-up hits, a pick-up, or a
     #: false detection. Counted, never chained.
     contacts_outside: int = 0
+    #: Peaks the detector found and the geometry threw out, because the
+    #: shuttle could not have travelled between them and the contact on the
+    #: other side; see :func:`mikiri.strokes.drop_impossible_pairs`. Reported
+    #: so a smaller contact count is explained rather than merely smaller.
+    contacts_rejected: int = 0
     note: str = ""
 
     @property
@@ -439,6 +444,7 @@ class MatchChain:
                 s: sum(r.contacts_by_side().get(s, 0) for r in self.rallies) for s in SIDES
             },
             "contacts_outside_rallies": int(self.contacts_outside),
+            "contacts_rejected": int(self.contacts_rejected),
             "issues": [i.to_dict() for i in self.issues],
             "n_issues": len(self.issues),
             "headline": headline,

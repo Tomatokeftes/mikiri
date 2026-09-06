@@ -337,7 +337,7 @@ def name_shots_from_labels(
             f"nothing is named from labels yet: at least two shot types need {need} labels "
             f"each, and {len(classes)} have that"
         )
-        return StrokeSeries(strokes=strokes, signal=series.signal, fps=series.fps), report
+        return series.with_strokes(strokes), report
 
     keep = [i for i, c in enumerate(train_y) if c in classes]
     x = np.stack([train_x[i] for i in keep])
@@ -386,4 +386,4 @@ def name_shots_from_labels(
             )
         )
         report["named"] += 1
-    return StrokeSeries(strokes=strokes, signal=series.signal, fps=series.fps), report
+    return series.with_strokes(strokes), report

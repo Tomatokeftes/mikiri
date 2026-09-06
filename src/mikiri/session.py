@@ -112,6 +112,7 @@ from mikiri.strokes import (
     StrokeSeries,
     apply_contact_edits,
     detect_strokes,
+    drop_impossible_pairs,
     recover_alternation,
 )
 from mikiri.strokes import summarise as stroke_summary
@@ -962,37 +963,55 @@ class ProjectSession:
         return out
 
     def chain_strokes(self) -> tuple[StrokeSeries | None, list[StrokeSeries | None]]:
-        """The contacts the rally chain runs over: detected, plus recovered.
+        """The contacts the rally chain runs over: rejected, recovered, then edited.
 
         :meth:`strokes` and :meth:`other_strokes` are what the detector found,
-        and they are what the biomechanical figures use. The chain knows one
-        thing more -- that contacts alternate between the players -- and
-        :func:`mikiri.strokes.recover_alternation` uses it to find the hits a
-        small, foreshortened player's signal was too flat to clear the
-        detector with. Recovered contacts are marked, carry their weak
-        evidence, and are raised as questions by the chain. The subject's
-        footwork numbers never see them.
+        and they are what the biomechanical figures use. The chain knows two
+        things more, both of which need the other player, and they run in this
+        order because each depends on the one before:
+
+        1. :func:`mikiri.strokes.drop_impossible_pairs` throws out the peaks
+           the shuttle could not have reached -- the receiver's reaction to a
+           shot, read as a hit a fifth of a second after the real one.
+        2. :func:`mikiri.strokes.recover_alternation` then finds the hits a
+           small, foreshortened player's signal was too flat to clear the
+           detector with, because contacts alternate. Running it first would
+           have it reason from contacts that never happened.
+
+        Recovered contacts are marked, carry their weak evidence, and are
+        raised as questions by the chain. The subject's footwork numbers never
+        see any of it.
         """
         if self._chain_strokes is not None:
             return self._chain_strokes
         subject = self.strokes()
         others = list(self.other_strokes())
         eff = self.effective_keypoints()
-        # Recovery reasons from one player on each side taking turns. With a
+        # Both rules reason from one player on each side taking turns. With a
         # partner on either side a missing hit may be the partner's, so the
-        # rule has nothing to say and recovery is left out of doubles.
+        # rule has nothing to say and both are left out of doubles.
         if subject is not None and eff is not None and len(others) == 1:
             for k, (o, track, series) in enumerate(zip(self.others(), self.other_tracks(), others)):
                 if series is None or track is None:
                     continue
+                mine = self.court_track()
+                # Both tracks are in their own player's frame, where each
+                # defends y = 0; flipping one puts the pair on one court, and
+                # the distance between them is then metres of shuttle flight.
+                shared = (
+                    None if mine is None else mine.positions,
+                    flip_end(track.positions),
+                )
+                subject, others[k] = drop_impossible_pairs(subject, series, shared, self.info.fps)
                 subject, others[k] = recover_alternation(
                     subject,
-                    series,
+                    others[k],
                     (eff[0], o.keypoints),
                     self.info.fps,
                     (self.racket_hand_for(self.subject_side), self.racket_hand_for(o.side)),
                     self.project.conf_threshold,
-                    (self.court_track(), track),
+                    (mine, track),
+                    positions=shared,
                 )
         # The user's word comes last and outranks both detection and recovery.
         review = self.project.match_review
@@ -1213,6 +1232,10 @@ class ProjectSession:
         self._match = build_chain(
             rallies, players, self.info.fps, confirmations, score_start=score_start
         )
+        # How many peaks the geometry threw out before the chain ever saw
+        # them, so the panel can say why there are fewer contacts than peaks.
+        subject, others = self.chain_strokes()
+        self._match.contacts_rejected = sum(x.rejected for x in [subject, *others] if x is not None)
         return self._match
 
     def match_summary(self) -> dict | None:

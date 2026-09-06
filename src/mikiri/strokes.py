@@ -80,6 +80,28 @@ MIN_PEAK_PROMINENCE_BH = 0.7
 #: pause, where nothing is a swing, sits at 0.71 at the 90th percentile, so
 #: this is the lowest floor that clears it.
 RECOVERY_MIN_SPEED_BH = 0.75
+#: Fastest average speed, in metres per second, that a shuttle can be credited
+#: with between two contacts on opposite sides of the net. Above it the two
+#: peaks cannot both be hits, because the shuttle could not have got from one
+#: player to the other in the time between them.
+#:
+#: The bound is on the *average* over the flight, not the speed off the racket,
+#: and the two are nothing alike: a shuttlecock leaves a smash at well over
+#: 100 m/s and sheds most of it within a couple of metres, which is why a
+#: full-court smash is usually quoted at around four tenths of a second to
+#: reach the opponent -- some 25 to 30 m/s averaged. Forty is set well clear of
+#: that on purpose. This rule deletes a detection, and the only kind of
+#: detection it may delete is one that is impossible rather than merely
+#: unlikely; everything short of impossible stays and becomes a question.
+#:
+#: Measured on both two-player clips. On game one of the Momota v Lin Dan
+#: broadcast 65 of 347 consecutive opposite-side pairs need more than this,
+#: five of them needing infinite speed -- the two contacts land on the *same
+#: frame* with the players nine to eleven metres apart. On the Lin Dan rally
+#: five of eighteen pairs need it, the worst asking 296 m/s across ten metres
+#: in a thirtieth of a second. Neither clip has a pair between 40 m/s and the
+#: fastest credible smash, so nothing sits near the line.
+MAX_SHUTTLE_MPS = 40.0
 #: How far, in seconds, a user's answer may sit from the contact it is about.
 #: An answer is given at the frame the video was scrubbed to, which lands
 #: within a few frames of the contact the question pointed at. A quarter of a
@@ -171,6 +193,21 @@ class StrokeSeries:
     strokes: list[Stroke] = field(default_factory=list)
     signal: np.ndarray = field(default_factory=lambda: np.zeros(0))
     fps: float = 30.0
+    #: Peaks that were detected and then rejected because the shuttle could
+    #: not have reached them; see :func:`drop_impossible_pairs`. Kept as a
+    #: count so the panel can say the contacts are fewer than the peaks and
+    #: why, rather than quietly showing a smaller number.
+    rejected: int = 0
+
+    def with_strokes(self, strokes: list[Stroke]) -> StrokeSeries:
+        """The same series with a different list of strokes.
+
+        Every stage that adds, removes or renames contacts goes through this
+        rather than building a fresh :class:`StrokeSeries`, because building
+        one loses whatever the series knows about itself -- which is how the
+        rejection count went missing the first time.
+        """
+        return replace(self, strokes=strokes)
 
     def to_dict(self) -> dict:
         """JSON-friendly view."""
@@ -178,6 +215,7 @@ class StrokeSeries:
             "strokes": [s.to_dict() for s in self.strokes],
             "signal": [None if not np.isfinite(v) else round(float(v), 3) for v in self.signal],
             "counts": self.counts(),
+            "rejected": int(self.rejected),
         }
 
     def counts(self) -> dict:
@@ -595,6 +633,122 @@ def best_peak_between(
     return best
 
 
+def shuttle_reachable(
+    pos_a: np.ndarray | None,
+    frame_a: int,
+    pos_b: np.ndarray | None,
+    frame_b: int,
+    fps: float,
+    max_shuttle_mps: float = MAX_SHUTTLE_MPS,
+) -> bool:
+    """Whether the shuttle could get from one contact to the other in time.
+
+    ``True`` whenever the question cannot be answered -- a position missing,
+    no calibration, the two frames in the wrong order -- because this rule
+    only ever rejects, and what it cannot see it does not reject.
+
+    Args:
+        pos_a: Court positions of the player who hit first, in the shared
+            frame, or ``None``.
+        frame_a: The frame they hit on.
+        pos_b: The other player's positions, in the same frame.
+        frame_b: The frame they hit on, after ``frame_a``.
+        fps: Frames per second.
+        max_shuttle_mps: The speed bound; see :data:`MAX_SHUTTLE_MPS`.
+    """
+    if pos_a is None or pos_b is None or fps <= 0:
+        return True
+    a, b = np.asarray(pos_a, dtype=float), np.asarray(pos_b, dtype=float)
+    if not (0 <= frame_a < a.shape[0] and 0 <= frame_b < b.shape[0]):
+        return True
+    pa, pb = a[frame_a], b[frame_b]
+    if not (np.isfinite(pa).all() and np.isfinite(pb).all()):
+        return True
+    gap = (frame_b - frame_a) / fps
+    if gap <= 0:
+        return False  # two contacts on one frame, with the players apart
+    return float(np.hypot(*(pb - pa))) / gap <= max_shuttle_mps
+
+
+def drop_impossible_pairs(
+    first: StrokeSeries,
+    second: StrokeSeries,
+    positions: tuple[np.ndarray | None, np.ndarray | None],
+    fps: float,
+    max_shuttle_mps: float = MAX_SHUTTLE_MPS,
+) -> tuple[StrokeSeries, StrokeSeries]:
+    """Reject the peaks the shuttle could not have reached in time.
+
+    The swing detector reads one player at a time, and during a rally the
+    player who is *not* hitting is far from still: they split-step, lift the
+    racket and lunge, and on a small player that reaction clears the detection
+    bar. It then reads as a contact a fifth of a second after the real one,
+    which is the largest source of invented contacts on broadcast footage --
+    the receiver answering, not hitting.
+
+    One measurement rules it out, and the court calibration already provides
+    it. Two contacts on opposite sides of the net are separated by a flight of
+    the shuttle: it has to travel the distance between the two players in the
+    time between the two peaks. Where that would need more than
+    :data:`MAX_SHUTTLE_MPS`, the two peaks are not two contacts, and the
+    weaker of them is dropped. Only the impossible is removed -- a pair that
+    is merely surprising survives and reaches the queue as a question, which
+    is where anything the measurement cannot settle belongs.
+
+    Dropping one peak can bring two new neighbours together, so this runs
+    until nothing is left to reject. A contact the user confirmed is never
+    dropped: their word outranks the geometry, and if it disagrees the other
+    peak of the pair goes instead.
+
+    Args:
+        first: One player's detected strokes.
+        second: The other player's.
+        positions: Both players' court positions in **one shared frame**, so
+            that the distance between them is metres of shuttle flight. The
+            session flips the other player's own-frame track for this. Either
+            may be ``None``, in which case nothing is rejected.
+        fps: Frames per second.
+        max_shuttle_mps: The speed bound.
+
+    Returns:
+        New series for the two players, each carrying how many of its peaks
+        were rejected. The inputs are not modified.
+    """
+    pos_a, pos_b = positions
+    if pos_a is None or pos_b is None or fps <= 0:
+        return first, second
+    pos = (np.asarray(pos_a, dtype=float), np.asarray(pos_b, dtype=float))
+    kept: tuple[list[Stroke], list[Stroke]] = (list(first.strokes), list(second.strokes))
+    rejected = [0, 0]
+
+    while True:
+        merged = sorted(
+            [(0, s) for s in kept[0]] + [(1, s) for s in kept[1]], key=lambda t: t[1].frame
+        )
+        for (who_a, x), (who_b, y) in zip(merged, merged[1:]):
+            if who_a == who_b:
+                continue
+            if shuttle_reachable(pos[who_a], x.frame, pos[who_b], y.frame, fps, max_shuttle_mps):
+                continue
+            # The weaker peak goes, and a confirmed contact is never the
+            # weaker one however faint its signal was.
+            score = (
+                (x.confirmed, x.confidence, who_a, x),
+                (y.confirmed, y.confidence, who_b, y),
+            )
+            (_, _, who, loser) = min(score, key=lambda t: (t[0], t[1]))
+            kept[who].remove(loser)
+            rejected[who] += 1
+            break
+        else:
+            break
+
+    return (
+        replace(first, strokes=kept[0], rejected=first.rejected + rejected[0]),
+        replace(second, strokes=kept[1], rejected=second.rejected + rejected[1]),
+    )
+
+
 def recover_alternation(
     first: StrokeSeries,
     second: StrokeSeries,
@@ -604,6 +758,8 @@ def recover_alternation(
     conf_thr: float,
     tracks: tuple[object, object] = (None, None),
     min_speed: float = RECOVERY_MIN_SPEED_BH,
+    positions: tuple[np.ndarray | None, np.ndarray | None] = (None, None),
+    max_shuttle_mps: float = MAX_SHUTTLE_MPS,
 ) -> tuple[StrokeSeries, StrokeSeries]:
     """Recover the contacts that two players' rhythm says the detector missed.
 
@@ -617,6 +773,16 @@ def recover_alternation(
     downstream knows it rests on weaker evidence than a detection. Where no
     peak reaches the floor nothing is inserted and the pair stays a question.
 
+    A recovered contact has to be reachable, by the same measurement that
+    rejects an unreachable detection. That is not a refinement but the thing
+    that keeps the two rules from fighting: rejecting the receiver's reaction
+    leaves the hitter's two contacts side by side, and the strongest peak
+    between them is the reaction that was just thrown out, so without this
+    check recovery hands it straight back with a better provenance than it
+    had. Where the best peak is unreachable nothing is inserted and the pair
+    stays a question, which is the right answer -- a contact was missed or
+    invented, and the video can settle it.
+
     Recovery can only ever split a same-side pair, never create one, so a
     single pass over the merged sequence is complete.
 
@@ -629,6 +795,10 @@ def recover_alternation(
         conf_thr: Minimum keypoint confidence.
         tracks: The two players' court tracks, for the zone, or ``None``.
         min_speed: Floor a recovered swing must reach.
+        positions: Both players' court positions in one shared frame, used to
+            hold a recovered contact to the same reachability the detected
+            ones are held to. Without them the check stands down.
+        max_shuttle_mps: The speed bound for that check.
 
     Returns:
         New series for the two players, each with its recoveries inserted in
@@ -652,6 +822,13 @@ def recover_alternation(
         f = best_peak_between(sig, x.frame, y.frame, min_speed, existing, gap)
         if f is None:
             continue
+        if not (
+            shuttle_reachable(positions[who_a], x.frame, positions[other], f, fps, max_shuttle_mps)
+            and shuttle_reachable(
+                positions[other], f, positions[who_b], y.frame, fps, max_shuttle_mps
+            )
+        ):
+            continue
         added[other].append(
             describe_contact(
                 keypoints[other],
@@ -672,7 +849,7 @@ def recover_alternation(
     out = []
     for k in (0, 1):
         strokes = sorted(list(series[k].strokes) + added[k], key=lambda s: s.frame)
-        out.append(StrokeSeries(strokes=strokes, signal=series[k].signal, fps=series[k].fps))
+        out.append(series[k].with_strokes(strokes))
     return out[0], out[1]
 
 
@@ -751,7 +928,7 @@ def apply_contact_edits(
                 added.confirmed = True
                 strokes.append(added)
     strokes.sort(key=lambda s: s.frame)
-    return StrokeSeries(strokes=strokes, signal=series.signal, fps=series.fps)
+    return series.with_strokes(strokes)
 
 
 def _contact_height(
