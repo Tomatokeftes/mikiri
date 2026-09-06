@@ -1141,10 +1141,29 @@ function renderStrokes() {
   if (sum.max_contact_height_m) rows.push(kv('contact height', `mean ${sum.mean_contact_height_m} m, max ${sum.max_contact_height_m} m`));
   $('#strokes-summary').innerHTML = rows.join('');
 
+  // What the shuttle search did and did not give, read off each contact's
+  // own evidence, so "found the shuttle, named nothing" says why.
+  const ev = sv.strokes.map((x) => x.evidence || '');
   const named = sv.strokes.filter((x) => x.shot).length;
-  $('#strokes-note').textContent = named
-    ? `${named} of ${sv.strokes.length} contacts have a shot name; the rest are described but not named.`
-    : 'Shot names (smash, clear, drop) need the shuttle. Without it these are honest descriptions, not shot types.';
+  const searched = ev.some((e) => !e.startsWith('no shuttle evidence'));
+  if (!searched) {
+    $('#strokes-note').textContent = 'Shot names (smash, clear, drop) need the shuttle: Find shuttle looks for it in the frames after each contact. Until then these are honest descriptions, not shot types.';
+  } else {
+    const noLaunch = ev.filter((e) => e.startsWith('no shuttle launch')).length;
+    const weak = ev.filter((e) => e.startsWith('shuttle launch too weak'));
+    const best = Math.max(0, ...weak.map((e) => Number((e.match(/confidence ([0-9.]+)/) || [])[1] || 0)));
+    const need = weak.length ? (weak[0].match(/< ([0-9.]+)/) || [])[1] : null;
+    const view = ev.filter((e) => e.includes('foreshortens')).length;
+    const other = sv.strokes.length - named - noLaunch - weak.length - view;
+    const parts = [`Shuttle launch recovered after ${sv.strokes.length - noLaunch} of ${sv.strokes.length} contacts; ${named} named.`];
+    const why = [];
+    if (weak.length) why.push(`${weak.length} launch${weak.length === 1 ? '' : 'es'} too faint to name a shot (best ${best.toFixed(2)}, ${need} needed)`);
+    if (view) why.push(`${view} refused because this camera view foreshortens the shuttle's path (shot names need a side-on view)`);
+    if (noLaunch) why.push(`${noLaunch} with no launch found`);
+    if (other > 0) why.push(`${other} whose launch fits no shot the shuttle alone can prove`);
+    if (why.length) parts.push('Not named: ' + why.join('; ') + '.');
+    $('#strokes-note').textContent = parts.join(' ');
+  }
 
   const cur = S.pose ? S.frame - S.pose.start : -1;
   $('#strokes-list').innerHTML = sv.strokes.map((st) => {
