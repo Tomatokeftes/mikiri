@@ -140,9 +140,36 @@
       "duration_s": 3281.0,
       "edited": false,
       "guards": [
-        "random access stays under a quarter of a second anywhere in the clip: reading frame 40000 in order took twenty seconds and a step backwards a minute, which is the black viewer the reader's seek exists to prevent"
+        "random access stays under a quarter of a second anywhere in the clip: reading frame 40000 in order took twenty seconds and a step backwards a minute, which is the black viewer the reader's seek exists to prevent",
+        "with the court calibrated, every frame of the main camera is told from every close-up, replay and crowd shot: the wide shot scores 0.87 to 0.91 of the court's lines and everything else 0.00 to 0.09, with nothing in between",
+        "the 29 points of game one come out as about that many stretches of the court being visible, at a rally-length median",
+        "without a calibration the clip is not split at all rather than split backwards: above ten camera cuts the motion threshold is inverted, and a wrong answer that looks right is worse than none"
       ],
-      "note": "The first full match with a real broadcast's cuts, replays and adverts, which the not-badminton path of the segmenter had never met, and 785 MB, so nothing here decodes the whole of it: the reader test seeks, and the frame cache fills ahead only to its budget. Not yet run through segmentation, tracking or the chain."
+      "game_one": {
+        "trim": [10650, 39100],
+        "score": [21, 8],
+        "points": 29,
+        "note": "From the frame the players take their positions for the first serve (the 'Kento MOMOTA' name graphic is up at 426 s) to just after the last point of game one, read off the broadcast's own scoreboard: 0-1 at 490 s, 20-8 at 1500 s with a challenge at 1530 s, and the board gone by 1560 s. 28451 frames, 1138 s."
+      },
+      "court": {
+        "preset": "doubles_corners",
+        "frame": 62250,
+        "note": "The four doubles corners, eyeballed to about twenty pixels and then slid until every painted line the calibration projects sits on painted pixels -- the mean squared distance from the projection to a white-line mask fell from 22.2 px to 0.22 px. Fitting to the lines rather than clicking matters here: a hand-clicked calibration of this clip scored 0.52 of the lines found and this one scores 0.90, which is the difference between a court test with a margin and one without. Four points, so the reprojection error is exactly zero by construction and says nothing; the line score is the measure. Taken on a game-two frame and it holds through game one, because the main camera is locked off and only the replay cameras move.",
+        "image_points": [
+          [522.1, 1019.5],
+          [1401.1, 1019.2],
+          [1278.9, 455.6],
+          [645.4, 455.4]
+        ],
+        "world_points": [
+          [0.0, 0.0],
+          [6.1, 0.0],
+          [6.1, 13.4],
+          [0.0, 13.4]
+        ],
+        "line_share": 0.9
+      },
+      "note": "The first full match with a real broadcast's cuts, replays and adverts, which the not-badminton path of the segmenter had never met, and 785 MB, so nothing here decodes the whole of it: the reader test seeks, the frame cache fills ahead only to its budget, and the segmentation tests take game one. Three games: game one runs 426 to 1556 s, the interval to about 1700 s, and the match ends near 3080 s with an outro from 3120 s. Segmented; not yet through tracking or the chain in the suite."
     },
     {
       "id": "side_on_smash",

@@ -236,9 +236,13 @@ Known gaps:
   court (two metres beyond the lines) finds no contrast to split on and
   treats the twelve minutes as one stretch of play. The crowd's motion did
   not defeat the split there; the court region alone lacked the contrast.
-  Whether a livelier crowd would is still unmeasured. And the
-  not-badminton path has only ever met a title card, a lens occlusion and a
-  run of black frames, never an actual advert or replay.
+  Whether a livelier crowd would is still unmeasured. The not-badminton path
+  has now met a real broadcast's adverts, replays, close-ups and crowd shots
+  on game one of `momota_lindan_broadcast`, and excludes every one of them
+  -- but only through the court's lines, so only on a calibrated clip.
+  Nothing detects the court by itself, which is the whole of the remaining
+  broadcast gap: an uncalibrated directed clip is now kept whole and says so
+  rather than being split wrongly, and that costs every frame tracked.
 
 ## Feedback to act on
 
@@ -282,12 +286,43 @@ in their words as far as possible; each is a real defect, not a preference:
   excluded before the motion is looked at. Measured on the same range with
   the user's calibration: wide shots score 0.52, close-ups and the crowd
   0.00 to 0.03, 132 s of 279 s excluded, and the six stretches of play that
-  remain are all on the wide shot (contact sheet in the session). That
-  needs the court calibrated before the run; without it the broadcast is
-  still segmented by motion and still wrong. The user's view: the type of video (phone drill, locked-off
-  match camera, broadcast with cuts) may need different models or
-  frameworks, not one segmenter tuned to all of them. Investigate on this
-  clip first, with the sheet, before touching the phone-clip guards.
+  remain are all on the wide shot (contact sheet in the session).
+
+  **Investigated on a whole game, and the answer is no separate path.** Game
+  one of that broadcast -- frames 10650 to 39100, first serve to the last
+  point of a 21-8 game, the boundaries read off its own scoreboard and
+  recorded in the manifest as `game_one` -- was calibrated by fitting the
+  four doubles corners to the painted lines rather than clicking them
+  (`benchmarks/clips.json`, and the fit took the mean squared distance from
+  the projected lines to a white-line mask from 22.2 px to 0.22 px). That
+  raises the line score from the clicked calibration's 0.52 to 0.90, and at
+  0.90 the separation is total: every wide-shot frame scores 0.87 to 0.91
+  and every close-up, replay, crowd shot and advert 0.00 to 0.09, with
+  nothing between. The 29 points come out as 31 court-visible stretches at
+  an 11.5 s median; 677 s of 1138 s are excluded and 40.5% of the frames
+  tracked. One measurement carries the broadcast, so a second segmenter
+  would be a second thing to calibrate for no gain. What did change:
+  `MANY_CUTS` now refuses to split an uncalibrated clip with ten or more
+  cuts in it, because there motion is not weak evidence but inverted, and
+  the whole clip is kept instead (guards in `tests/test_real_footage.py` on
+  a six-minute prefix, and in `tests/test_segments.py` on synthetic
+  broadcasts). Two things the broadcast exposed and no other clip could:
+  `find_cuts` finds 47 of about sixty real cutaways, missing dissolves, and
+  the scene-signature test kept eleven shots holding no court at all, so it
+  is the weaker of the two tests and earns its keep only where there is no
+  calibration.
+
+  The whole game was then tracked with both players (679 s, and the saved
+  project is next to the video): both are found on 98.7% and 99.1% of the
+  frames they are looked for, which is far better than `lindan_rally`'s far
+  player at three quarters, and neither is ever confused with a line judge,
+  the umpire or the crowd. The chain finds 32 rallies for 29 points and
+  scores them near 8, far 23 against the true 8-21, withholds the headline,
+  and raises 244 questions -- unverified beyond the score, and the contact
+  count of 693 for 29 points says contact detection over-triggers on this
+  footage. The remaining broadcast gap is upstream of all of it: the court
+  has to be clicked before the first run, and nothing detects it
+  automatically.
 
 ## Where it is going
 

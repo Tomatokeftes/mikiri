@@ -8,6 +8,7 @@ import numpy as np
 
 from mikiri.segments import (
     INTERVAL_S,
+    MANY_CUTS,
     MERGE_GAP_S,
     MIN_PLAY_S,
     SCENE_DELTA,
@@ -159,6 +160,82 @@ def test_a_clip_already_trimmed_to_play_is_not_segmented_and_says_so():
     assert result.note
     assert [s.state for s in result.segments] == [STATE_PLAY]
     assert "play_share" not in result.summary()
+
+
+def _broadcast_scan(n_cuts: int):
+    """A clip that cuts between the wide shot and a close-up, ten seconds each.
+
+    The close-ups carry *more* motion than the rallies, which is the broadcast
+    failure in miniature: a face filling the frame changes more pixels than two
+    small players do, so a motion threshold calls the cutaways play and the
+    rallies rest. Their scene signatures stay within :data:`SCENE_DELTA` of the
+    wide shot's, so the scene test keeps them and the motion threshold is the
+    only thing deciding, which is the situation being tested.
+    """
+    pattern: list[tuple[float, float]] = []
+    scenes: list[tuple[float, float]] = []
+    for i in range(n_cuts + 1):
+        if i % 2 == 0:
+            pattern += [(6.0, BUSY), (4.0, QUIET)]  # a rally, then the walk back
+        else:
+            pattern += [(7.0, 3 * BUSY), (3.0, 2 * BUSY)]  # a close-up throughout
+        scenes.append((10.0, 100.0 + (0.0 if i % 2 == 0 else SCENE_DELTA / 2)))
+    return _scan(pattern, scenes)
+
+
+def test_a_clip_a_director_cut_is_not_split_without_a_court_to_judge_it_by():
+    """Guards the broadcast failure the user reported: close-ups tracked, rallies skipped.
+
+    Between every point a broadcast cuts to a close-up, a replay or the crowd,
+    and those frames move more pixels than the rally does, so the motion
+    threshold does not merely lose accuracy -- it comes out backwards, and
+    tracking then spends the model on the faces and samples the rallies at a
+    fifth of the rate. Only the court's own lines separate the two, and
+    without a calibration there are none to look for, so above MANY_CUTS the
+    split is refused and every frame kept.
+    """
+    result = segment_clip(_broadcast_scan(MANY_CUTS + 2))
+    assert result.not_segmented
+    assert "no court calibration" in result.note
+    assert "each shot split separately" not in result.note
+    # Everything kept, so the rallies are tracked in full rather than sampled.
+    assert result.analysable_mask().all()
+    assert result.work_rest() is None
+
+
+def test_a_clip_with_a_few_cuts_is_still_split_by_its_motion():
+    """Guards the twelve minutes of single-camera match footage in the benchmarks.
+
+    lindan_source has three cuts in it -- a title card at each end -- and its
+    45 rallies are the thing the merge gap was measured on. A rule that
+    refused to split anything with a cut in it would delete that result, so
+    the refusal is a count and this is the clip that sets its floor.
+    """
+    result = segment_clip(_broadcast_scan(3))
+    assert not result.not_segmented
+    assert _play_segments(result)
+
+
+def test_a_director_cut_clip_is_still_split_when_the_court_says_which_frames_are_play():
+    """Guards the refusal from firing where the stronger measurement is available.
+
+    The cuts are not the problem; having nothing better than motion is. With
+    court scores in the scan the cutaways are excluded by the lines they do
+    not show, and the rallies are split out of what is left.
+    """
+    scan = _broadcast_scan(MANY_CUTS + 2)
+    wide = np.zeros(scan.n_frames)
+    # The wide shot shows the court, the cutaways do not: alternating ten
+    # second stretches, the same shape the motion pattern was built with.
+    for i in range(0, scan.n_frames, _frames(10.0)):
+        if (i // _frames(10.0)) % 2 == 0:
+            wide[i : i + _frames(10.0)] = 0.9
+    scan.court = wide
+    result = segment_clip(scan)
+    assert not result.not_segmented
+    assert result.seconds_in(STATE_NOT_BADMINTON) > 0
+    assert _play_segments(result)
+    assert "no court calibration" not in result.note
 
 
 def test_a_long_rest_is_an_interval_and_a_short_one_is_not():

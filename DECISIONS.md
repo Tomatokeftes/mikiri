@@ -208,6 +208,28 @@ Three consequences that are easy to get wrong later:
   turn a clip into nothing. It needs no cut: a slow zoom fails it the same
   way. Without a calibration the motion segmenter runs alone and on such
   footage is still wrong.
+* **Broadcast footage gets no segmenter of its own; it gets the court test
+  made compulsory.** The open question was whether a directed broadcast
+  needs a different model from the one tuned to phone clips. Game one of
+  `momota_lindan_broadcast` -- 21-8, frames 10650 to 39100 -- answers no,
+  with the court fitted to its painted lines rather than clicked. Every
+  frame of the wide shot scores 0.87 to 0.91 of the lines and every
+  close-up, replay, crowd shot and advert scores 0.00 to 0.09, with nothing
+  between: one measurement separates the two kinds of footage completely,
+  and the director's own cuts then land the 29 points as 31 court-visible
+  stretches at an 11.5 s median. A second model would be a second thing to
+  calibrate for no gain. What the broadcast did change is that the court
+  test stops being optional: above ten camera cuts with no calibration the
+  clip is not split at all, because there motion is not weak evidence but
+  inverted evidence, and a confident wrong answer is worse for the user
+  than none. Ten is a count and not a rate, because a rate over a short
+  clip is one event -- a twelve-second screen recording with a single cut
+  scores 4.85 cuts a minute against the broadcast's 2.48 -- while the
+  counts separate cleanly: 0, 0, 1 and 3 across the single-camera clips
+  against 47 in nineteen minutes of broadcast. The refusal costs inference
+  (100% of the frames tracked instead of 65%) and buys the rallies back at
+  full rate; calibrating the court costs four clicks and takes it to 40%,
+  which is what the note says.
 * **Motion is scanned over the whole frame, not the court.** `scan_motion`
   can take a court mask, and the obvious use is a moving crowd behind the
   court. Measured on the twelve minutes of `lindan_source`, the whole-frame

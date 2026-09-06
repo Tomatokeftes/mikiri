@@ -38,6 +38,14 @@ sudden change across most of the frame marks every one of those boundaries far
 more reliably than any motion threshold. Both paths run here, and neither is
 assumed.
 
+**The two kinds do not need two segmenters, and this was measured rather than
+assumed.** One question -- is the calibrated court where the calibration says
+it is -- carries the broadcast on its own, and it is the same question a phone
+clip is welcome to answer. What the broadcast changed is that the question
+stops being optional: without an answer to it, motion on a directed clip is
+not weak evidence but inverted evidence, so above :data:`MANY_CUTS` cuts an
+uncalibrated clip is left unsplit instead of split wrongly.
+
 **The thresholds are set for club footage, not for a regulated match.** Almost
 nothing this app sees is an officiated game, so the numbers in the Laws are
 context rather than calibration: a club rally is shorter than a match rally, a
@@ -80,6 +88,25 @@ the reason given on the constant. That clip's closing title card was excluded
 as another scene, a whole-frame flash mid-match was not, and it has no
 adverts or replays, so the scene test has still only ever excluded a title
 card.
+
+**And then a whole game of a real broadcast.** Game one of
+``momota_lindan_broadcast`` -- frames 10650 to 39100, from the first serve to
+the last point of a 21-8 game -- with the court fitted to the painted lines
+was the first test of the court check against footage a director cut.
+Calibrated, it separates completely: every frame of the wide shot scores 0.87
+to 0.91 of the court's lines and every close-up, replay, crowd shot and
+advert scores 0.00 to 0.09, with nothing between. The 29 points come out as
+31 court-visible stretches at a median of 11.5 s, against a published elite
+men's singles rally of 8.8 +/- 2.0 s and the second or two of settling before
+each serve; 677 s of the 1138 s are excluded, and 40.5% of the frames are
+tracked. Uncalibrated, the same range is confidently wrong in the direction
+the constant on :data:`MANY_CUTS` describes -- 502 s called play, most of it
+close-ups -- which is what that constant now refuses. Two smaller things the
+broadcast showed and neither other clip could: :func:`find_cuts` finds 47 of
+about sixty real cutaways, because a dissolve does not change half the frame
+at once; and the scene-signature test kept eleven shots that hold no court at
+all, so it is the weaker of the two and earns its place only where there is
+no calibration to run the stronger one.
 
 **What this cannot do yet.** Warm-up is the hard case, and it is deliberately
 not attempted here. Two people hitting a shuttle at speed looks exactly like
@@ -211,6 +238,28 @@ EDITED_MIN_RESTS = 6
 #: frame, a flash or a dropped frame otherwise reads as a cut straight back,
 #: producing a camera shot one frame long.
 MIN_SHOT_S = 1.0
+#: Cuts in the scanned range above which the clip was cut by a director
+#: rather than filmed by one camera left running, and motion alone can no
+#: longer say which frames are the match. A broadcast leaves the court for a
+#: close-up, a replay and the crowd between every point, and a face filling
+#: the frame changes more pixels than two small players on a wide shot ever
+#: do, so the threshold comes out backwards: the close-ups read as play and
+#: the rallies as rest. Only :func:`court_visibility` separates them, and it
+#: needs a calibration, so a directed clip without one is not split at all
+#: (see :func:`segment_clip`).
+#:
+#: A count, not a rate, and measured on every clip in ``benchmarks``. Rates
+#: were tried first and are useless here: a twelve-second screen recording
+#: with one cut in it scores 4.85 cuts a minute, higher than the broadcast's
+#: 2.48, because a rate over a short clip is one event. The counts separate
+#: without that: the phone drill and the two short clips have 0 or 1, the
+#: twelve minutes of edited but single-camera match footage in
+#: ``lindan_source`` have 3, and nineteen minutes of the Momota v Lin Dan
+#: broadcast have 47 -- and 47 is itself an undercount, since the broadcast
+#: cuts away and back about sixty times in that range and the dissolves are
+#: missed. Ten sits three times above the highest single-camera clip and a
+#: fifth below the broadcast.
+MANY_CUTS = 10
 #: Side of the square thumbnail kept per frame as that frame's scene
 #: signature. At this size the image is the room -- floor, walls, lighting,
 #: where the court sits in frame -- and the players have averaged away, which
@@ -823,6 +872,7 @@ def segment_clip(
     merge_gap_s: float = MERGE_GAP_S,
     min_play_s: float = MIN_PLAY_S,
     interval_s: float = INTERVAL_S,
+    many_cuts: int = MANY_CUTS,
 ) -> ClipSegments:
     """Assign every scanned frame to a state.
 
@@ -833,20 +883,31 @@ def segment_clip(
     order matters, or a rally containing a lull is deleted rather than
     joined -- and long idle runs become intervals.
 
+    A clip with :data:`MANY_CUTS` cuts in it and no calibration is the one case
+    where none of that is attempted. A director cuts away from the court
+    between every point, and on those frames the motion signal is not merely
+    noisy but inverted, so the split it produces is confidently wrong rather
+    than uncertain. The clip comes back whole, with ``not_segmented`` set and
+    a note asking for the court -- which is not a scolding but the cheaper
+    path: on the Momota v Lin Dan broadcast, one game calibrated tracks 40% of
+    its frames and the same game uncalibrated has to track all of them.
+
     Args:
         scan: Output of :func:`scan_motion`.
         merge_gap_s: Pauses shorter than this stay inside a stretch of play.
         min_play_s: Stretches of play shorter than this are not play.
         interval_s: Idle stretches at least this long are intervals.
+        many_cuts: Cuts above which an uncalibrated clip is left unsplit.
 
     Returns:
         A :class:`ClipSegments` covering the whole scanned range. When the clip
-        cannot be split -- no contrast to threshold on, or nothing long enough
-        to be a rally -- every court frame comes back as :data:`STATE_PLAY`
-        with ``not_segmented`` set and a note saying which of the two happened.
-        Claiming there is no play at all would be a stronger statement than the
-        signal supports, and it would hand the caller an empty clip
-        indistinguishable from one that really is empty.
+        cannot be split -- no contrast to threshold on, nothing long enough to
+        be a rally, or a directed clip with no court to judge it by -- every
+        court frame comes back as :data:`STATE_PLAY` with ``not_segmented`` set
+        and a note saying which of the three happened. Claiming there is no
+        play at all would be a stronger statement than the signal supports, and
+        it would hand the caller an empty clip indistinguishable from one that
+        really is empty.
     """
     fps = float(scan.fps) or 30.0
     n = scan.n_frames
@@ -876,20 +937,38 @@ def segment_clip(
     # the camera spent the most time pointed at.
     on_court = _court_shots(shots, scan.signature)
 
+    # A directed clip with nothing to check the court against is not split at
+    # all. The motion threshold does not merely lose accuracy there, it comes
+    # out backwards, and a wrong answer that looks like a right one is worse
+    # than none: it hands the tracker the close-ups at full rate and the
+    # rallies at a fifth of it, which is what the user saw.
+    directed = visible is None and len(cuts) >= many_cuts
+
     play = np.zeros(n, dtype=bool)
     usable_any = False
-    for (a, b), is_court in zip(shots, on_court):
-        if not is_court:
-            continue
-        thr, usable = play_threshold(motion[a : b + 1])
-        if usable:
-            usable_any = True
-            window = motion[a : b + 1]
-            play[a : b + 1] = np.isfinite(window) & (window > thr)
+    if not directed:
+        for (a, b), is_court in zip(shots, on_court):
+            if not is_court:
+                continue
+            thr, usable = play_threshold(motion[a : b + 1])
+            if usable:
+                usable_any = True
+                window = motion[a : b + 1]
+                play[a : b + 1] = np.isfinite(window) & (window > thr)
 
     notes: list[str] = []
     not_segmented = False
-    if not usable_any:
+    if directed:
+        not_segmented = True
+        notes.append(
+            f"{len(cuts)} camera cuts and no court calibration, so which frames are this match "
+            "cannot be read from motion alone and none of the clip is cut away; calibrate the "
+            "court and the same run tracks a fraction of these frames"
+        )
+        for (a, b), is_court in zip(shots, on_court):
+            if is_court:
+                play[a : b + 1] = True
+    elif not usable_any:
         # Nothing to split on. Keep every court frame rather than report no
         # play at all, which would be the stronger claim of the two. Frames
         # from another scene are still excluded: not being able to find the
@@ -970,7 +1049,7 @@ def segment_clip(
             f"the court's lines were found in only {court_ref:.0%} of samples even in the best "
             "frames, so the picture was not judged by them"
         )
-    if cuts:
+    if cuts and not directed:
         plural = "s" if len(cuts) > 1 else ""
         notes.append(f"{len(cuts)} camera cut{plural} found; each shot split separately")
     off = sum(1 for c in on_court if not c)

@@ -591,3 +591,149 @@ def test_labelling_real_contacts_produces_a_report_and_names_only_what_separates
         s.project.match_review.shot_labels.clear()
         s._chain_strokes = None
         s._match = None
+
+
+# --- a broadcast: one game of a match a director cut, with the court fitted ------
+
+BROADCAST = benchmark_clip("momota_lindan_broadcast") or {}
+_BC_COURT = BROADCAST.get("court", {})
+BROADCAST_COURT_IMAGE = _BC_COURT.get("image_points", [])
+BROADCAST_COURT_WORLD = _BC_COURT.get("world_points", [])
+BROADCAST_LINE_SHARE = _BC_COURT.get("line_share", 0.9)
+GAME_ONE = BROADCAST.get("game_one", {})
+# Six minutes from the first serve. The whole game is 28451 frames and scanning
+# it takes two and a half minutes, which is more than this suite should spend
+# to make these three points; this prefix holds nine stretches of the court
+# being visible, fourteen camera cuts and every kind of cutaway the broadcast
+# uses, and the figures for the whole game are in benchmarks/clips.json.
+BROADCAST_PREFIX = 9000
+
+
+@pytest.fixture(scope="module")
+def broadcast_scan():
+    """The first six minutes of game one scanned once, with the court scored.
+
+    The scan decodes real video and the three tests below ask the same
+    question of it, so it is shared. The court scores ride in the scan, which
+    is what lets the same arrays answer both the calibrated and the
+    uncalibrated question without decoding twice.
+    """
+    from mikiri.court import compute_homography
+    from mikiri.segments import court_line_samples, scan_motion
+
+    path = clip_path("momota_lindan_broadcast")
+    if path is None:
+        pytest.skip("benchmark clip 'momota_lindan_broadcast' not present")
+    start = int(GAME_ONE.get("trim", [10650, 39100])[0])
+    H, _ = compute_homography(BROADCAST_COURT_IMAGE, BROADCAST_COURT_WORLD)
+    with VideoReader(path) as reader:
+        samples = court_line_samples(H, reader.info.width, reader.info.height)
+        return scan_motion(reader, start, start + BROADCAST_PREFIX - 1, court_samples=samples)
+
+
+def test_the_broadcast_wide_shot_is_told_from_its_cutaways_by_the_court_alone(broadcast_scan):
+    """Guards the one measurement the whole broadcast path rests on.
+
+    Between every point this broadcast cuts to a close-up, a replay from
+    another camera, the crowd or an advert, and on motion those are
+    indistinguishable from play -- worse than indistinguishable, since a face
+    filling the frame moves more pixels than two small players do. The share
+    of the court's own painted lines found where the calibration projects them
+    separates them completely on this footage, and it is the completeness that
+    matters: a test on the classification alone would still pass with the two
+    populations touching, which is where it would start to fail on the next
+    broadcast.
+    """
+    from mikiri.segments import COURT_VISIBLE_SHARE, court_visible_mask
+
+    visible, ref = court_visible_mask(broadcast_scan)
+    assert visible is not None, "the calibration must be good enough to judge frames by"
+    assert ref == pytest.approx(BROADCAST_LINE_SHARE, abs=0.06), (
+        f"the best frames found {ref:.2f} of the court's lines, not the {BROADCAST_LINE_SHARE} "
+        "the manifest's calibration was fitted to"
+    )
+    scores = np.asarray(broadcast_scan.court, dtype=float)
+    wide, cutaway = scores[visible], scores[~visible]
+    assert wide.size and cutaway.size, "the prefix holds both the wide shot and cutaways"
+    assert cutaway.max() < 0.5 * wide.min(), (
+        f"cutaways reach {cutaway.max():.2f} against a wide shot as low as {wide.min():.2f}: "
+        "the two populations are no longer separated by a clear margin"
+    )
+    # Both sides of the classification threshold are a long way from it.
+    assert wide.min() > COURT_VISIBLE_SHARE * ref * 1.5
+    assert cutaway.max() < COURT_VISIBLE_SHARE * ref * 0.5
+
+
+def test_a_broadcast_cut_apart_by_its_director_yields_one_stretch_of_play_per_point(
+    broadcast_scan,
+):
+    """Guards the user's report: rallies sampled at four frames a second.
+
+    The symptom was a skeleton every sixth frame through the rallies and full
+    tracking of the close-ups, because the motion threshold had the two the
+    wrong way round. With the court judged first, every stretch of play must
+    be on the wide shot -- not most of them -- and the stretches must come out
+    at rally length rather than fused into the thirty-second blobs a merged
+    cutaway produces.
+    """
+    from mikiri.segments import segment_clip
+
+    seg = segment_clip(broadcast_scan)
+    assert not seg.not_segmented, seg.note
+    scores = np.asarray(broadcast_scan.court, dtype=float)
+    plays = [s for s in seg.segments if s.state == STATE_PLAY]
+    assert len(plays) >= 5, (
+        f"six minutes of a broadcast game holds several points, got {len(plays)}"
+    )
+    for s in plays:
+        window = scores[s.start - seg.start : s.end - seg.start + 1]
+        assert np.nanmin(window) > 0.45, (
+            f"the stretch of play at frame {s.start} drops to {np.nanmin(window):.2f} of the "
+            "court's lines, so part of it is a cutaway being tracked as a rally"
+        )
+    median = float(np.median([s.seconds for s in plays]))
+    assert 6.0 < median < 20.0, f"median stretch {median:.1f}s is not a rally length"
+    assert seg.seconds_in(STATE_NOT_BADMINTON) > seg.seconds_in(STATE_PLAY), (
+        "a broadcast spends more time away from the court than on it"
+    )
+
+
+def test_the_same_broadcast_without_a_court_is_left_whole_rather_than_split_backwards(
+    broadcast_scan,
+):
+    """Guards the refusal that MANY_CUTS exists for, on the clip that set it.
+
+    Without a calibration there is nothing but motion, and on this footage
+    motion is inverted rather than merely noisy: it called 502 s of the game
+    play, most of it close-ups, and put the rallies in the rest. Keeping every
+    frame costs inference and withholds the per-rally figures; producing a
+    confident wrong answer costs the user their trust in the panel.
+    """
+    from mikiri.segments import MotionScan, find_cuts, segment_clip
+
+    scan = broadcast_scan
+    blind = MotionScan(
+        motion=scan.motion,
+        changed=scan.changed,
+        signature=scan.signature,
+        start=scan.start,
+        fps=scan.fps,
+    )
+    assert len(find_cuts(blind.changed, blind.fps)) >= 10, (
+        "this prefix must carry enough cuts to be recognised as a directed clip"
+    )
+    seg = segment_clip(blind)
+    assert seg.not_segmented
+    assert "no court calibration" in seg.note
+    assert seg.work_rest() is None
+    # Nothing is called rest, so no rally can be sampled at the idle rate; the
+    # only frames dropped are the shots the scene signature says are somewhere
+    # else, which is a weaker test than the court's lines and all there is.
+    assert seg.seconds_in(STATE_IDLE) == 0
+    assert seg.seconds_in(STATE_PLAY) + seg.seconds_in(STATE_NOT_BADMINTON) == pytest.approx(
+        blind.n_frames / blind.fps, abs=0.1
+    )
+    assert seg.seconds_in(STATE_PLAY) > segment_clip(scan).seconds_in(STATE_PLAY), (
+        "keeping the clip whole must leave more of it to track than the court test does, or "
+        "the refusal is throwing rallies away rather than declining to find them"
+    )
