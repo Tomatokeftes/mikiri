@@ -269,6 +269,26 @@ in their words as far as possible; each is a real defect, not a preference:
   the user pick each person to track in the run dialog rather than "the
   largest on the other side".
 
+* **Segmentation is wrong on broadcast footage, and the user says the
+  approach may have to differ by video type.** Measured on the Momota v Lin
+  Dan broadcast (`momota_lindan_broadcast`, frames 9779-16759, contact sheet
+  in the 2026-09-06 session): the close-ups of a player read as *play*
+  because a face filling the frame moves more pixels than two small players
+  on a wide shot ever do, and the wide shots -- the actual rallies -- read
+  as *rest*, so they were tracked at 4 Hz and the user saw a skeleton every
+  sixth frame. The scan now scores every frame by how many of the
+  calibrated court's painted lines are where the calibration says
+  (`segments.court_visibility`), and a frame that does not show the court is
+  excluded before the motion is looked at. Measured on the same range with
+  the user's calibration: wide shots score 0.52, close-ups and the crowd
+  0.00 to 0.03, 132 s of 279 s excluded, and the six stretches of play that
+  remain are all on the wide shot (contact sheet in the session). That
+  needs the court calibrated before the run; without it the broadcast is
+  still segmented by motion and still wrong. The user's view: the type of video (phone drill, locked-off
+  match camera, broadcast with cuts) may need different models or
+  frameworks, not one segmenter tuned to all of them. Investigate on this
+  clip first, with the sheet, before touching the phone-clip guards.
+
 ## Where it is going
 
 Mikiri is becoming two modules over one tracking run and one court

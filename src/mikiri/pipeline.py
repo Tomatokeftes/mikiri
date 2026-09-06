@@ -24,6 +24,7 @@ from mikiri.segments import (
     STATE_IDLE,
     STATE_INTERVAL,
     STATE_NOT_BADMINTON,
+    court_line_samples,
     load_scan,
     save_scan,
     scan_motion,
@@ -34,7 +35,7 @@ from mikiri.tracking import SIDES, FrameMeta, PlayersTracker
 from mikiri.video import FrameCache, VideoReader, downscale, video_id
 
 #: Bump when the reader or tracker changes so stale cached results are never reused.
-CACHE_VERSION = 5  # the side constraint changes the subject's track; others are stored
+CACHE_VERSION = 6  # the segmenter judges frames by the court's lines when calibrated
 
 #: How often to run the model through a stretch the segmentation called idle,
 #: in hertz. Not zero, because identity is far cheaper to keep than to recover:
@@ -227,14 +228,21 @@ def pose_cache_path(video_path: str | Path, req: RunRequest, bkey: str) -> Path:
     return video_cache_dir(video_path) / f"pose_{req.key(bkey)}.npz"
 
 
-def scan_cache_path(video_path: str | Path, start: int, end: int) -> Path:
+def scan_cache_path(
+    video_path: str | Path, start: int, end: int, homography: list[list[float]] | None = None
+) -> Path:
     """Where the motion scan of ``start..end`` is cached.
 
-    The scan depends on the clip and the range and on nothing the user can
-    change, so a second run over the same range -- the other player added,
-    a setting changed -- must not decode the clip again for it.
+    The scan depends on the clip, the range and the court calibration it was
+    scored against, and on nothing else the user can change, so a second run
+    over the same range -- the other player added, a setting changed -- must
+    not decode the clip again for it.
     """
-    return video_cache_dir(video_path) / f"scan_{int(start)}_{int(end)}_{SCAN_LONGEST}.npz"
+    hkey = "nocourt"
+    if homography is not None:
+        payload = json.dumps([[float(f"{v:.6g}") for v in row] for row in homography])
+        hkey = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:8]
+    return video_cache_dir(video_path) / f"scan_{int(start)}_{int(end)}_{SCAN_LONGEST}_{hkey}.npz"
 
 
 def save_result(path: Path, result: TrackingResult) -> None:
@@ -372,15 +380,24 @@ def run_tracking(
         video_path = getattr(getattr(reader, "info", None), "path", None) or getattr(
             reader, "path", None
         )
-        scan_path = scan_cache_path(video_path, req.start, req.end) if video_path else None
+        scan_path = (
+            scan_cache_path(video_path, req.start, req.end, req.homography) if video_path else None
+        )
         scan = load_scan(scan_path) if scan_path is not None else None
         if scan is None:
+            samples = None
+            info = getattr(reader, "info", None)
+            if req.homography is not None and info is not None:
+                samples = court_line_samples(
+                    np.asarray(req.homography, dtype=float), int(info.width), int(info.height)
+                )
             scan = scan_motion(
                 reader,
                 req.start,
                 req.end,
                 check_cancel=None if job is None else job.check_cancel,
                 progress=lambda f, m: progress(0.05 * f, m),
+                court_samples=samples,
             )
             if scan_path is not None:
                 try:

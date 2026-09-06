@@ -100,6 +100,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from mikiri.court import (
+    COURT_LENGTH,
+    DOUBLES_WIDTH,
+    LONG_SERVICE_FROM_BASELINE,
+    NET_Y,
+    SHORT_SERVICE_FROM_NET,
+    SINGLES_WIDTH,
+    court_to_image,
+)
 from mikiri.shuttle import difference_map
 from mikiri.video import downscale
 
@@ -256,6 +265,12 @@ class MotionScan:
     signature: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     start: int = 0
     fps: float = 30.0
+    #: Per-frame share of the calibrated court's painted lines found where
+    #: the calibration says they are, or ``None`` when no calibration was
+    #: given to the scan. This is what tells a close-up, a replay from
+    #: another angle or a crowd shot from the court view, and it needs no
+    #: cut to do it: a slow zoom fails it just the same.
+    court: np.ndarray | None = None
 
     @property
     def n_frames(self) -> int:
@@ -434,6 +449,7 @@ def scan_motion(
     mask: np.ndarray | None = None,
     check_cancel: Callable[[], None] | None = None,
     progress: Callable[[float, str], None] | None = None,
+    court_samples: np.ndarray | None = None,
 ) -> MotionScan:
     """Measure per-frame motion over a clip in one sequential pass.
 
@@ -454,6 +470,9 @@ def scan_motion(
             clip waited for the whole clip to be decoded.
         progress: Called with the fraction scanned and a message, at the same
             cadence.
+        court_samples: Points on the calibrated court's lines in *full*
+            frame pixels, from :func:`court_line_samples`; when given, every
+            frame is scored for how much of the court it shows.
         mask: Optional boolean mask in *scaled* frame coordinates, True where
             pixels should be counted. Meant for restricting motion to the
             court in front of a moving crowd, and unused by the pipeline:
@@ -480,6 +499,7 @@ def scan_motion(
     motion = np.full(n, np.nan)
     changed = np.full(n, np.nan)
     signature = np.full((n, SIGNATURE_SIDE * SIGNATURE_SIDE), np.nan, dtype=np.float32)
+    court = None if court_samples is None or court_samples.shape[0] == 0 else np.full(n, np.nan)
 
     prev: np.ndarray | None = None
     for idx, frame in reader.iter_range(start, end):
@@ -491,6 +511,8 @@ def scan_motion(
                 check_cancel()
             if progress is not None:
                 progress(i / n, f"Scanning the clip for play ({idx})")
+        if court is not None:
+            court[i] = court_visibility(frame, court_samples)
         small, _ = downscale(frame, longest)
         signature[i] = scene_signature(small)
         if prev is not None and prev.shape == small.shape:
@@ -501,7 +523,159 @@ def scan_motion(
                     motion[i] = float(np.percentile(flat, MOTION_PERCENTILE))
                     changed[i] = float(np.count_nonzero(flat > CHANGED_DELTA) / flat.size)
         prev = small
-    return MotionScan(motion=motion, changed=changed, signature=signature, start=start, fps=fps)
+    return MotionScan(
+        motion=motion, changed=changed, signature=signature, start=start, fps=fps, court=court
+    )
+
+
+#: How far apart, in court metres, the points sampled along each painted line
+#: are. A quarter of a metre puts about four hundred samples on a court, a
+#: negligible cost per frame and enough that a player standing on a line
+#: hides a few of them, not the verdict.
+LINE_SAMPLE_SPACING_M = 0.25
+#: Grey levels a line pixel must exceed both of its flanks by to count as a
+#: painted line found where the calibration says. Court lines are white on a
+#: green, blue or wooden floor: the contrast is large, and this only has to
+#: beat the floor's own texture.
+LINE_CONTRAST = 20
+#: Where the flanks are read, in line widths: far enough out to be floor on
+#: either side of a 4 cm line drawn a few pixels wide, near enough to be the
+#: same floor.
+LINE_FLANK_WIDTHS = 2.5
+#: A frame shows the court when its share of found lines is at least this
+#: fraction of the clip's own best frames. Relative, because how many lines
+#: a camera can see at all depends on where it stands: a wide shot from
+#: behind finds most of them, a low one finds the near half.
+COURT_VISIBLE_SHARE = 0.5
+#: Below this share of lines found in the clip's best frames the method is
+#: not trusted at all: the calibration may be off, the lines faint, and a
+#: verdict either way would rest on nothing.
+MIN_COURT_REF = 0.25
+#: The line width in metres, for the flank offset.
+LINE_WIDTH_M = 0.04
+#: How far, in pixels, a line may sit from where the calibration projects
+#: it and still be found: the line pixel is the brightest within this many
+#: pixels along the normal. A four-corner calibration on a real lens puts an
+#: interior line a pixel or two off, and on the Momota v Lin Dan broadcast
+#: that was the difference between finding 30% of the lines in a wide shot
+#: and finding 50%, against 0 to 3% in a close-up either way.
+LINE_TOLERANCE_PX = 2
+#: The flanks are read at least this far out, in pixels, however thin the
+#: line's projection is: any nearer and the flank is the line itself.
+MIN_FLANK_PX = 3.0
+
+
+def _court_lines() -> list[tuple[np.ndarray, np.ndarray]]:
+    """The painted floor lines of a full court, as metre endpoints."""
+    w, s, n = DOUBLES_WIDTH, SINGLES_WIDTH, COURT_LENGTH
+    alley = (w - s) / 2
+    lines = [
+        ((0.0, 0.0), (w, 0.0)),
+        ((0.0, n), (w, n)),
+        ((0.0, 0.0), (0.0, n)),
+        ((w, 0.0), (w, n)),
+        ((alley, 0.0), (alley, n)),
+        ((w - alley, 0.0), (w - alley, n)),
+        ((0.0, LONG_SERVICE_FROM_BASELINE), (w, LONG_SERVICE_FROM_BASELINE)),
+        ((0.0, n - LONG_SERVICE_FROM_BASELINE), (w, n - LONG_SERVICE_FROM_BASELINE)),
+        ((0.0, NET_Y - SHORT_SERVICE_FROM_NET), (w, NET_Y - SHORT_SERVICE_FROM_NET)),
+        ((0.0, NET_Y + SHORT_SERVICE_FROM_NET), (w, NET_Y + SHORT_SERVICE_FROM_NET)),
+        ((w / 2, 0.0), (w / 2, NET_Y - SHORT_SERVICE_FROM_NET)),
+        ((w / 2, NET_Y + SHORT_SERVICE_FROM_NET), (w / 2, n)),
+    ]
+    return [(np.array(a, dtype=float), np.array(b, dtype=float)) for a, b in lines]
+
+
+def court_line_samples(
+    homography: np.ndarray, width: int, height: int, spacing_m: float = LINE_SAMPLE_SPACING_M
+) -> np.ndarray:
+    """Points on the court's painted lines, in frame pixels, with where to read their flanks.
+
+    Args:
+        homography: Image-to-court homography of the calibrated court, in
+            the video's own pixels.
+        width: Frame width in those pixels.
+        height: Frame height.
+        spacing_m: Distance between samples along a line.
+
+    Returns:
+        ``(k, 4)`` rows of ``x, y, dx, dy``: the sample and the pixel offset
+        to its flank, perpendicular to the line and scaled to the line's
+        width at that spot. Samples whose flanks fall outside the frame are
+        left out, so a court that runs off the picture is scored on the part
+        in it.
+    """
+    H = np.asarray(homography, dtype=float)
+    rows: list[np.ndarray] = []
+    for a, b in _court_lines():
+        length = float(np.linalg.norm(b - a))
+        count = max(2, int(round(length / spacing_m)) + 1)
+        t = np.linspace(0.0, 1.0, count)[:, None]
+        pts = a + t * (b - a)
+        along = (b - a) / length
+        normal = np.array([-along[1], along[0]])
+        # The flank in court metres, projected: this is the line's width in
+        # pixels where it is, so the flank is read the same distance out
+        # whether the line is near the camera or far from it.
+        img = court_to_image(H, pts)
+        side = court_to_image(H, pts + normal * LINE_WIDTH_M * LINE_FLANK_WIDTHS)
+        offset = side - img
+        rows.append(np.concatenate([img, offset], axis=1))
+    out = np.concatenate(rows, axis=0)
+    # Never read the flank from inside the line: at the far end of a court
+    # seen from behind, two and a half line widths is under two pixels.
+    norm = np.hypot(out[:, 2], out[:, 3])
+    scale = np.where(norm > 0, np.maximum(1.0, MIN_FLANK_PX / np.maximum(norm, 1e-9)), 1.0)
+    out[:, 2:] *= scale[:, None]
+    lo = out[:, :2] - np.abs(out[:, 2:])
+    hi = out[:, :2] + np.abs(out[:, 2:])
+    inside = (lo[:, 0] >= 1) & (lo[:, 1] >= 1) & (hi[:, 0] < width - 1) & (hi[:, 1] < height - 1)
+    return out[inside & np.isfinite(out).all(axis=1)]
+
+
+def court_visibility(frame: np.ndarray, samples: np.ndarray) -> float:
+    """Share of the sampled line points that are a bright line between darker flanks.
+
+    Read off the full frame in grey: a court that is where the calibration
+    says scores high, a close-up, a replay from another angle or the crowd
+    scores near zero, and a player standing on a line hides a handful of
+    samples and no more.
+    """
+    if samples.shape[0] == 0:
+        return float("nan")
+    grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    h, w = grey.shape[:2]
+    x, y, dx, dy = samples[:, 0], samples[:, 1], samples[:, 2], samples[:, 3]
+    norm = np.maximum(np.hypot(dx, dy), 1e-9)
+    ux, uy = dx / norm, dy / norm
+
+    def at(px: np.ndarray, py: np.ndarray) -> np.ndarray:
+        return grey[
+            np.clip(np.rint(py).astype(int), 0, h - 1), np.clip(np.rint(px).astype(int), 0, w - 1)
+        ].astype(int)
+
+    steps = np.arange(-LINE_TOLERANCE_PX, LINE_TOLERANCE_PX + 1)
+    on = np.max([at(x + t * ux, y + t * uy) for t in steps], axis=0)
+    flank = np.maximum(at(x + dx, y + dy), at(x - dx, y - dy))
+    return float(np.mean((on - flank) >= LINE_CONTRAST))
+
+
+def court_visible_mask(scan: MotionScan) -> tuple[np.ndarray | None, float]:
+    """Which frames show the calibrated court, and the reference share that decided it.
+
+    ``None`` when the scan carries no court scores, or when even the clip's
+    best frames found too few lines for the method to be trusted.
+    """
+    if scan.court is None:
+        return None, float("nan")
+    scores = np.asarray(scan.court, dtype=float)
+    known = scores[np.isfinite(scores)]
+    if known.size == 0:
+        return None, float("nan")
+    ref = float(np.percentile(known, 90))
+    if ref < MIN_COURT_REF:
+        return None, ref
+    return np.isfinite(scores) & (scores >= COURT_VISIBLE_SHARE * ref), ref
 
 
 def save_scan(path: str | Path, scan: MotionScan) -> None:
@@ -515,6 +689,7 @@ def save_scan(path: str | Path, scan: MotionScan) -> None:
         signature=scan.signature,
         start=np.array([scan.start]),
         fps=np.array([scan.fps]),
+        court=np.zeros(0) if scan.court is None else scan.court,
     )
 
 
@@ -525,12 +700,14 @@ def load_scan(path: str | Path) -> MotionScan | None:
         return None
     try:
         z = np.load(p)
+        court = z["court"] if "court" in z.files and z["court"].shape[0] else None
         return MotionScan(
             motion=z["motion"],
             changed=z["changed"],
             signature=z["signature"],
             start=int(z["start"][0]),
             fps=float(z["fps"][0]),
+            court=court,
         )
     except (OSError, ValueError, KeyError):
         return None
@@ -677,6 +854,14 @@ def segment_clip(
         return ClipSegments(fps=fps, n_frames=0, start=scan.start, note="empty clip")
 
     motion = np.asarray(scan.motion, dtype=float)
+    # Frames that do not show the calibrated court -- a close-up, a replay
+    # from another angle, the crowd -- are decided first and by the court's
+    # own lines, not by their motion: a face filling the frame moves more
+    # pixels than two small players ever do, and on a broadcast it was the
+    # close-ups that read as play and the rallies that read as rest.
+    visible, court_ref = court_visible_mask(scan)
+    if visible is not None:
+        motion = np.where(visible, motion, np.nan)
     cuts = find_cuts(scan.changed, fps)
 
     # A cut is a single frame of nonsense between two scenes; the frames after
@@ -758,6 +943,8 @@ def segment_clip(
     for (a, b), is_court in zip(shots, on_court):
         if not is_court:
             states[a : b + 1] = STATE_NOT_BADMINTON
+    if visible is not None:
+        states[~visible] = STATE_NOT_BADMINTON
 
     interval = max(1, int(round(interval_s * fps)))
     for a, b in _runs(states == STATE_IDLE):
@@ -771,6 +958,18 @@ def segment_clip(
         else:
             segments.append(Segment(scan.start + i, scan.start + i, str(states[i]), fps))
 
+    if visible is not None:
+        hidden_s = float((~visible).sum()) / fps
+        if hidden_s > 0:
+            notes.append(
+                f"{hidden_s:.0f} s did not show the court (close-ups, replays, the crowd) and "
+                f"were excluded; the best frames found {court_ref:.0%} of its lines"
+            )
+    elif scan.court is not None:
+        notes.append(
+            f"the court's lines were found in only {court_ref:.0%} of samples even in the best "
+            "frames, so the picture was not judged by them"
+        )
     if cuts:
         plural = "s" if len(cuts) > 1 else ""
         notes.append(f"{len(cuts)} camera cut{plural} found; each shot split separately")

@@ -192,6 +192,22 @@ Three consequences that are easy to get wrong later:
   pipeline reads in order regardless. The frame cache is filled ahead only to
   a budget on opening, for the same clip's sake: the whole of it would be
   eight gigabytes of JPEGs.
+* **A frame that does not show the calibrated court is excluded before its
+  motion is read, and the court's own painted lines decide it.** On the
+  Momota v Lin Dan broadcast the motion segmenter had it backwards: a face
+  filling the frame in a close-up moves more pixels than two small players
+  on the wide shot, so the close-ups read as play and the rallies as rest.
+  With the court calibrated, every frame is scored by the share of sampled
+  points on the court's lines that are a bright line between darker flanks
+  where the calibration projects them (two pixels of tolerance, because a
+  four-corner calibration on a real lens puts an interior line a pixel or
+  two off). Wide shots of that broadcast score 0.52, close-ups and the crowd
+  0.00 to 0.03; frames under half the clip's best score are excluded, 132 s
+  of the user's 279 s range. The method stands down when even the best
+  frames find under a quarter of the lines, so a wrong calibration cannot
+  turn a clip into nothing. It needs no cut: a slow zoom fails it the same
+  way. Without a calibration the motion segmenter runs alone and on such
+  footage is still wrong.
 * **Motion is scanned over the whole frame, not the court.** `scan_motion`
   can take a court mask, and the obvious use is a moving crowd behind the
   court. Measured on the twelve minutes of `lindan_source`, the whole-frame

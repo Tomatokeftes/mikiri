@@ -412,7 +412,11 @@ function timelineCaptionAt(f) {
   const run = ((S.state.tracking && S.state.tracking.segments) || []).find((r) => f >= r.start && f <= r.end);
   const parts = [];
   if (band) parts.push(band.label);
-  if (run && run.state !== 'play') parts.push(run.state.replace('_', ' '));
+  if (run && run.state === 'not_badminton') parts.push('court not in view: not tracked');
+  else if (run && run.state !== 'play') {
+    const m = S.pose && S.pose.meta && S.pose.meta[poseIndex(f)];
+    parts.push(run.state.replace('_', ' ') + (m && m.skipped ? ', tracked at 4 frames a second' : ''));
+  }
   return parts.join('; ');
 }
 
