@@ -2046,6 +2046,28 @@ class ProjectSession:
             },
         }
 
+    def shuttle_points(self) -> list[list[float]]:
+        """Where the shuttle was seen, as ``[frame, x, y]`` in display pixels.
+
+        Flat and in frame order because the only consumer draws it: one dot on
+        the frame it was seen on, with the few before it fading out behind. The
+        search runs after each contact and finds the shuttle for a fraction of
+        a second, so this is a handful of points per hit and empty until
+        :meth:`find_shuttle_launches` has run -- there is nothing to draw
+        before that, and saying so is the panel's job.
+        """
+        launches = self._launches or {}
+        start = self.pose_start
+        out: list[list[float]] = []
+        for hit, launch in launches.items():
+            for (x, y), offset in zip(launch.points, launch.offsets):
+                if np.isfinite([x, y]).all():
+                    out.append(
+                        [int(hit) + int(offset) + start, round(float(x), 1), round(float(y), 1)]
+                    )
+        out.sort(key=lambda r: r[0])
+        return out
+
     def pose_payload(self) -> dict:
         """Heavy payload: keypoints, angles, diagnostics and suggestions."""
         eff = self.effective_keypoints()
@@ -2068,6 +2090,7 @@ class ProjectSession:
             },
             "meta": self.project.frame_meta or [],
             "suggestions": [s.to_dict() for s in self.suggestions()],
+            "shuttle": self.shuttle_points(),
             "metrics": self.metrics(),
             "assessment": self.assessment(),
             # Which end the subject defends. Positions below are in the

@@ -66,6 +66,7 @@
           <select id="speed">
             <option value="0.1">0.1x</option><option value="0.25">0.25x</option>
             <option value="0.5">0.5x</option><option value="1" selected>1x</option>
+            <option value="2">2x</option><option value="4">4x</option>
           </select>
         </label>
         <span class="frame-readout">Frame <b id="frame-number">0</b> / <span id="frame-total">0</span>
@@ -74,6 +75,7 @@
         <label class="chk"><input type="checkbox" id="show-labels"> Labels</label>
         <label class="chk"><input type="checkbox" id="show-court" checked> Court points</label>
         <label class="chk"><input type="checkbox" id="show-racket" checked> Racket</label>
+        <label class="chk" title="The shuttle where the search found it, with a fading trail. Needs Find shuttle."><input type="checkbox" id="show-shuttle" checked> Shuttle</label>
         <label class="chk"><input type="checkbox" id="swap-lr"> Swap L/R</label>
         <label class="chk"><input type="checkbox" id="edit-toggle"> Edit keypoints</label>
         <button id="undo-btn" class="btn icon" title="Ctrl+Z" disabled>Undo</button>
@@ -157,7 +159,16 @@
       </div>
       <div id="camera-view" class="view-badge"></div>
       <div class="panel hidden" id="court-panel">
-        <div class="panel-title" title="footwork in court metres">Court <span class="muted small-text explain" id="court-sub">footwork in court metres</span></div>
+        <div class="panel-title" title="footwork in court metres">Court <span class="muted small-text explain" id="court-sub">footwork in court metres</span>
+          <span class="court-controls">
+            <label class="small-text">Show <select id="court-scope">
+              <option value="rally">this rally</option>
+              <option value="clip">whole clip</option>
+            </select></label>
+            <label class="chk small-text" title="Where the player spent time, hottest where most"><input type="checkbox" id="court-heat" checked> Heat</label>
+            <label class="chk small-text" title="The path the player took"><input type="checkbox" id="court-path" checked> Path</label>
+          </span>
+        </div>
         <div class="court-row">
           <canvas id="court-canvas"></canvas>
           <div id="footwork-metrics" class="footwork"></div>

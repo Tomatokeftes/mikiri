@@ -88,6 +88,9 @@ canvas#video-canvas, canvas#compare-canvas { display: block; max-width: 100%; ma
 .panel-title { font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* A long subtitle drops to its own line rather than breaking the title in two. */
 .panel-title > .small-text { flex: 1 1 260px; min-width: 0; font-weight: 400; }
+/* The court's own controls stay together on one line and take the row's
+   spare width, so a hidden subtitle does not leave them wrapped. */
+.court-controls { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
 
 /* The panels are for the numbers. Every sentence that explains one rather
    than stating it is marked .explain: hidden until the reader asks for it

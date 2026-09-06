@@ -315,6 +315,10 @@ class Launch:
     confidence: float
     note: str
     points: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
+    #: Frame of each point, counted from the contact. Kept because the points
+    #: are not one per frame -- the search skips frames it found nothing on --
+    #: so without them a caller drawing the shuttle would smear the gaps.
+    offsets: list[int] = field(default_factory=list)
 
     def elevation_deg(self) -> float:
         """Signed angle above the horizon, in ``[-90, 90]``, ignoring left/right.
@@ -348,6 +352,8 @@ class Launch:
             "n_points": int(self.n_points),
             "confidence": round(float(self.confidence), 3),
             "note": self.note,
+            "points": [[round(float(x), 1), round(float(y), 1)] for x, y in self.points],
+            "offsets": [int(o) for o in self.offsets],
         }
 
 
@@ -1453,6 +1459,7 @@ def _summarise_launch(
         confidence=round(confidence, 3),
         note="; ".join(notes),
         points=pts,
+        offsets=[int(o) for o in offsets],
     )
 
 

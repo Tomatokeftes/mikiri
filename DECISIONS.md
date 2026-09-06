@@ -260,6 +260,17 @@ Three consequences that are easy to get wrong later:
   recovery is held to the same test, because otherwise the two rules fight:
   rejecting the reaction leaves a same-side pair, and the best peak between
   them is the reaction just rejected.
+* **The court map is drawn per rally, and its heat is a count.** It used to
+  stamp one translucent disc per tracked frame and stroke a path through every
+  one. On forty seconds that is a heat map; on nineteen minutes it is eleven
+  thousand discs saturating to a solid red sheet under a white mesh, rebuilt
+  on every frame of playback, which is what made playback slow. The density is
+  now binned into quarter-metre cells, normalised to the 98th percentile of
+  the visited cells so one long stand at the base cannot flatten the rest,
+  coloured green through yellow to red, and cached. The default range is the
+  rally under the playhead, because patterns live inside a rally and the whole
+  clip is the average of thirty of them; the panel says which it is drawing,
+  since the figures beside it are always the clip's.
 * **Which hand a player holds the racket in is asked, never guessed.** Every
   contact on a side is found from that side's hitting arm, and until now
   every player but the subject was detected right-handed with nothing in the

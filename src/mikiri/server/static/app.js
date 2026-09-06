@@ -22,7 +22,10 @@ const S = {
   series: new Set(DEFAULT_SERIES), plots: [],
   compare: null, calibPick: null, courtPick: null, settings: null, suggestions: null,
   timelineDrag: null, selectFrame: null, selectPeople: [],
-  sidePage: 'movement', hideStepFor: null,
+  sidePage: 'movement', hideStepFor: null, showShuttle: true,
+  // The court map shows one rally by default: patterns live inside a rally,
+  // and the whole clip is the average of thirty of them.
+  courtScope: 'rally', showHeat: true, showPath: true, heat: null, poseKey: '',
 };
 
 // ---------------------------------------------------------------- utilities
@@ -104,6 +107,9 @@ async function loadPose() {
   const pose = await api('GET', `/api/projects/${S.pid}/pose`);
   S.pose = pose.has_pose ? pose : null;
   if (S.pose) S.suggestions = S.pose.suggestions;
+  // Anything cached off the track -- the heat layer -- belongs to this pose.
+  S.poseKey = S.pose ? `${S.pose.start}:${(S.pose.positions || []).length}:${S.pose.side}` : '';
+  S.heat = null;
 }
 
 async function refresh(refetchPose) {
@@ -151,6 +157,38 @@ function fitCanvas(canvas, wrap, vw, vh) {
     canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
   }
   return { w, h, scale: w / vw, dpr };
+}
+
+//: How many frames of shuttle stay on screen behind the current one. A fifth
+//: of a second at 25 fps: long enough to read the direction off the trail,
+//: short enough that it never becomes a line across the picture.
+const SHUTTLE_TRAIL = 5;
+
+// The shuttle where the search actually saw it, with the last few sightings
+// fading out behind it. Nothing is drawn between sightings and nothing is
+// interpolated: the search skips frames it found nothing on, and a smooth
+// curve through the gaps would be a drawing of a shuttle rather than a
+// measurement of one.
+function drawShuttle(ctx, scale) {
+  const pts = (S.pose && S.pose.shuttle) || [];
+  if (!pts.length) return;
+  const lo = S.frame - SHUTTLE_TRAIL;
+  const seen = pts.filter((p) => p[0] > lo && p[0] <= S.frame);
+  if (!seen.length) return;
+  const r = Math.max(2.5, scale * S.state.video.width / 320);
+  for (const [f, x, y] of seen) {
+    const age = (S.frame - f) / (SHUTTLE_TRAIL + 1);
+    const fade = 1 - age;
+    ctx.beginPath();
+    ctx.arc(x * scale, y * scale, r * (0.45 + 0.55 * fade), 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${(0.25 + 0.75 * fade).toFixed(3)})`;
+    ctx.fill();
+    if (age === 0) {
+      ctx.lineWidth = Math.max(1, r * 0.4);
+      ctx.strokeStyle = 'rgba(255,210,60,0.95)';
+      ctx.stroke();
+    }
+  }
 }
 
 function drawSkeleton(ctx, kp, scale, opts) {
@@ -231,6 +269,7 @@ function renderVideo() {
     for (const [x, y] of S.calibPick.points) { ctx.beginPath(); ctx.moveTo(x * scale - 8, y * scale); ctx.lineTo(x * scale + 8, y * scale); ctx.moveTo(x * scale, y * scale - 8); ctx.lineTo(x * scale, y * scale + 8); ctx.stroke(); }
     if (S.calibPick.points.length === 2) { const [a, b] = S.calibPick.points; ctx.beginPath(); ctx.moveTo(a[0] * scale, a[1] * scale); ctx.lineTo(b[0] * scale, b[1] * scale); ctx.stroke(); }
   }
+  if (S.showShuttle) drawShuttle(ctx, scale);
   // racket-head estimate
   if (S.pose && S.pose.racket && $('#show-racket').checked) {
     const i = poseIndex(S.frame);
@@ -883,16 +922,42 @@ function seek(f) {
 }
 function step(d) { seek(S.frame + d); }
 
-function stopPlayback() { if (S.timer) clearInterval(S.timer); S.timer = null; S.playing = false; $('#play-btn').textContent = 'Play'; }
+function stopPlayback() {
+  if (S.timer) cancelAnimationFrame(S.timer);
+  S.timer = null; S.playing = false; $('#play-btn').textContent = 'Play';
+}
+
+// Playback follows the wall clock and not a frame counter, so 1x is a second
+// of video per second whatever the machine manages to draw, and 4x is four.
+// Only the video canvas is redrawn per frame; the plots and the court map cost
+// far more than a frame's worth of time and are refreshed at PANEL_HZ, which
+// is faster than a person reads a moving playhead.
+const PANEL_HZ = 10;
 function startPlayback() {
   if (!S.state) return;
   stopPlayback(); S.playing = true; $('#play-btn').textContent = 'Pause';
-  const interval = 1000 / (fps() * S.speed);
-  S.timer = setInterval(() => {
-    let f = S.frame + 1;
-    if (f > S.state.trim_end || f >= nFrames()) f = S.state.trim_start;
-    seek(f);
-  }, Math.max(8, interval));
+  const first = S.frame;
+  const t0 = performance.now();
+  let lastPanels = 0;
+  const tick = (now) => {
+    if (!S.playing) return;
+    const span = Math.max(1, S.state.trim_end - S.state.trim_start + 1);
+    const elapsed = ((now - t0) / 1000) * fps() * S.speed;
+    let f = first + Math.floor(elapsed);
+    if (f > S.state.trim_end || f >= nFrames()) {
+      f = S.state.trim_start + ((f - S.state.trim_start) % span);
+    }
+    if (f !== S.frame) {
+      S.frame = clamp(f, 0, Math.max(0, nFrames() - 1));
+      renderVideo();
+      if (now - lastPanels > 1000 / PANEL_HZ) {
+        lastPanels = now;
+        renderTimeline(); renderPlots(); renderCourt();
+      }
+    }
+    S.timer = requestAnimationFrame(tick);
+  };
+  S.timer = requestAnimationFrame(tick);
 }
 function togglePlay() { if (S.playing) stopPlayback(); else startPlayback(); }
 
@@ -1314,10 +1379,11 @@ function renderMatch() {
 
   const notes = [];
   notes.push(m.headline ? m.headline.charAt(0).toUpperCase() + m.headline.slice(1) + '.' : `No result is stated: ${m.headline_withheld}.`);
+  if (m.contacts_rejected) notes.push(`${m.contacts_rejected} swing${m.contacts_rejected === 1 ? '' : 's'} rejected: the shuttle could not have reached them.`);
   if (m.n_issues) notes.push(`${m.n_issues} question${m.n_issues === 1 ? '' : 's'} open in Review.`);
   if (m.note) notes.push(m.note.charAt(0).toUpperCase() + m.note.slice(1) + '.');
   $('#match-note').textContent = notes.join(' ');
-  $('#match-explain').textContent = 'Who won a rally is read off who serves next; the serve is the first detected contact of a bout. Confirmed means you answered it, inferred means the rules of the game derived it from confirmed facts, auto means unreviewed detection.';
+  $('#match-explain').textContent = 'Who won a rally is read off who serves next; the serve is the first detected contact of a bout. Confirmed means you answered it, inferred means the rules of the game derived it from confirmed facts, auto means unreviewed detection. A rejected swing is the receiver reacting: two contacts the shuttle would have had to cross the court between in a fraction of a second are not two contacts.';
 }
 
 // The review queue: one question at a time, the video already at its frame,
@@ -1591,6 +1657,113 @@ function renderCoaching() {
     </div>`).join('');
 }
 
+// The court map, and the two things that made it unreadable on a long clip.
+//
+// It used to stamp one translucent disc per tracked frame and then stroke a
+// path through every one of them. On forty seconds that is a heat map; on
+// nineteen minutes it is eleven thousand discs, which saturate to a solid red
+// sheet with a white mesh over it, and it was rebuilt on every frame of
+// playback, which is what made playback slow.
+//
+// So: the density is binned and drawn once into an offscreen canvas, keyed by
+// what it depends on, and the range shown defaults to the rally the playhead
+// is in. Patterns live inside a rally; the whole clip is the average of thirty
+// of them and looks like the court.
+
+//: Side of a heat cell in metres. A player's stance covers about this much
+//: floor, so a finer grid would claim a precision the position does not have.
+const HEAT_CELL_M = 0.25;
+//: The count a cell needs to read as fully hot, as a percentile of the cells
+//: that were visited at all. A maximum would let one long stand at the base
+//: flatten everything else to nothing.
+const HEAT_PEAK_PERCENTILE = 0.98;
+
+// Which slice of the track the panel is showing: the bout under the playhead,
+// or all of it. Returns inclusive pose indices.
+function courtRange() {
+  const pos = (S.pose && S.pose.positions) || [];
+  const all = [0, Math.max(0, pos.length - 1)];
+  if (S.courtScope !== 'rally') return all;
+  const bouts = (S.state && S.state.bouts && S.state.bouts.bouts) || [];
+  if (!bouts.length) return all;
+  const i = poseIndex(S.frame);
+  const hit = bouts.find((b) => b.start <= i && i <= b.end)
+    || bouts.reduce((best, b) => (best && Math.abs(b.start - i) >= Math.abs(best.start - i) ? best : b), null);
+  return hit ? [hit.start, hit.end] : all;
+}
+
+// What the map is drawn from, in words, because every figure beside it is the
+// whole clip's and the two would otherwise be read as one thing.
+function courtRangeLabel(lo, hi) {
+  const secs = ((hi - lo + 1) / (fps() || 30)).toFixed(1);
+  if (S.courtScope !== 'rally') return `the whole clip, ${secs} s`;
+  const bouts = (S.state && S.state.bouts && S.state.bouts.bouts) || [];
+  const i = bouts.findIndex((b) => b.start === lo && b.end === hi);
+  return i >= 0 ? `rally ${i + 1} of ${bouts.length}, ${secs} s` : `the whole clip, ${secs} s`;
+}
+
+// Visits per cell, coloured cold to hot. Cached: it depends on the track, the
+// range and the canvas size and on nothing that changes as the video plays.
+function heatLayer(tracks, lo, hi, W, Hh, P, scale) {
+  const key = [S.pid, S.poseKey || '', tracks.length, lo, hi, W, Hh].join(':');
+  if (S.heat && S.heat.key === key) return S.heat.canvas;
+  const cell = Math.max(2, HEAT_CELL_M * scale);
+  const gw = Math.ceil(W / cell), gh = Math.ceil(Hh / cell);
+  const counts = new Float32Array(gw * gh);
+  for (const pos of tracks) {
+    for (let k = lo; k <= hi && k < pos.length; k++) {
+      const p = pos[k];
+      if (!p) continue;
+      const [x, y] = P(p[0], p[1]);
+      const cx = Math.floor(x / cell), cy = Math.floor(y / cell);
+      if (cx < 0 || cy < 0 || cx >= gw || cy >= gh) continue;
+      counts[cy * gw + cx] += 1;
+    }
+  }
+  const seen = counts.filter((v) => v > 0).sort((a, b) => a - b);
+  const peak = seen.length ? seen[Math.min(seen.length - 1, Math.floor(seen.length * HEAT_PEAK_PERCENTILE))] : 1;
+  const off = document.createElement('canvas');
+  off.width = W; off.height = Hh;
+  const octx = off.getContext('2d');
+  for (let cy = 0; cy < gh; cy++) {
+    for (let cx = 0; cx < gw; cx++) {
+      const n = counts[cy * gw + cx];
+      if (!n) continue;
+      const t = Math.min(1, n / Math.max(1, peak));
+      octx.fillStyle = heatColour(t);
+      octx.fillRect(cx * cell, cy * cell, cell + 1, cell + 1);
+    }
+  }
+  // One blur pass so the cells read as a field rather than a mosaic, at the
+  // width of the position uncertainty where there is one.
+  const blur = Math.max(1, 0.28 * scale);
+  const soft = document.createElement('canvas');
+  soft.width = W; soft.height = Hh;
+  const sctx = soft.getContext('2d');
+  sctx.filter = `blur(${blur.toFixed(1)}px)`;
+  sctx.drawImage(off, 0, 0);
+  S.heat = { key, canvas: soft };
+  return soft;
+}
+
+// Cold where the player passed through, hot where they stood: the ramp reads
+// as a count, which is the whole point of a heat map.
+function heatColour(t) {
+  const stops = [
+    [0.00, [60, 220, 140], 0.10],
+    [0.20, [90, 230, 110], 0.45],
+    [0.45, [235, 225, 70], 0.68],
+    [0.70, [245, 150, 40], 0.82],
+    [1.00, [235, 45, 40], 0.94],
+  ];
+  let i = 1;
+  while (i < stops.length - 1 && t > stops[i][0]) i++;
+  const [t0, c0, a0] = stops[i - 1], [t1, c1, a1] = stops[i];
+  const u = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
+  const mix = (a, b) => Math.round(a + (b - a) * u);
+  return `rgba(${mix(c0[0], c1[0])},${mix(c0[1], c1[1])},${mix(c0[2], c1[2])},${(a0 + (a1 - a0) * u).toFixed(3)})`;
+}
+
 function renderCourt() {
   const panel = $('#court-panel'); const canvas = $('#court-canvas');
   if (!S.state) return;
@@ -1614,21 +1787,20 @@ function renderCourt() {
   line(meta.width / 2, 0, meta.width / 2, meta.net_y - meta.short_service); line(meta.width / 2, meta.net_y + meta.short_service, meta.width / 2, meta.length);
   ctx.strokeStyle = '#222'; ctx.lineWidth = 2.5; line(-0.3, meta.net_y, meta.width + 0.3, meta.net_y);
   const pos = S.pose && S.pose.positions;
+  const [lo, hi] = courtRange();
   if (pos) {
-    // Heat: each sample is smeared by its own measured uncertainty, so the far
-    // court reads as the smear it really is rather than a crisp dot.
-    const sig = S.pose.position_sigma;
-    ctx.fillStyle = 'rgba(230,30,30,0.10)';
-    pos.forEach((p, i) => {
-      if (!p) return;
-      const [x, y] = P(p[0], p[1]);
-      const s = sig && sig[i] ? sig[i] : null;
-      const r = Math.max(0.25, s ? s[0] : 0.35) * scale;
-      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-    });
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.beginPath(); let pen = false;
-    for (const p of pos) { if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
-    ctx.stroke();
+    if (S.showHeat !== false) {
+      const tracks = [pos, ...((S.pose.others || []).map((o) => o.positions).filter(Boolean))];
+      ctx.drawImage(heatLayer(tracks, lo, hi, W, Hh, P, scale), 0, 0, W, Hh);
+    }
+    if (S.showPath !== false) {
+      const n = hi - lo + 1;
+      ctx.strokeStyle = `rgba(255,255,255,${n > 3000 ? 0.16 : n > 1200 ? 0.3 : 0.6})`;
+      ctx.lineWidth = n > 1200 ? 0.7 : 1.2;
+      ctx.beginPath(); let pen = false;
+      for (let k = lo; k <= hi && k < pos.length; k++) { const p = pos[k]; if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
+      ctx.stroke();
+    }
     const i = poseIndex(S.frame);
     if (i >= 0 && pos[i]) { const [x, y] = P(pos[i][0], pos[i][1]); ctx.fillStyle = '#ff3b3b'; ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
     const fw = S.pose.footwork;
@@ -1641,9 +1813,13 @@ function renderCourt() {
   // The other player's track, when one was tracked: a faint path and the current position.
   for (const o of (S.pose && S.pose.others) || []) {
     if (!o.positions) continue;
-    ctx.strokeStyle = 'rgba(215,219,227,0.55)'; ctx.lineWidth = 1; ctx.beginPath(); let pen = false;
-    for (const p of o.positions) { if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
-    ctx.stroke();
+    if (S.showPath !== false) {
+      const n = hi - lo + 1;
+      ctx.strokeStyle = `rgba(215,219,227,${n > 3000 ? 0.12 : n > 1200 ? 0.22 : 0.45})`;
+      ctx.lineWidth = 0.7; ctx.beginPath(); let pen = false;
+      for (let k = lo; k <= hi && k < o.positions.length; k++) { const p = o.positions[k]; if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
+      ctx.stroke();
+    }
     const i = poseIndex(S.frame);
     if (i >= 0 && o.positions[i]) { const [x, y] = P(o.positions[i][0], o.positions[i][1]); ctx.fillStyle = COLORS.other; ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#222'; ctx.lineWidth = 1.5; ctx.stroke(); }
   }
@@ -1670,6 +1846,7 @@ function renderCourt() {
     const sp = S.pose.speed && pi >= 0 ? S.pose.speed[pi] : null;
     const u = fw.position_uncertainty_m;
     const rows = [
+      ['map shows', courtRangeLabel(lo, hi)],
       ['now', cur ? `x ${cur[0].toFixed(2)} m, y ${cur[1].toFixed(2)} m${sp != null ? `, ${sp.toFixed(1)} m/s` : ''}` : '-'],
       ['distance', `${fw.distance_m} m in ${fw.duration_s} s${fw.distance_uncertainty_m ? ` (+/- ${fw.distance_uncertainty_m} m)` : ''}`],
       ['speed', `avg ${fw.avg_speed_mps} m/s, peak ${fw.peak_speed_mps} m/s`],
@@ -1838,7 +2015,11 @@ function bindUI() {
   $('#court-start').addEventListener('click', startCourtPick);
   $('#court-clear').addEventListener('click', async () => { applyState(await api('DELETE', `/api/projects/${S.pid}/court`)); await loadPose(); closeModals(); renderAll(); });
   $('#show-court').addEventListener('change', renderVideo);
+  $('#court-scope').addEventListener('change', (e) => { S.courtScope = e.target.value; S.heat = null; renderCourt(); });
+  $('#court-heat').addEventListener('change', (e) => { S.showHeat = e.target.checked; renderCourt(); });
+  $('#court-path').addEventListener('change', (e) => { S.showPath = e.target.checked; renderCourt(); });
   $('#show-racket').addEventListener('change', renderVideo);
+  $('#show-shuttle').addEventListener('change', (e) => { S.showShuttle = e.target.checked; renderVideo(); });
   $('#calib-height-btn').addEventListener('click', calibHeight);
   $('#calib-points-btn').addEventListener('click', calibPointsStart);
   $('#calib-clear-btn').addEventListener('click', async () => { applyState(await api('PUT', `/api/projects/${S.pid}/calibration`, { method: 'clear' })); });
