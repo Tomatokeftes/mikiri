@@ -143,7 +143,9 @@
         "random access stays under a quarter of a second anywhere in the clip: reading frame 40000 in order took twenty seconds and a step backwards a minute, which is the black viewer the reader's seek exists to prevent",
         "with the court calibrated, every frame of the main camera is told from every close-up, replay and crowd shot: the wide shot scores 0.87 to 0.91 of the court's lines and everything else 0.00 to 0.09, with nothing in between",
         "the 29 points of game one come out as about that many stretches of the court being visible, at a rally-length median",
-        "without a calibration the clip is not split at all rather than split backwards: above ten camera cuts the motion threshold is inverted, and a wrong answer that looks right is worse than none"
+        "without a calibration the clip is not split at all rather than split backwards: above ten camera cuts the motion threshold is inverted, and a wrong answer that looks right is worse than none",
+        "the shuttle itself is found, on frames whose positions were read off the picture by eye rather than taken from the detector's own output",
+        "the brightness gate keeps the shuttle inside the candidate cap: plain motion leaves it ranked as low as 37th of about forty blobs, and only twelve are kept"
       ],
       "game_one": {
         "trim": [10650, 39100],
@@ -168,6 +170,31 @@
           [0.0, 13.4]
         ],
         "line_share": 0.9
+      },
+      "shuttle_truth": {
+        "note": "Shuttle positions read by eye off full-resolution crops on 2026-09-06, from two flights in the rally at frames 11290-11314: a descent into the near player, and the lift he answered with, which decelerates smoothly and stalls at its apex around frame 11316. The first ground truth for the shuttle anywhere in this repo, and the point of it is that a detection sitting on a shoe cannot pass a test against it by agreeing with itself. Frame 11297 is deliberately absent: the shuttle crosses a painted line there and could not be placed confidently by eye, so nothing asserts on it. Positions are the visible centroid, which sits about 7 px behind the cork at this scale (4.7 cm, against a flight scatter of 1.4 px): that offset is along the flight and cancels in direction and speed, which is why it is tolerable, and it is also why no landing point or apex height may be taken from these.",
+        "tolerance_px": 8.0,
+        "points": {
+          "11290": [1206, 502],
+          "11291": [1215, 522],
+          "11292": [1224, 544],
+          "11293": [1232, 566],
+          "11294": [1241, 591],
+          "11295": [1249, 619],
+          "11296": [1254, 637],
+          "11303": [1198, 321],
+          "11304": [1188, 266],
+          "11305": [1182, 233],
+          "11306": [1177, 204],
+          "11307": [1172, 178],
+          "11308": [1167, 156],
+          "11309": [1164, 139],
+          "11310": [1160, 124],
+          "11311": [1157, 113],
+          "11312": [1155, 104],
+          "11313": [1152, 97],
+          "11314": [1150, 92]
+        }
       },
       "note": "The first full match with a real broadcast's cuts, replays and adverts, which the not-badminton path of the segmenter had never met, and 785 MB, so nothing here decodes the whole of it: the reader test seeks, the frame cache fills ahead only to its budget, and the segmentation tests take game one. Three games: game one runs 426 to 1556 s, the interval to about 1700 s, and the match ends near 3080 s with an outro from 3120 s. Segmented; not yet through tracking or the chain in the suite."
     },

@@ -23,6 +23,38 @@ supply positions is actively harmful. A per-pixel mixture model (MOG2) is *not*
 used: a shuttle never occupies the same pixel twice, so a background model
 learns nothing about it and only adds cost and ghosting.
 
+**Motion alone is not enough, and a brightness gate is what fixed it.**
+Differencing says something moved, and on a broadcast almost everything moves:
+the crowd, the umpire, and the player's own body, which is the largest moving
+thing anywhere near the racket. Measured on game one of
+``momota_lindan_broadcast``, plain motion leaves about 10,700 pixels over
+threshold on a rally frame, and every false launch this module has ever
+produced sat on a shoe, a thigh, a hip, the back of a head or the racket frame.
+So a second channel is required and conjoined: the rise in the *brightest*
+colour channel, above the background plate and above the previous frame at
+once. That conjunction says "something bright arrived here", which a shuttle
+does and a maroon shirt, a green court and a dark crowd do not, and it drops
+the painted lines for free because they never move. It cuts those 10,700
+pixels to 1,300, and it costs no evidence: at twelve hand-checked shuttle
+positions the shuttle's own peak in this channel never falls below 28, well
+clear of the threshold. The *brightest* channel is used rather than the
+dimmest. The dimmest would mean "white" and is the sharper filter on white
+feathers, but it structurally cannot see a yellow plastic shuttle, whose blue
+channel sits as low as the floor's; measured across five clips the brightest
+channel is no worse anyway. :func:`rise_selectivity` reports how much the gate
+actually removed on a clip, because a gate that removed nothing has proved
+nothing, and :class:`Launch` carries that number rather than letting a caller
+assume it.
+
+**The players are cut out of the searched region.** Their boxes come from the
+tracking run and used to bound only a blob's *size*, which was far too weak
+given where the false launches sat. :func:`player_mask` now removes them
+outright. The reason they were left in is real and is preserved: the shuttle
+at contact is at the racket, which is right next to the player. So a disc of
+:data:`RACKET_KEEP_BH` body heights around a *known* racket head stays
+searchable inside the cut, and only :func:`launch_after_hit`, which is told
+where the racket was, gets that exemption.
+
 **Candidates are not gated on roundness.** Gym light forces a 1/50 to 1/120 s
 shutter, so a 30 m/s shuttle smears 80 or more pixels: during exactly the fast
 phases that matter, the shuttle *is* a streak. A circularity or compactness
@@ -106,6 +138,38 @@ ACCUM_FADE = 0.10
 #: gain-matched before differencing. Flicker on phone cameras is one of the
 #: top three practical failure modes for this whole approach.
 FLICKER_TOLERANCE = 1.5
+
+#: Ratio of brightness-gate survivors to plain-motion survivors above which the
+#: gate is not separating anything on this clip. Measured over the benchmark
+#: clips it runs 0.12 on the broadcast, 0.18 and 0.38 on the two tripod phone
+#: clips and 0.48 on the handheld one, whose whole frame moves; so this sits
+#: above all of them and only fires on footage where the gate is inert. It does
+#: not switch the gate off -- an inert gate removes nothing by definition -- it
+#: marks the launch as having no brightness evidence behind it.
+MAX_USEFUL_RISE_RATIO = 0.75
+#: Slack left around a player box before it is cut out of the search, as a
+#: fraction of the box diagonal. A box tracks the body, while the arm, the
+#: racket and the motion blur around both reach past it.
+PLAYER_PAD_FRACTION = 0.04
+#: Floor on that slack in pixels, so a small far-court box still gets some.
+PLAYER_PAD_MIN_PX = 4.0
+#: Radius around a known racket head that stays searchable inside a cut-out
+#: player, in body heights. About a racket head and a little more: enough that
+#: a shuttle just off the strings is not hidden by the body it left, small
+#: enough that the torso and legs stay out. Only a caller that knows where the
+#: racket was may use it, which is why :func:`track_shuttle` does not.
+RACKET_KEEP_BH = 0.25
+#: Share of a launch's detections that must lie outside every player box.
+#: A launch is the shuttle *leaving*: something that never gets clear of the
+#: hitter's own outline is not a flight, whatever its size and pace. This is
+#: what stops the exemption above from quietly handing the body back, and it
+#: is a definition rather than a threshold. Measured on the two long rallies of
+#: ``momota_lindan_broadcast`` it separates completely: the eight real flights
+#: have every detection outside a box and the nearest of them is 118 px clear,
+#: while the six false ones -- five shoes and a face, every one admitted by the
+#: exemption -- have every detection inside. So the value only has to sit
+#: between none and all, and the margin is the whole range.
+MIN_OUTSIDE_PLAYER_SHARE = 0.5
 
 #: Accepted blob area, as a multiple of the expected shuttle footprint. The
 #: upper bound is additionally multiplied by the blob's elongation, because a
@@ -319,6 +383,13 @@ class Launch:
     #: are not one per frame -- the search skips frames it found nothing on --
     #: so without them a caller drawing the shuttle would smear the gaps.
     offsets: list[int] = field(default_factory=list)
+    #: What fraction of the moving pixels in the searched region the brightness
+    #: gate kept (:func:`rise_selectivity`), median over the searched frames.
+    #: Provenance, not quality: a launch found where this is near 1 rests on
+    #: motion alone, which is the evidence that produced this module's
+    #: confident false launches, and ``note`` says so. ``nan`` when it could
+    #: not be measured.
+    rise_ratio: float = float("nan")
 
     def elevation_deg(self) -> float:
         """Signed angle above the horizon, in ``[-90, 90]``, ignoring left/right.
@@ -354,6 +425,9 @@ class Launch:
             "note": self.note,
             "points": [[round(float(x), 1), round(float(y), 1)] for x, y in self.points],
             "offsets": [int(o) for o in self.offsets],
+            "rise_ratio": None
+            if not math.isfinite(self.rise_ratio)
+            else round(float(self.rise_ratio), 3),
         }
 
 
@@ -371,6 +445,31 @@ def _gray(frame: np.ndarray | None) -> np.ndarray | None:
     if a.ndim == 3:
         a = cv2.cvtColor(np.clip(a, 0, 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
     return a.astype(np.float32)
+
+
+def _channel_max(frame: np.ndarray | None) -> np.ndarray | None:
+    """Brightest colour channel per pixel as float32, or ``None``.
+
+    For a single-channel frame this is the frame itself, which is consistent
+    but not interchangeable: the *luminance* of a saturated colour sits well
+    below its brightest channel -- a green court reads about 115 in grey and
+    about 150 here -- so comparing a grayscale plate against a colour frame's
+    channel maximum would report a rise on every saturated surface in the
+    picture. :func:`brightness_rise` refuses that pairing rather than convert
+    between the two.
+    """
+    if frame is None:
+        return None
+    a = np.asarray(frame)
+    if a.size == 0:
+        return None
+    if a.dtype.kind == "f" and not np.isfinite(a).all():
+        a = np.nan_to_num(a, nan=0.0, posinf=255.0, neginf=0.0)
+    if a.ndim == 3:
+        a = a.max(axis=2)
+    elif a.ndim != 2:
+        return None
+    return np.clip(a, 0, 255).astype(np.float32)
 
 
 def _match_brightness(image: np.ndarray, reference: np.ndarray) -> np.ndarray:
@@ -434,7 +533,102 @@ def difference_map(
     return np.clip(np.nan_to_num(d, nan=0.0, posinf=255.0), 0.0, 255.0).astype(np.uint8)
 
 
-def background_plate(reader, start: int, end: int, samples: int = PLATE_SAMPLES) -> np.ndarray:
+def brightness_rise(
+    frame: np.ndarray, prev: np.ndarray | None = None, plate: np.ndarray | None = None
+) -> np.ndarray:
+    """Per-pixel evidence that something bright *arrived* here, on a 0..255 scale.
+
+    Both terms are signed rises rather than absolute differences, and that is
+    the whole of the design. A pixel the shuttle has just reached is brighter
+    than the empty room and brighter than it was a moment ago. The pixel the
+    shuttle has just left is still brighter than the room but *darker* than it
+    was, so it scores zero: the trailing ghost never appears, without needing
+    the accumulation machinery to unpick it afterwards. Taking the minimum of
+    the two demands both at once.
+
+    Args:
+        frame: The frame to analyse, BGR or grayscale.
+        prev: The frame before it, or ``None``.
+        plate: A background plate, or ``None``. Only a plate with the same
+            channel count as the frame contributes; a grayscale plate against a
+            colour frame is dropped rather than converted, for the reason in
+            :func:`_channel_max`, leaving the weaker "brighter than a moment
+            ago" test on its own.
+
+    Returns:
+        ``uint8`` map with the frame's spatial shape, or a ``(0, 0)`` array
+        when no reference is usable. The empty return is deliberately not a
+        map of zeros: a caller conjoining this with the motion map would then
+        silently delete every candidate it had.
+    """
+    cur = _channel_max(frame)
+    if cur is None:
+        return np.zeros((0, 0), dtype=np.uint8)
+    colour = np.asarray(frame).ndim == 3
+    parts: list[np.ndarray] = []
+    for ref in (prev, plate):
+        if ref is None:
+            continue
+        if (np.asarray(ref).ndim == 3) != colour:
+            continue
+        r = _channel_max(ref)
+        if r is None or r.shape != cur.shape:
+            continue
+        parts.append(cur - _match_brightness(r, cur))
+    if not parts:
+        return np.zeros((0, 0), dtype=np.uint8)
+    d = parts[0]
+    for extra in parts[1:]:
+        d = np.minimum(d, extra)
+    return np.clip(np.nan_to_num(d, nan=0.0, posinf=255.0), 0.0, 255.0).astype(np.uint8)
+
+
+def rise_selectivity(
+    frame: np.ndarray,
+    prev: np.ndarray | None = None,
+    plate: np.ndarray | None = None,
+    threshold: int = DIFF_THRESHOLD,
+    mask: np.ndarray | None = None,
+) -> float:
+    """Fraction of the moving pixels that the brightness gate keeps, in ``0..1``.
+
+    One number for "did the gate do anything on this footage". Near zero it
+    removed almost everything that merely moved, and a launch found under it
+    rests on the shuttle being bright as well as moving. Near one it removed
+    nothing, and a launch found under it rests on motion alone -- which is
+    exactly the evidence that produced this module's confident false launches,
+    so :class:`Launch` records the number instead of leaving it to be assumed.
+
+    Args:
+        frame: The frame to measure on, BGR or grayscale.
+        prev: The frame before it, or ``None``.
+        plate: A background plate, or ``None``.
+        threshold: Difference magnitude that counts, on a 0..255 scale.
+        mask: Optional region to measure within, e.g. the court.
+
+    Returns:
+        The ratio, or ``nan`` when nothing moved at all and there is therefore
+        nothing to have been selective about.
+    """
+    motion = difference_map(frame, prev, plate)
+    rise = brightness_rise(frame, prev, plate)
+    if motion.size == 0 or rise.shape != motion.shape:
+        return float("nan")
+    t = int(threshold)
+    moving = motion > t
+    if mask is not None:
+        m = np.asarray(mask)
+        if m.shape == moving.shape:
+            moving &= m > 0
+    n = int(moving.sum())
+    if n == 0:
+        return float("nan")
+    return float(int((moving & (rise > t)).sum()) / n)
+
+
+def background_plate(
+    reader, start: int, end: int, samples: int = PLATE_SAMPLES, colour: bool = False
+) -> np.ndarray:
     """Static background of a clip, as the median of evenly spaced frames.
 
     The median is what removes the players and the shuttle: they are somewhere
@@ -447,27 +641,44 @@ def background_plate(reader, start: int, end: int, samples: int = PLATE_SAMPLES)
         start: First frame of the range.
         end: Last frame of the range, inclusive.
         samples: How many frames to sample.
+        colour: Keep the source's own channels instead of converting to grey.
+            A colour plate is what :func:`brightness_rise` needs -- a grey one
+            makes it drop its strongest term -- and it costs the grey path
+            nothing, since every consumer of a plate greys it on the way in.
+            The default stays grey so that callers holding a plate's shape
+            keep the shape they had.
 
     Returns:
-        A grayscale ``uint8`` plate, or a ``(0, 0)`` array when the range is
-        empty or nothing could be read.
+        A ``uint8`` plate, grayscale or BGR as asked, or a ``(0, 0)`` array
+        when the range is empty or nothing could be read.
     """
     start = max(0, int(start))
     end = int(end)
     if end < start:
         return np.zeros((0, 0), dtype=np.uint8)
     idx = np.unique(np.linspace(start, end, max(1, int(samples))).round().astype(int))
-    grays: list[np.ndarray] = []
+    frames: list[np.ndarray] = []
     for i in idx:
-        g = _gray(reader.read(int(i)))
-        if g is not None:
-            grays.append(g)
-    if not grays:
+        raw = reader.read(int(i))
+        if raw is None:
+            continue
+        if not colour:
+            g = _gray(raw)
+            if g is not None:
+                frames.append(g)
+            continue
+        a = np.asarray(raw)
+        if a.size == 0 or a.ndim not in (2, 3):
+            continue
+        if a.dtype.kind == "f" and not np.isfinite(a).all():
+            a = np.nan_to_num(a, nan=0.0, posinf=255.0, neginf=0.0)
+        frames.append(np.clip(a, 0, 255).astype(np.float32))
+    if not frames:
         return np.zeros((0, 0), dtype=np.uint8)
-    shape = grays[0].shape
-    grays = [g for g in grays if g.shape == shape]
-    ref = grays[0]
-    stack = np.stack([_match_brightness(g, ref) for g in grays])
+    shape = frames[0].shape
+    frames = [f for f in frames if f.shape == shape]
+    ref = frames[0]
+    stack = np.stack([_match_brightness(f, ref) for f in frames])
     return np.clip(np.median(stack, axis=0), 0.0, 255.0).astype(np.uint8)
 
 
@@ -582,6 +793,82 @@ def court_mask(
     return mask
 
 
+def player_mask(
+    shape: tuple[int, ...],
+    boxes,
+    keep_xy=None,
+    keep_radius: float = 0.0,
+) -> np.ndarray | None:
+    """Searchable region with the players cut out of it.
+
+    The players are the largest moving things on the court and they are the
+    only ones whose position is already known every frame, so leaving them in
+    the search was giving the detector its own strongest distractor. Every
+    false launch this module has produced sat inside one of these boxes.
+
+    Args:
+        shape: Frame shape, ``(h, w)`` or ``(h, w, c)``.
+        boxes: Iterable of ``[x0, y0, x1, y1]`` player boxes in pixels.
+            Non-finite and degenerate boxes are skipped rather than raising.
+        keep_xy: A point that stays searchable wherever it falls, normally a
+            known racket head, or ``None``. This is the exemption that keeps a
+            shuttle just off the strings from being hidden by the body it left.
+        keep_radius: Radius of that exemption in pixels; ignored when it is not
+            positive or ``keep_xy`` is ``None``.
+
+    Returns:
+        A ``uint8`` mask, 255 where the search may look, or ``None`` when no
+        usable box was given. ``None`` means "mask nothing", which is the safe
+        failure: it can only admit candidates, never hide the shuttle.
+    """
+    if len(shape) < 2:
+        return None
+    h_img, w_img = int(shape[0]), int(shape[1])
+    if h_img <= 0 or w_img <= 0:
+        return None
+    rects: list[tuple[int, int, int, int]] = []
+    for box in boxes or ():
+        b = np.asarray(box, dtype=float).ravel()
+        if b.size < 4 or not np.isfinite(b[:4]).all():
+            continue
+        x0, y0, x1, y1 = (float(b[0]), float(b[1]), float(b[2]), float(b[3]))
+        if x1 < x0:
+            x0, x1 = x1, x0
+        if y1 < y0:
+            y0, y1 = y1, y0
+        if x1 - x0 <= 0 or y1 - y0 <= 0:
+            continue
+        pad = max(PLAYER_PAD_MIN_PX, PLAYER_PAD_FRACTION * math.hypot(x1 - x0, y1 - y0))
+        rects.append(
+            (int(round(x0 - pad)), int(round(y0 - pad)), int(round(x1 + pad)), int(round(y1 + pad)))
+        )
+    if not rects:
+        return None
+    mask = np.full((h_img, w_img), 255, dtype=np.uint8)
+    for x0, y0, x1, y1 in rects:
+        cv2.rectangle(mask, (x0, y0), (x1, y1), 0, -1)
+    if keep_xy is not None and keep_radius > 0:
+        k = np.asarray(keep_xy, dtype=float).ravel()
+        if k.size >= 2 and np.isfinite(k[:2]).all():
+            cv2.circle(mask, (int(round(k[0])), int(round(k[1]))), int(round(keep_radius)), 255, -1)
+    return mask
+
+
+def _outside_mask(mask: np.ndarray | None, xy) -> bool:
+    """Whether a point falls in the searchable part of a mask.
+
+    ``True`` when there is no mask, which keeps the caller's rule ("most of a
+    launch must be clear of the players") vacuous rather than false on a clip
+    with no tracking behind it.
+    """
+    if mask is None:
+        return True
+    x, y = int(round(float(xy[0]))), int(round(float(xy[1])))
+    if not (0 <= y < mask.shape[0] and 0 <= x < mask.shape[1]):
+        return True
+    return bool(mask[y, x] > 0)
+
+
 def _rect_axis(rect) -> tuple[float, float, float]:
     """Major side, minor side and long-axis direction (y-up degrees) of a rotated rect."""
     (_, _), (w, h), _ = rect
@@ -590,6 +877,28 @@ def _rect_axis(rect) -> tuple[float, float, float]:
     longest = max(edges, key=lambda e: float(np.hypot(e[0], e[1])))
     angle = math.degrees(math.atan2(-float(longest[1]), float(longest[0]))) % 180.0
     return max(float(w), float(h)), min(float(w), float(h)), angle
+
+
+def _gated_motion(
+    frame: np.ndarray,
+    prev: np.ndarray | None,
+    plate: np.ndarray | None,
+    brightness_gate: bool,
+) -> np.ndarray:
+    """Motion evidence, optionally required to be a brightness arrival as well.
+
+    Kept as one function because :func:`detect_candidates` and the accumulation
+    inside :func:`track_shuttle` must agree: accumulating ungated motion and
+    then thresholding gated motion would let the trail back in through the
+    maximum, which is precisely the thing the gate exists to remove.
+    """
+    fresh = difference_map(frame, prev, plate)
+    if not brightness_gate or fresh.size == 0:
+        return fresh
+    rise = brightness_rise(frame, prev, plate)
+    if rise.shape != fresh.shape:
+        return fresh
+    return np.minimum(fresh, rise)
 
 
 def detect_candidates(
@@ -602,6 +911,7 @@ def detect_candidates(
     accumulated: np.ndarray | None = None,
     max_blob_px: float | None = None,
     max_candidates: int = MAX_CANDIDATES_PER_FRAME,
+    brightness_gate: bool = True,
 ) -> list[Candidate]:
     """Blobs in one frame that could be the shuttle, best first.
 
@@ -619,12 +929,17 @@ def detect_candidates(
             back flagged ``stale``.
         max_blob_px: Largest bounding-box diagonal accepted, in pixels.
         max_candidates: How many to keep.
+        brightness_gate: Require that something *bright arrived* at a pixel as
+            well as merely moved (:func:`brightness_rise`). On by default,
+            because motion alone is what put this module's detections on a
+            shoe and a thigh. Turn it off only for a scene where brightness
+            carries no information, and expect the players back.
 
     Returns:
         Candidates sorted by descending score; empty when nothing survives.
         Never raises on degenerate input -- a blank frame simply yields nothing.
     """
-    fresh = difference_map(frame, prev, plate)
+    fresh = _gated_motion(frame, prev, plate, brightness_gate)
     if fresh.size == 0:
         return []
     diff = fresh
@@ -1007,6 +1322,7 @@ def track_shuttle(
     expected_px: float | None = None,
     threshold: int = DIFF_THRESHOLD,
     samples: int = PLATE_SAMPLES,
+    brightness_gate: bool = True,
 ) -> ShuttleTrack:
     """Best-effort shuttle track over a frame range.
 
@@ -1023,13 +1339,20 @@ def track_shuttle(
         fps: Frames per second, carried through for downstream speeds.
         homography: Image-to-court homography. When given it sets the expected
             blob size and masks detections to the court plus a margin.
-        player_boxes: ``{frame: [[x0, y0, x1, y1], ...]}``. Used only to bound
-            the largest acceptable blob, never to mask the player away -- the
-            shuttle is at the racket, which is right next to the player.
-        plate: Background plate, built from the range when not supplied.
+        player_boxes: ``{frame: [[x0, y0, x1, y1], ...]}``. Both bounds the
+            largest acceptable blob and removes the players from the searched
+            region (:func:`player_mask`). No racket-head exemption is made
+            here, because this path is not told where the racket is; a shuttle
+            within a body-width of a player is therefore missed, and picked up
+            again as a separate tracklet once it is clear. That is the trade
+            :func:`launch_after_hit` does not have to make.
+        plate: Background plate, built from the range when not supplied. A
+            colour plate is built, because the brightness gate needs one.
         expected_px: Override the expected shuttle footprint in pixels.
         threshold: Difference magnitude that counts as motion.
         samples: Frames sampled for the plate.
+        brightness_gate: Require a brightness arrival as well as motion. See
+            :func:`detect_candidates`.
 
     Returns:
         A :class:`ShuttleTrack` covering ``start..end`` inclusive; a zero-length
@@ -1049,7 +1372,7 @@ def track_shuttle(
     if n == 0:
         return empty
     if plate is None:
-        plate = background_plate(reader, start, end, samples)
+        plate = background_plate(reader, start, end, samples, colour=True)
     if plate.size == 0:
         plate = None
 
@@ -1071,7 +1394,13 @@ def track_shuttle(
             if size_px is None:
                 size_px = expected_shuttle_px(homography, shape)
             mask = court_mask(shape, homography)
-        diff = difference_map(frame, prev, plate)
+        # The players move, so their cut-out is rebuilt every frame while the
+        # court's is not.
+        here = player_mask(shape, (player_boxes or {}).get(start + i) or ())
+        frame_mask = (
+            mask if here is None else (here if mask is None else cv2.bitwise_and(mask, here))
+        )
+        diff = _gated_motion(frame, prev, plate, brightness_gate)
         faded = None
         if accum:
             layers = [
@@ -1085,9 +1414,10 @@ def track_shuttle(
             plate,
             expected_px=size_px or DEFAULT_SHUTTLE_PX,
             threshold=threshold,
-            mask=mask,
+            mask=frame_mask,
             accumulated=faded,
             max_blob_px=_player_blob_cap(player_boxes, start + i),
+            brightness_gate=brightness_gate,
         )
         accum.append(diff)
         prev = frame
@@ -1267,6 +1597,8 @@ def launch_after_hit(
     contact_height_m: float | None = None,
     expected_px: float | None = None,
     threshold: int = DIFF_THRESHOLD,
+    player_boxes: dict[int, list] | None = None,
+    brightness_gate: bool = True,
 ) -> Launch | None:
     """Measure the shuttle leaving the racket after one known contact.
 
@@ -1298,11 +1630,21 @@ def launch_after_hit(
         contact_height_m: Contact height above the floor, if known.
         expected_px: Override the expected shuttle footprint in pixels.
         threshold: Difference magnitude that counts as motion.
+        player_boxes: ``{frame: [[x0, y0, x1, y1], ...]}``. The players are cut
+            out of the search, except for a disc of :data:`RACKET_KEEP_BH` body
+            heights around the racket head, which is the one place the shuttle
+            legitimately overlaps a player. Without this the search is left
+            competing against the hitter's own body, which is what put previous
+            launches on a shoe, a thigh and the back of a head.
+        brightness_gate: Require a brightness arrival as well as motion. See
+            :func:`detect_candidates`.
 
     Returns:
         A :class:`Launch`, or ``None`` when fewer than
-        :data:`MIN_LAUNCH_POINTS` shuttle detections were found -- which is the
-        honest answer far more often than not.
+        :data:`MIN_LAUNCH_POINTS` shuttle detections were found, or when what
+        was found never got clear of a player box
+        (:data:`MIN_OUTSIDE_PLAYER_SHARE`). ``None`` is the honest answer far
+        more often than not.
     """
     hit_frame = int(hit_frame)
     n_frames = int(n_frames)
@@ -1316,7 +1658,9 @@ def launch_after_hit(
 
     if plate is None:
         span = max(1, int(round(PLATE_HALF_SPAN_S * fps)))
-        plate = background_plate(reader, hit_frame - span, hit_frame + span, PLATE_SAMPLES)
+        plate = background_plate(
+            reader, hit_frame - span, hit_frame + span, PLATE_SAMPLES, colour=True
+        )
     if plate is None or plate.size == 0:
         plate = None
 
@@ -1337,6 +1681,8 @@ def launch_after_hit(
     mask_court = court_mask(shape, homography)
 
     miss = 0
+    ratios: list[float] = []
+    outside: list[bool] = []
     for k in range(1, n_frames + 1):
         frame = reader.read(hit_frame + k)
         if frame is None:
@@ -1354,6 +1700,33 @@ def launch_after_hit(
         )
         if mask_court is not None:
             disc = cv2.bitwise_and(disc, mask_court)
+        # The hitter's own body is the strongest distractor in this disc, and
+        # the only one whose position is already known. Cut it out, but keep
+        # the racket head itself: that is where a shuttle just off the strings
+        # legitimately is.
+        frame_boxes = (player_boxes or {}).get(hit_frame + k) or ()
+        # Two masks: the one the search may look in, which spares the racket
+        # head, and the strict one used afterwards only to ask whether what was
+        # found ever got clear of the player. Building the second costs a
+        # rectangle fill and is what keeps the exemption from handing the body
+        # back -- every false launch on the broadcast came in through it.
+        strict = player_mask(shape, frame_boxes)
+        here = player_mask(
+            shape,
+            frame_boxes,
+            keep_xy=anchor,
+            keep_radius=RACKET_KEEP_BH * bh,
+        )
+        if here is not None:
+            disc = cv2.bitwise_and(disc, here)
+        # Only until one frame gives an answer. This characterises the footage
+        # rather than the frame, and it differences the frame a second time, so
+        # doing it eight times a contact would be most of a whole-clip pass
+        # spent measuring the same number over and over.
+        if not ratios:
+            ratio = rise_selectivity(frame, prev, plate, threshold, mask=disc)
+            if math.isfinite(ratio):
+                ratios.append(ratio)
         found = None
         best_s = -1.0
         for c in detect_candidates(
@@ -1363,6 +1736,7 @@ def launch_after_hit(
             expected_px=size_px,
             threshold=threshold,
             mask=disc,
+            brightness_gate=brightness_gate,
         ):
             d = math.hypot(c.centre[0] - centre[0], c.centre[1] - centre[1])
             if d > radius:
@@ -1389,8 +1763,15 @@ def launch_after_hit(
         points.append(found.centre)
         offsets.append(k)
         scores.append(found.score)
+        outside.append(_outside_mask(strict, found.centre))
 
     if len(points) < MIN_LAUNCH_POINTS:
+        return None
+    # A launch is the shuttle leaving. Something that never got clear of the
+    # hitter's own outline is a shoe, a sock or the back of a head, and on the
+    # broadcast it was all three; refusing here is what makes the racket-head
+    # exemption safe to have at all.
+    if outside and sum(outside) <= MIN_OUTSIDE_PLAYER_SHARE * len(outside):
         return None
     return _summarise_launch(
         hit_frame,
@@ -1402,6 +1783,7 @@ def launch_after_hit(
         homography,
         camera,
         contact_height_m,
+        float(np.median(ratios)) if ratios else float("nan"),
     )
 
 
@@ -1415,6 +1797,7 @@ def _summarise_launch(
     homography: np.ndarray | None,
     camera,
     contact_height_m: float | None,
+    rise_ratio: float = float("nan"),
 ) -> Launch | None:
     """Turn a handful of post-contact detections into a :class:`Launch`."""
     n = pts.shape[0]
@@ -1447,6 +1830,16 @@ def _summarise_launch(
             pts, offsets, fps, homography, camera, contact_height_m
         )
         notes.append(why)
+    # Say plainly when the brightness gate did no work, because then these
+    # detections are motion alone, and motion alone is what produced this
+    # module's confident false launches on broadcast footage.
+    if not math.isfinite(rise_ratio):
+        notes.append("brightness gate not measurable here")
+    elif rise_ratio > MAX_USEFUL_RISE_RATIO:
+        notes.append(
+            f"brightness gate kept {rise_ratio:.0%} of the moving pixels, so it "
+            "separated nothing: this rests on motion alone"
+        )
     return Launch(
         frame=int(hit_frame),
         direction_deg=float(direction),
@@ -1460,6 +1853,7 @@ def _summarise_launch(
         note="; ".join(notes),
         points=pts,
         offsets=[int(o) for o in offsets],
+        rise_ratio=float(rise_ratio),
     )
 
 

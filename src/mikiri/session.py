@@ -1531,9 +1531,22 @@ class ProjectSession:
         camera = calib.camera if (calib is not None and calib.has_camera()) else None
         H = self.homography()
 
+        # Every tracked person's box, so the search can cut them out. The
+        # hitter's own body is the strongest distractor in the small disc the
+        # search looks at, and it is the one thing already known every frame.
+        boxes: dict[int, list] = {}
+        for meta in (self.project.frame_meta, *(o.frame_meta for o in self.project.others)):
+            for m in meta or ():
+                box = m.get("bbox")
+                frame_no = m.get("frame")
+                if box and frame_no is not None:
+                    boxes.setdefault(int(frame_no), []).append(list(box))
+
         found: dict[int, object] = {}
         with VideoReader(self.info.path, self.info) as reader:
-            plate = background_plate(reader, self.project.trim_start, self.project.trim_end)
+            plate = background_plate(
+                reader, self.project.trim_start, self.project.trim_end, colour=True
+            )
             for k, stroke in enumerate(series.strokes):
                 if check_cancel is not None:
                     check_cancel()
@@ -1552,6 +1565,7 @@ class ProjectSession:
                     camera=camera,
                     plate=plate,
                     contact_height_m=stroke.contact_height_m,
+                    player_boxes=boxes,
                 )
                 if launch is not None:
                     found[stroke.frame] = launch

@@ -801,3 +801,148 @@ def test_the_queue_asks_which_hand_each_player_holds_the_racket_in_before_anythi
         s.project.racket_hand = hand_before
         s._review_undo.clear()
         s._invalidate_derived()
+
+
+# --- the shuttle itself, against positions read off the footage by eye ---------
+
+SHUTTLE_TRUTH = BROADCAST.get("shuttle_truth", {})
+SHUTTLE_POINTS = {int(k): v for k, v in SHUTTLE_TRUTH.get("points", {}).items()}
+SHUTTLE_TOL_PX = float(SHUTTLE_TRUTH.get("tolerance_px", 8.0))
+
+
+@pytest.fixture(scope="module")
+def broadcast_shuttle():
+    """One rally's frames, a colour plate over it, and the expected blob size.
+
+    Shared because building the plate decodes twenty-five frames and both
+    questions below need the same one.
+    """
+    from mikiri.court import compute_homography
+    from mikiri.shuttle import background_plate, expected_shuttle_px
+
+    path = clip_path("momota_lindan_broadcast")
+    if path is None:
+        pytest.skip("benchmark clip 'momota_lindan_broadcast' not present")
+    if not SHUTTLE_POINTS:
+        pytest.skip("no hand-checked shuttle positions in the manifest")
+    H, _ = compute_homography(BROADCAST_COURT_IMAGE, BROADCAST_COURT_WORLD)
+    with VideoReader(path) as reader:
+        plate = background_plate(reader, 11000, 11700, colour=True)
+        shape = (reader.info.height, reader.info.width, 3)
+        frames = {}
+        for f in sorted(SHUTTLE_POINTS):
+            frames[f] = (reader.read(f), reader.read(f - 1))
+        return plate, frames, expected_shuttle_px(H, shape)
+
+
+def test_the_shuttle_itself_is_found_on_hand_checked_broadcast_frames(broadcast_shuttle):
+    """The claim the whole module rests on, against ground truth for once.
+
+    Until now nothing here had ever confirmed a shuttle position on real
+    footage. The detector's own output was the only witness, and on this very
+    broadcast it returned launches for 33 of 36 contacts that all sat on the
+    player. These nineteen positions were read off full-resolution crops by
+    eye, so a detection landing on a shoe cannot pass this test by agreeing
+    with itself.
+    """
+    from mikiri.shuttle import detect_candidates
+
+    plate, frames, size_px = broadcast_shuttle
+    missed = []
+    for f, (now, prev) in frames.items():
+        tx, ty = SHUTTLE_POINTS[f]
+        found = [
+            c
+            for c in detect_candidates(now, prev, plate, expected_px=size_px, max_candidates=400)
+            if np.hypot(c.centre[0] - tx, c.centre[1] - ty) <= SHUTTLE_TOL_PX
+        ]
+        if not found:
+            missed.append(f)
+    assert not missed, f"the shuttle was not among the candidates on frames {missed}"
+
+
+def test_the_brightness_gate_is_what_keeps_the_shuttle_inside_the_candidate_cap(
+    broadcast_shuttle,
+):
+    """Why the gate earns its keep, stated as the thing that actually breaks.
+
+    Motion alone finds the shuttle too -- it is not that the gate sees what
+    motion cannot. It is that motion leaves about forty shuttle-sized blobs a
+    frame to choose between, the shuttle ranks as low as 37th among them, and
+    only the best ``MAX_CANDIDATES_PER_FRAME`` are kept: the shuttle is thrown
+    away before the tracker ever sees it. The gate cuts the competition to
+    about ten and brings the worst rank inside the cap.
+    """
+    from mikiri.shuttle import MAX_CANDIDATES_PER_FRAME, detect_candidates
+
+    plate, frames, size_px = broadcast_shuttle
+    worst = {True: 0, False: 0}
+    blobs = {True: [], False: []}
+    for f, (now, prev) in frames.items():
+        tx, ty = SHUTTLE_POINTS[f]
+        for gate in (True, False):
+            cands = detect_candidates(
+                now, prev, plate, expected_px=size_px, max_candidates=400, brightness_gate=gate
+            )
+            blobs[gate].append(len(cands))
+            rank = next(
+                (
+                    i
+                    for i, c in enumerate(cands)
+                    if np.hypot(c.centre[0] - tx, c.centre[1] - ty) <= SHUTTLE_TOL_PX
+                ),
+                None,
+            )
+            if rank is not None:
+                worst[gate] = max(worst[gate], rank)
+
+    assert np.median(blobs[False]) > 2.5 * np.median(blobs[True]), (
+        f"the gate should remove most of the competition, but plain motion left "
+        f"{np.median(blobs[False]):.0f} blobs a frame against {np.median(blobs[True]):.0f}"
+    )
+    assert worst[True] < MAX_CANDIDATES_PER_FRAME, (
+        f"with the gate the shuttle still ranks {worst[True]}th at worst, outside the "
+        f"{MAX_CANDIDATES_PER_FRAME} candidates that are kept"
+    )
+    assert worst[False] >= MAX_CANDIDATES_PER_FRAME, (
+        "without the gate the shuttle used to fall outside the candidate cap; if it no "
+        "longer does, this test is no longer measuring what it was written for"
+    )
+
+
+@pytest.mark.parametrize(
+    "clip_id",
+    ["momota_lindan_broadcast", "lindan_rally", "jump_smashes_phone", "jump_smash_behind"],
+)
+def test_the_brightness_gate_separates_on_every_benchmark_clip(clip_id: str):
+    """Guards the gate against a clip type it was not designed on.
+
+    A dark arena with a green court is the easy case. A club hall is bright,
+    its floor is pale and its walls are lit, so there is far less headroom
+    above the background, and this is where requiring brightness could quietly
+    stop discriminating and leave the players back in the search. The ratios
+    run 0.10 on the broadcast to about 0.4 on the phone clips; the bar is set
+    where an inert gate would sit, not where today's numbers sit, so it fails
+    on a real loss of separation rather than on drift.
+    """
+    from mikiri.shuttle import MAX_USEFUL_RISE_RATIO, background_plate, rise_selectivity
+
+    path = clip_path(clip_id)
+    if path is None:
+        pytest.skip(f"benchmark clip {clip_id!r} not present")
+    with VideoReader(path) as reader:
+        mid = max(1, reader.info.n_frames // 2)
+        # Nine plate samples and three frames rather than the usual twenty-five
+        # and five: every read here is a seek into a file of up to 785 MB, and
+        # a ratio judged against a bar of 0.75 needs no finer plate than this.
+        plate = background_plate(reader, mid - 45, mid + 45, samples=9, colour=True)
+        ratios = [
+            rise_selectivity(reader.read(f), reader.read(f - 1), plate) for f in range(mid, mid + 3)
+        ]
+    usable = [r for r in ratios if np.isfinite(r)]
+    assert usable, "nothing moved in three consecutive frames, so there is nothing to judge"
+    ratio = float(np.median(usable))
+    assert ratio < MAX_USEFUL_RISE_RATIO, (
+        f"{clip_id}: the gate kept {ratio:.0%} of the moving pixels, so it is separating "
+        "nothing and a launch found here would rest on motion alone"
+    )

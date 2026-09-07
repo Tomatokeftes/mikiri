@@ -735,6 +735,57 @@ set-up -- a smash foreshortens until it reads as a drop. Every band was reading
 an image-plane angle as if it were the world launch. Naming is now gated on
 `view_class` and refuses unless the camera is side-on.
 
+## The shuttle is found by brightness, not only by motion
+
+The search used to convert every frame to grayscale on its first line, so
+nothing downstream could use the one thing everybody knows about a shuttlecock:
+it is bright, and almost nothing else on a court is. Detection was therefore
+motion alone, and on the Momota v Lin Dan broadcast motion alone put a launch
+on a shoe, a thigh, a hip and the back of a head for 33 of 36 contacts.
+
+Detection is now conjoined with the rise in the **brightest colour channel**,
+above the background plate and above the previous frame at once -- "something
+bright arrived here". Both terms are signed rises rather than absolute
+differences, which is also what kills the trailing ghost: where the shuttle was
+is brighter than the room but darker than it was.
+
+Three choices inside that are not obvious:
+
+* **The brightest channel, not the dimmest.** The dimmest means "white" and is
+  the sharper filter on feathers, but a yellow plastic shuttle has a blue
+  channel as low as the floor's and would vanish. Across five clips the
+  brightest channel filters no worse anyway.
+* **The gate removes competition, not evidence.** Against nineteen hand-checked
+  positions, plain motion finds the shuttle on all of them too. The problem was
+  ranking: motion leaves about forty shuttle-sized blobs a frame with the
+  shuttle as low as 37th, and only twelve are kept. The gate cuts the field to
+  ten and the worst rank to 11.
+* **A gate that removed nothing has proved nothing**, so `rise_selectivity`
+  measures how much it removed on the footage at hand and every `Launch`
+  carries the number and says so in its note when it is near 1.
+
+The players are also cut out of the searched region, which their boxes were
+never used for -- they bounded blob size only, and every false launch sat inside
+one. The old reason for leaving them in is real and is preserved as an
+exemption: the shuttle at contact is at the racket, so a disc around a *known*
+racket head stays searchable, and only the post-hit search gets it.
+
+**And a launch has to leave.** The exemption above was itself the next defect,
+found by re-running the broadcast and cropping every detection rather than
+counting them: on a low contact the racket is beside the foot, so the disc
+handed back the brightest, fastest, most shuttle-sized thing on the player. Six
+of fourteen launches were still a shoe, a sock or a face, with confidence risen
+to 0.88. The separation was exact -- all six had every detection inside a player
+box, all eight real ones had every detection outside and the nearest was 118 px
+clear -- so most of a launch's detections must now be clear of the players. That
+is a definition rather than a threshold: a thing that never leaves the hitter is
+not a flight. It takes the pass to 8 of 38 contacts with all eight on the
+shuttle. It does not say how often a findable shuttle was missed; recall would
+need the flights hand-labelled, not just the positions.
+
+See [docs/shuttle.md](docs/shuttle.md); the ground truth is `shuttle_truth` in
+`benchmarks/clips.json`.
+
 ## Bouts before any per-rally figure
 
 A clip is not a rally, and dividing a whole-clip total by nothing produced a

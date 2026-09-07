@@ -57,6 +57,50 @@ the general tracker so a stalling shuttle keeps its trace, but *not* for the
 post-hit search, where the shuttle is at its fastest and accumulation would
 drag the previous frame's position into this one and bias the direction.
 
+**Motion is not enough, and this is what put the detections on a thigh.**
+Differencing says something moved. On a broadcast almost everything moves: the
+crowd, the umpire, and above all the player's own body, which is the largest
+moving thing anywhere near the racket. So a second, independent channel is
+required and conjoined with the first: the rise in the **brightest colour
+channel**, above the background plate and above the previous frame at once.
+That says *something bright arrived at this pixel*, which a shuttle does and a
+maroon shirt, a green court and a dark crowd do not. The painted lines are
+white but never move, so the plate removes them for free.
+
+Both terms are signed rises rather than absolute differences, which is what
+kills the trailing ghost: the pixel the shuttle has just left is still brighter
+than the room but *darker* than it was a moment ago, so it scores nothing.
+
+The *brightest* channel is used and not the dimmest. The dimmest would mean
+"white", and on white feathers it is the sharper filter -- but a yellow plastic
+shuttle has a blue channel as low as the floor's and would vanish entirely.
+Measured across five clips the brightest channel is no worse anyway.
+
+The gate does not find shuttles that motion could not. Measured against
+nineteen hand-checked positions on the broadcast, plain motion finds the
+shuttle on every one of them too. What it cannot do is *choose*: motion leaves
+about forty shuttle-sized blobs a frame, the shuttle ranks as low as 37th among
+them, and only the best twelve are kept -- so the shuttle was being thrown away
+before the tracker ever saw it. The gate cuts the field to about ten and brings
+the worst rank to 11th, inside the cap.
+
+Because a gate that removes nothing has proved nothing, `rise_selectivity`
+measures how much it actually removed on the footage at hand, and every
+`Launch` carries that number. It runs about 0.10 on the broadcast and 0.2 to
+0.4 on the club clips; near 1 the launch says in its own note that it rests on
+motion alone.
+
+**The players are cut out of the search.** Their boxes come from the tracking
+run and used to bound only a blob's *size* -- which never excluded the body the
+false launches were sitting on. They are now removed from the searched region
+outright. The reason they were left in is real and is preserved: the shuttle at
+contact is at the racket, which is right next to the player, so a disc of about
+a quarter of a body height around a **known** racket head stays searchable
+inside the cut. Only the post-hit search gets that exemption, because only it is
+told where the racket was; the rally-long tracker loses the shuttle while it is
+within a body-width of a player and picks it up again as a separate tracklet
+once it is clear.
+
 **The shuttle is a streak.** This is the trap worth naming. Hall lighting caps
 the usable shutter speed, so a fast shuttle smears across many pixels. Gating
 candidates on roundness or compactness -- the obvious thing to do -- silently
@@ -149,3 +193,77 @@ Three things follow, and they matter more than the failure:
 * **It was found by drawing it.** A number said 33 of 36 and looked like
   success; putting the detections on the picture made the failure obvious in a
   single frame. Check this module by looking at it before believing it.
+
+## What was actually wrong, and what is fixed
+
+The cause was not a threshold. Two signals the detector had available were not
+being used at all. It converted every frame to grayscale on its first line, so
+nothing downstream could know a shuttle is bright; and the player boxes, known
+every frame from the tracking run, bounded a blob's size but never excluded the
+region the false launches sat in. Both are described under *How the detector
+works* above.
+
+What that changed, measured:
+
+* The shuttle **is** findable on this broadcast. Two complete flights were
+  recovered from frames 11290 to 11319 -- a descent into the near player, then
+  the lift he answered with, decelerating smoothly to a stall at its apex -- by
+  brightness rise, the player boxes cut out, and a size gate. Nothing else.
+* Across 2,587 frames of six rallies, 85% of play frames carry a detection that
+  chains into a gravity-shaped arc, with one to three unused blobs a frame.
+* Nineteen of those positions were read off full-resolution crops by eye and
+  are now in `benchmarks/clips.json` as `shuttle_truth`. They are the first
+  ground truth for the shuttle anywhere in this repo, and
+  `tests/test_real_footage.py` asserts the detector finds every one of them.
+
+## The post-contact pass, re-run and re-cropped
+
+The whole point of the original failure is that a count looked like success. So
+the pass was re-run on the same two long rallies of game one -- 38 contacts,
+frames 10861 to 13418 -- and **every detection was cropped at full resolution
+and looked at**.
+
+| | launches | on the shuttle |
+| --- | --- | --- |
+| motion alone, players left in | 35 of 38 | 0 |
+| brightness gate, players cut out | 14 of 38 | 8 |
+| and the leaving rule | **8 of 38** | **8** |
+
+The first row reproduces the original result exactly. The middle row is where
+the crops earned their keep: six of those fourteen were still the player, and
+confidence had gone *up*, from 0.73 to 0.88. Five were a white shoe or sock and
+one was a face.
+
+They were all the same defect, and it was one this document introduced: **the
+racket-head exemption**. On a low contact the racket is beside the foot, so the
+disc that exists to keep a shuttle visible just off the strings was handing back
+the brightest, fastest, most shuttle-sized thing on the player. The diagnosis
+was exact: all six false launches had every detection inside a player box and
+spared by the exemption; all eight real ones had every detection outside every
+box, the nearest 118 px clear and most 200 to 400 px.
+
+That last number is the fix. A launch is the shuttle **leaving**, so most of its
+detections have to end up clear of the player
+(`MIN_OUTSIDE_PLAYER_SHARE`). It is a definition rather than a threshold,
+which is why the margin is the whole range: real flights score 100% outside,
+false ones 0%. With it, 8 of 8 surviving launches are on the shuttle.
+
+The exemption is kept, because it is what lets a real flight be seen from its
+first frame; the leaving rule is what makes it safe to have.
+
+What is **not** verified, and must not be assumed:
+
+* **Recall.** 8 launches for 38 contacts is not 8 correct answers out of 38
+  possible ones. Nothing here establishes how many of the other 30 had a
+  findable shuttle, because that would need the flights hand-labelled as well
+  as the positions. All that is established is that what it *does* report is
+  the shuttle rather than a shoe.
+* The whole game, and every other clip. Two rallies is what was cropped.
+* The gate on footage unlike these five clips. A hall bright enough to leave no
+  headroom above the background would make it inert, which is why the ratio is
+  measured and carried rather than assumed.
+
+And the lesson from the original failure is unchanged and now has teeth: check
+this module by *looking* at it. The test above passes because a detection lands
+within eight pixels of a position a human read off the picture, which a
+detection sitting on a shoe cannot do by agreeing with itself.

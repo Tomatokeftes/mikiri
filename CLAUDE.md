@@ -50,6 +50,18 @@ Segmentation is deliberately left on in the real-footage tests rather than
 switched off to buy the time back: having it on is what caught it splitting a
 rally in two. Times vary a lot if anything else is using the machine -- one
 run measured eight minutes with two video scans running alongside it.
+
+**Two timings of the whole check on 2026-09-07, and they differ fourfold:**
+22:42 for 578 tests, then 5:09 for 579 on the same machine and the same
+tree. Budget five minutes warm and twenty cold, and do not read a slow run
+as a regression -- that spread is the variance the paragraph above warns
+about, now measured rather than guessed at. When it is slow, `--durations`
+puts almost all of it in one place: 627 s of *setup* for the two-player
+tracking fixture on `lindan_rally`, which is the real pose pipeline on both
+players. After that, 74 s for the broadcast segmentation scan, 53 s for the
+jump smash, and 28 s each for the phone recording and the match source; the
+shuttle tests cost 48 s in total. `pytest -m "not slow and not ui"` runs in
+76 to 92 s and is what to use while iterating.
 Subsets:
 
 ```bash
@@ -206,25 +218,49 @@ Not verified, and the module docstrings say so:
   panel and by their absence from the showcase clip; fixing either needs
   hand-labelled contacts on a broadcast rally, which is the same blocker as
   the detection bar.
-* **The shuttle search has still never recovered a launch from real footage,
-  and on this broadcast it fails confidently, which is worse than failing.**
-  It *returns* launches here where it returned none anywhere else: 33 of 36
-  contacts across two long rallies, three to eight detections each,
-  confidences up to 0.76. Every one of them was then cropped at full
-  resolution and looked at, and the detections sit on the player -- a shoe, a
-  thigh, a hip, the back of a head, the racket frame -- and never on the
-  shuttle. Near the racket head, where the search looks, the largest thing
-  that differs from the background plate is the player's own body, and the
-  size, speed and straightness gates do not throw it out at this scale. The
-  confidence does not separate the false flights from anything, so nothing
-  downstream can filter them.
-  This was found by drawing them: the overlay is what made it visible, and a
-  count of recovered launches is what hid it. **Do not read `n_points` or a
-  launch confidence as evidence that the shuttle was found.** Anything a
-  launch feeds -- a shot name, a launch speed, an elevation -- is unsafe on
-  this footage until the search is fixed or gated, and the one contact
-  `shots.py` names of 223 is suspect for the same reason. The contact sheet
-  is in the 2026-09-06 session.
+* **The shuttle search failed confidently on this broadcast; the cause was
+  found and fixed, and the fix is verified at the detector but not yet at
+  the launch.** It used to return launches for 33 of 36 contacts with
+  confidences up to 0.76, every one of which was cropped at full resolution
+  and found sitting on the player -- a shoe, a thigh, a hip, the back of a
+  head, the racket frame -- never on the shuttle.
+  The cause was two signals the detector had and did not use. It converted
+  every frame to grayscale on its first line, so nothing could know a
+  shuttle is bright; and the player boxes, known every frame, bounded a
+  blob's *size* but never excluded the region the false launches sat in.
+  Both are fixed (`docs/shuttle.md`): detection is now conjoined with the
+  rise in the brightest colour channel, above the plate and above the
+  previous frame at once, and the players are cut out of the searched
+  region except for a disc around a known racket head.
+  What that is worth, measured: the shuttle **is** findable here. Two whole
+  flights come out of frames 11290-11319, and across 2,587 frames of six
+  rallies 85% of play frames carry a detection that chains into a
+  gravity-shaped arc. Nineteen positions read off crops by eye are in
+  `benchmarks/clips.json` as `shuttle_truth` -- the first shuttle ground
+  truth in this repo -- and the detector finds every one of them. The gate
+  does not see what motion could not: motion finds them too, but leaves
+  about forty shuttle-sized blobs a frame with the shuttle as low as 37th,
+  and only twelve are kept, so it was discarded before the tracker saw it.
+  The gate cuts that to about ten and a worst rank of 11.
+  The post-contact pass was then re-run on the same two long rallies (38
+  contacts, frames 10861-13418) and **every detection cropped and looked
+  at**. Motion alone with the players left in reproduces the old result: 35
+  launches, none on the shuttle. The gate and the mask give 14, of which 8
+  are the shuttle and 6 are still the player -- five shoes and a face, with
+  confidence *risen* to 0.88. Every one of those six came through the
+  racket-head exemption, which on a low contact sits over the foot: all six
+  had every detection inside a player box, and all eight real ones had
+  every detection outside, the nearest 118 px clear. So a launch must now
+  leave: most of its detections have to be clear of the players
+  (`MIN_OUTSIDE_PLAYER_SHARE`), which is a definition rather than a
+  threshold and separates 100% from 0%. That gives **8 of 38, all eight on
+  the shuttle**, re-cropped and checked.
+  **What is still not established is recall.** 8 of 38 is not 8 right out
+  of 38 possible: nothing says how many of the other 30 had a findable
+  shuttle, which needs the flights hand-labelled and not just the
+  positions. And only two rallies were cropped. So the launch path is now
+  worth believing when it speaks, and says nothing about how often it should
+  have. Contact sheets are in the 2026-09-07 session.
 
 Known gaps:
 

@@ -19,12 +19,15 @@ from mikiri.geometry import CameraGeometry
 from mikiri.shuttle import (
     DIFF_THRESHOLD,
     DRAG_LENGTH_M,
+    MAX_USEFUL_RISE_RATIO,
     MIN_LAUNCH_POINTS,
+    RACKET_KEEP_BH,
     Candidate,
     Launch,
     ShuttleTrack,
     _predict,
     background_plate,
+    brightness_rise,
     court_mask,
     detect_candidates,
     difference_map,
@@ -32,6 +35,8 @@ from mikiri.shuttle import (
     fit_drag,
     initial_speed,
     launch_after_hit,
+    player_mask,
+    rise_selectivity,
     track_shuttle,
 )
 
@@ -258,6 +263,191 @@ def test_difference_map_never_raises_on_rubbish(frame, prev, plate):
     out = difference_map(frame, prev, plate)
     assert out.dtype == np.uint8
     assert np.isfinite(out).all()
+
+
+# --------------------------------------------------------------------------
+# The brightness gate
+# --------------------------------------------------------------------------
+
+
+def _court(seed: int = 5) -> np.ndarray:
+    """A saturated green court with static painted lines.
+
+    Saturated on purpose: the point of the gate is that a colour's brightest
+    channel and its luminance are different numbers, and a grey background
+    cannot show that.
+    """
+    rng = np.random.default_rng(seed)
+    bg = np.zeros((H, W, 3), np.uint8)
+    bg[:, :, 0] = rng.integers(60, 80, size=(H, W))
+    bg[:, :, 1] = rng.integers(130, 160, size=(H, W))
+    bg[:, :, 2] = rng.integers(50, 70, size=(H, W))
+    for y in range(0, H, 40):
+        cv2.line(bg, (0, y), (W, y), (235, 235, 235), 2)
+    return bg
+
+
+def _blob(frame: np.ndarray, xy, colour, radius: int = 4) -> np.ndarray:
+    out = frame.copy()
+    cv2.circle(out, (int(xy[0]), int(xy[1])), radius, colour, -1)
+    return out
+
+
+#: A maroon shirt, whose brightest channel sits below the court's own.
+MAROON = (40, 40, 120)
+#: A feather shuttle.
+WHITE = (250, 250, 250)
+
+
+def test_the_brightness_gate_drops_a_coloured_mover_and_keeps_a_bright_one():
+    """The defect that put launches on a thigh: motion alone cannot tell a
+    shuttle from a shuttle-sized piece of a moving player."""
+    court = _court()
+    prev = _blob(_blob(court, (100, 100), MAROON), (300, 100), WHITE)
+    now = _blob(_blob(court, (140, 140), MAROON), (340, 140), WHITE)
+
+    moved = difference_map(now, prev, court)
+    assert moved[140, 140] > DIFF_THRESHOLD, "plain motion sees the coloured mover"
+    assert moved[140, 340] > DIFF_THRESHOLD, "and the bright one"
+
+    rise = brightness_rise(now, prev, court)
+    assert rise[140, 140] <= DIFF_THRESHOLD, "nothing bright arrived at the maroon blob"
+    assert rise[140, 340] > DIFF_THRESHOLD, "something bright arrived at the shuttle"
+
+
+def test_the_brightness_rise_leaves_no_trailing_ghost_without_needing_a_plate():
+    """Both terms are signed rises rather than absolute differences. Where the
+    shuttle *was*, the pixel is now darker than it was, so it scores nothing.
+    The motion map reaches the same conclusion only by conjoining a background
+    plate; with nothing but the previous frame it lights up where the shuttle
+    used to be, and the tracker is documented as being harmed by exactly that."""
+    court = _court()
+    prev = _blob(court, (300, 100), WHITE)
+    now = _blob(court, (340, 140), WHITE)
+
+    rise = brightness_rise(now, prev)
+    assert rise[140, 340] > DIFF_THRESHOLD, "the current position lights up"
+    assert rise[100, 300] == 0, "the previous position does not"
+    assert difference_map(now, prev)[100, 300] > DIFF_THRESHOLD, "which motion alone cannot do"
+
+
+def test_a_yellow_shuttle_survives_the_gate_that_a_white_only_test_would_lose():
+    """Why the *brightest* channel is used and not the dimmest. The dimmest
+    means 'white' and is the sharper filter on feathers, but a yellow plastic
+    shuttle has a blue channel as low as the floor's and would vanish."""
+    floor = np.zeros((H, W, 3), np.uint8)
+    floor[:, :] = (140, 100, 80)  # a blue sports hall floor
+    prev = _blob(floor, (300, 100), (60, 220, 240))  # yellow plastic
+    now = _blob(floor, (340, 140), (60, 220, 240))
+
+    assert brightness_rise(now, prev, floor)[140, 340] > DIFF_THRESHOLD
+
+    # The same conjunction on the dimmest channel, which is what "white" would
+    # have meant, does not see it at all.
+    def dimmest(a):
+        return a.min(axis=2).astype(np.int16)
+
+    white_only = np.minimum(
+        np.clip(dimmest(now) - dimmest(floor), 0, 255),
+        np.clip(dimmest(now) - dimmest(prev), 0, 255),
+    )
+    assert white_only[140, 340] <= DIFF_THRESHOLD
+
+
+def test_a_grayscale_plate_is_dropped_rather_than_read_as_an_arrival():
+    """A saturated surface is much brighter in its own best channel than in
+    luminance -- this court is about 145 against about 115 -- so pairing a grey
+    plate with a colour frame would report the whole court as an arrival."""
+    court = _court()
+    grey_plate = cv2.cvtColor(court, cv2.COLOR_BGR2GRAY)
+    assert float(court.max(axis=2).mean()) - float(grey_plate.mean()) > 20.0
+
+    assert brightness_rise(court, None, grey_plate).size == 0, "no usable term, so no map"
+    # With the plate in its own channels there is correctly nothing arriving.
+    assert int(brightness_rise(court, None, court).max()) == 0
+
+
+def test_detect_candidates_drops_a_shuttle_sized_piece_of_a_coloured_player():
+    """The single most convincing false positive this detector produces is a
+    fragment of a player's own moving edge: shuttle-sized, shuttle-paced and
+    beautifully consistent. Colour is what separates it from a shuttle."""
+    court = _court()
+    prev = _blob(court, (100, 100), MAROON)
+    now = _blob(court, (140, 140), MAROON)
+
+    assert detect_candidates(now, prev, court, expected_px=8.0, brightness_gate=False), (
+        "motion alone accepts it, which is the bug"
+    )
+    assert detect_candidates(now, prev, court, expected_px=8.0) == []
+
+
+def test_rise_selectivity_says_when_the_gate_removed_nothing():
+    """The number a launch carries as provenance. A gate that removed nothing
+    proved nothing, and the launch has to be able to say so."""
+    court = _court()
+    coloured = _blob(_blob(court, (100, 100), MAROON), (140, 140), MAROON)
+    assert rise_selectivity(coloured, _blob(court, (100, 100), MAROON), court) < 0.5
+
+    # A scene whose only mover is bright: the gate is inert, and honest about it.
+    bright_prev = _blob(court, (300, 100), WHITE)
+    bright_now = _blob(court, (300, 104), WHITE)
+    assert rise_selectivity(bright_now, bright_prev, court) > 0.5
+
+    assert math.isnan(rise_selectivity(court, court, court)), "nothing moved at all"
+
+
+# --------------------------------------------------------------------------
+# Cutting the players out
+# --------------------------------------------------------------------------
+
+
+def test_player_mask_cuts_the_boxes_out_and_spares_the_racket_head():
+    """Why the boxes were not masked before: the shuttle at contact is at the
+    racket, which is right next to the player. The exemption preserves that."""
+    boxes = [[100.0, 100.0, 200.0, 300.0]]
+    mask = player_mask((H, W), boxes)
+    assert mask is not None
+    assert mask[200, 150] == 0, "inside the box"
+    assert mask[200, 400] == 255, "outside it"
+    assert mask[95, 150] == 0, "and the padding reaches past the box"
+
+    spared = player_mask((H, W), boxes, keep_xy=(150.0, 200.0), keep_radius=30.0)
+    assert spared is not None
+    assert spared[200, 150] == 255, "the racket head stays searchable"
+    assert spared[290, 150] == 0, "the rest of the body does not"
+
+
+@pytest.mark.parametrize(
+    "boxes",
+    [
+        [],
+        None,
+        [[np.nan, 0.0, 10.0, 10.0]],
+        [[10.0, 10.0, 10.0, 10.0]],
+        [[1.0, 2.0]],
+    ],
+)
+def test_player_mask_masks_nothing_when_the_boxes_are_unusable(boxes):
+    """Failing open is the safe direction: an absent mask can only admit
+    candidates, never hide the shuttle."""
+    assert player_mask((H, W), boxes) is None
+
+
+def test_player_mask_refuses_a_degenerate_shape():
+    assert player_mask((5,), [[1.0, 1.0, 2.0, 2.0]]) is None
+    assert player_mask((0, 0), [[1.0, 1.0, 2.0, 2.0]]) is None
+
+
+def test_background_plate_can_keep_the_source_channels():
+    """The brightness gate needs a plate in the frame's own channels; a grey
+    one makes it drop its strongest term."""
+    frames, _ = _clip(30)
+    grey = background_plate(FakeReader(frames), 0, 29)
+    colour = background_plate(FakeReader(frames), 0, 29, colour=True)
+    assert grey.shape == (H, W)
+    assert colour.shape == (H, W, 3)
+    assert colour.dtype == np.uint8
+    assert np.median(np.abs(colour.max(axis=2).astype(float) - grey.astype(float))) < 3.0
 
 
 # --------------------------------------------------------------------------
@@ -498,6 +688,120 @@ def test_launch_after_hit_recovers_the_direction(angle):
     assert launch.note
     assert launch.speed_px_s > 0
     assert launch.speed_bh == pytest.approx(launch.speed_px_s / BODY_HEIGHT_PX)
+
+
+def _body_only_clip(n: int = 12, hit: int = 2):
+    """A contact with no shuttle, and a bright patch travelling *on* the player.
+
+    This is the broadcast failure rebuilt in miniature: on real footage the
+    search returned launches for 33 of 36 contacts and every one of them sat on
+    a shoe, a thigh, a hip, the back of a head or the racket frame. The patch
+    here is shuttle-sized, shuttle-paced and moves in a straight line, so
+    nothing about its shape or motion gives it away -- only knowing where the
+    player is does.
+    """
+    bg = _hall()
+    head = np.array([320.0, 150.0])
+    body = (300, 280)
+    box = [float(body[0] - 45), float(body[1] - 45), float(body[0] + 45), float(body[1] + 45)]
+    frames, boxes = [], {}
+    for i in range(n):
+        frame = bg.copy()
+        cv2.circle(frame, body, 45, (190,) * 3, -1)  # static: it lands in the plate
+        if i > hit:
+            x = body[0] - 30 + 9 * (i - hit)
+            cv2.circle(frame, (int(x), body[1] + 6), 4, (252,) * 3, -1)
+        frames.append(frame)
+        boxes[i] = [list(box)]
+    return frames, head, boxes
+
+
+def test_launch_after_hit_does_not_take_the_players_own_body_for_a_shuttle():
+    """The defect this module was rewritten for. The boxes were already known
+    every frame and were used only to cap a blob's size, which never excluded
+    the body the false launches were sitting on."""
+    frames, head, boxes = _body_only_clip()
+
+    blind = launch_after_hit(FakeReader(frames), 2, head, FPS, BODY_HEIGHT_PX)
+    assert blind is not None, "without the boxes the body is still taken for a shuttle"
+
+    seeing = launch_after_hit(FakeReader(frames), 2, head, FPS, BODY_HEIGHT_PX, player_boxes=boxes)
+    assert seeing is None, "with them there is correctly nothing to report"
+
+
+def test_a_bright_patch_that_never_leaves_the_player_is_not_a_launch():
+    """The defect the racket-head exemption introduced, found by re-running the
+    broadcast and cropping every detection.
+
+    Cutting the players out fixed the shoes that were far from the racket, but
+    the exemption handed back the ones near it: on a low contact the racket is
+    beside the foot, and five shoes and a face came through it with confidences
+    up to 0.74. The mask cannot settle this -- the exemption exists precisely so
+    that a shuttle just off the strings is visible there. What settles it is
+    that a launch is the shuttle *leaving*, so most of it has to end up clear of
+    the player.
+    """
+    bg = _hall()
+    head = np.array([320.0, 150.0])
+    body, radius = (320, 190), 45
+    box = [
+        float(body[0] - radius),
+        float(body[1] - radius),
+        float(body[0] + radius),
+        float(body[1] + radius),
+    ]
+    frames, boxes = [], {}
+    for i in range(12):
+        frame = bg.copy()
+        cv2.circle(frame, body, radius, (190,) * 3, -1)  # static: lands in the plate
+        if i > 2:
+            cv2.circle(frame, (300 + 6 * (i - 3), 178), 4, (252,) * 3, -1)
+        frames.append(frame)
+        boxes[i] = [list(box)]
+
+    # The patch really is inside the exemption, so the mask alone lets it
+    # through and this test is exercising the leaving rule, not the mask.
+    spared = player_mask(
+        frames[0].shape, [box], keep_xy=head, keep_radius=RACKET_KEEP_BH * BODY_HEIGHT_PX
+    )
+    assert spared is not None and spared[178, 300] == 255
+
+    assert launch_after_hit(FakeReader(frames), 2, head, FPS, BODY_HEIGHT_PX) is not None, (
+        "with no boxes there is nothing to say it never left, and it passes"
+    )
+    assert (
+        launch_after_hit(FakeReader(frames), 2, head, FPS, BODY_HEIGHT_PX, player_boxes=boxes)
+        is None
+    ), "with the boxes it is a bright thing sitting on a player, and no launch at all"
+
+
+def test_cutting_the_players_out_does_not_cut_out_the_launch():
+    """The regression the mask could easily have caused. The hitter's box sits
+    right where the shuttle comes from, so masking it must still leave the
+    flight measurable -- which is the whole reason the boxes were left in the
+    search until now."""
+    frames, head, _ = _launch_clip(35.0)
+    body = (head[0] - 30.0, head[1] + 110.0)
+    boxes = {
+        i: [[body[0] - 40.0, body[1] - 40.0, body[0] + 40.0, body[1] + 40.0]]
+        for i in range(len(frames))
+    }
+    launch = launch_after_hit(FakeReader(frames), 4, head, FPS, BODY_HEIGHT_PX, player_boxes=boxes)
+    assert launch is not None
+    assert abs(launch.direction_deg - 35.0) < 8.0
+
+
+def test_a_launch_carries_how_much_the_brightness_gate_actually_removed():
+    """Provenance, not quality. A launch found where the gate removed nothing
+    rests on motion alone, which is the evidence that produced the confident
+    false launches, so the note has to say it whenever that is the case."""
+    frames, head, _ = _launch_clip(40.0)
+    launch = launch_after_hit(FakeReader(frames), 4, head, FPS, BODY_HEIGHT_PX)
+    assert launch is not None
+    assert "rise_ratio" in launch.to_dict()
+    warned = "separated nothing" in launch.note or "not measurable" in launch.note
+    inert = not math.isfinite(launch.rise_ratio) or launch.rise_ratio > MAX_USEFUL_RISE_RATIO
+    assert warned == inert, "the note and the number must never disagree"
 
 
 def test_launch_after_hit_returns_none_when_nothing_is_there():
