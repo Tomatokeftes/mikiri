@@ -861,6 +861,53 @@ def test_the_shuttle_itself_is_found_on_hand_checked_broadcast_frames(broadcast_
     assert not missed, f"the shuttle was not among the candidates on frames {missed}"
 
 
+def test_the_searched_region_keeps_the_airborne_shuttle_the_floor_quad_deleted(
+    broadcast_shuttle,
+):
+    """The mask the search actually uses, against the same ground truth.
+
+    The test above passes with no mask at all, which is why it never noticed
+    that both search paths were looking in the court *floor*. Twelve of these
+    nineteen positions are the airborne half of a lift, between image rows 92
+    and 321 while the floor quad starts at row 397, so the floor mask did not
+    rank them behind the competition -- it deleted the pixels, and eleven of
+    the twelve frames returned no candidate whatsoever.
+    """
+    from mikiri.court import compute_homography
+    from mikiri.shuttle import court_mask, detect_candidates, shuttle_region
+
+    plate, frames, size_px = broadcast_shuttle
+    H, _ = compute_homography(BROADCAST_COURT_IMAGE, BROADCAST_COURT_WORLD)
+    shape = next(iter(frames.values()))[0].shape
+    region = shuttle_region(shape, H)
+    floor = court_mask(shape, H)
+    assert region is not None and floor is not None
+
+    def found_with(mask, f, now, prev):
+        tx, ty = SHUTTLE_POINTS[f]
+        return any(
+            np.hypot(c.centre[0] - tx, c.centre[1] - ty) <= SHUTTLE_TOL_PX
+            for c in detect_candidates(now, prev, plate, expected_px=size_px, mask=mask)
+        )
+
+    missed = [f for f, (now, prev) in frames.items() if not found_with(region, f, now, prev)]
+    assert not missed, f"the region the search uses lost the shuttle on frames {missed}"
+
+    # And the floor quad is what would lose it, which is the defect this
+    # guards: if it stops losing them the region is no longer earning its keep.
+    airborne = [
+        f
+        for f in frames
+        if not floor[int(round(SHUTTLE_POINTS[f][1])), int(round(SHUTTLE_POINTS[f][0]))]
+    ]
+    assert len(airborne) >= 10, "the manifest should still hold airborne positions"
+    lost = [f for f in airborne if not found_with(floor, f, *frames[f])]
+    assert len(lost) == len(airborne), (
+        f"the floor quad found {len(airborne) - len(lost)} of {len(airborne)} airborne "
+        "positions; it used to find none, so this test no longer measures the defect"
+    )
+
+
 def test_the_brightness_gate_is_what_keeps_the_shuttle_inside_the_candidate_cap(
     broadcast_shuttle,
 ):

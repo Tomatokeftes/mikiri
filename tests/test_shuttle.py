@@ -37,6 +37,7 @@ from mikiri.shuttle import (
     launch_after_hit,
     player_mask,
     rise_selectivity,
+    shuttle_region,
     track_shuttle,
 )
 
@@ -177,6 +178,16 @@ PERSPECTIVE_H, _ERR = compute_homography(
 #: A deliberately affine homography: one pixel is worth one centimetre
 #: everywhere, which is the planar case a metric speed is entitled to assume.
 AFFINE_H = np.array([[0.01, 0.0, -1.0], [0.0, 0.01, -0.5], [0.0, 0.0, 1.0]])
+
+#: The same camera, further back, so the court and its margin sit inside the
+#: frame with room on every side. :data:`PERSPECTIVE_H` cannot be used to test
+#: what a mask excludes: its court plus a two-metre margin spans every column,
+#: so once the region includes the air above the court there is nothing left
+#: outside it to be excluded.
+INSET_H, _INSET_ERR = compute_homography(
+    [[260, 300], [380, 300], [355, 200], [285, 200]],
+    [[0.0, 0.0], [6.1, 0.0], [6.1, 13.4], [0.0, 13.4]],
+)
 
 
 # --------------------------------------------------------------------------
@@ -623,19 +634,75 @@ def test_track_shuttle_accepts_a_homography_and_player_boxes():
     assert np.median(_errors(track, path, track.detected)) < 3.0
 
 
+def test_the_searched_region_is_the_court_and_the_air_above_it():
+    """The mask must not delete the half of a flight that is off the floor.
+
+    Guards the defect this pair of functions was split over: both search paths
+    used to look in the floor quad, so on the benchmark broadcast every
+    airborne shuttle position read off the picture by eye -- twelve of
+    nineteen, the whole of one lift -- fell outside the searched region and
+    yielded no candidate at all.
+    """
+    floor = court_mask((H, W), INSET_H)
+    region = shuttle_region((H, W), INSET_H)
+    assert floor is not None and region is not None
+    rows = np.nonzero(floor.any(axis=1))[0]
+    cols = np.nonzero(floor.any(axis=0))[0]
+    above = (int(rows.min()) // 2, int(np.mean(cols)))
+    assert floor[above] == 0, "the sample point should be above the floor quad"
+    assert region[above] == 255, "the air above the court must be searched"
+    # Extending upward must not widen the court: a column the floor never
+    # reaches is still excluded, at every height.
+    beside = int(cols.min()) // 2
+    assert not region[:, beside].any()
+    # Nor may it reach below the court, where only the foreground is.
+    assert not region[int(rows.max()) + 1 :, :].any()
+
+
 def test_track_shuttle_masks_to_the_court():
-    # Under this homography the court quad covers only part of the frame; a
-    # bright mover far outside it must be ignored.
+    """A bright mover beside the court is ignored at every height.
+
+    ``expected_px`` is given because without it the blob size the homography
+    implies is 2 px here, the size gate throws the mover out on its own, and
+    the test passes whatever the mask does. The run without a homography is
+    the control that says the mask is what rejected it.
+    """
     frames, _ = _clip(20, players=False, shuttle=False)
     moving = []
     for i, f in enumerate(frames):
         g = f.copy()
-        cv2.circle(g, (20, 20 + 12 * i), 3, (250,) * 3, -1)
+        cv2.circle(g, (60, 40 + 12 * i), 3, (250,) * 3, -1)
         moving.append(g)
-    mask = court_mask((H, W), PERSPECTIVE_H)
-    assert mask is not None and mask[20, 20] == 0
-    track = track_shuttle(FakeReader(moving), 0, 19, FPS, homography=PERSPECTIVE_H)
+    mask = shuttle_region((H, W), INSET_H)
+    assert mask is not None and not mask[:, 60].any()
+
+    track = track_shuttle(FakeReader(moving), 0, 19, FPS, homography=INSET_H, expected_px=7.0)
     assert track.detected.sum() == 0
+    unmasked = track_shuttle(FakeReader(moving), 0, 19, FPS, expected_px=7.0)
+    assert unmasked.detected.sum() >= 15, "without the mask this mover is followed"
+
+
+def test_track_shuttle_follows_a_flight_that_rises_off_the_floor_quad():
+    """A whole flight, most of it above the region the floor quad covers.
+
+    The floor quad is asserted against rather than run, because the search no
+    longer offers it: the point is that these are the positions it would have
+    had to delete, and the tracker now returns them.
+    """
+    floor = court_mask((H, W), INSET_H)
+    top = int(np.nonzero(floor.any(axis=1))[0].min())
+    # A lift off the back of the court, rising well clear of the floor quad.
+    path = _arc(20, x0=300.0, y0=322.0, vx=5.0, vy=-22.0)
+    frames, _ = _clip(20, path=path, players=False)
+
+    off_floor = int(np.count_nonzero(path[:, 1] < top))
+    assert off_floor > len(path) / 2, "most of the flight should clear the floor quad"
+
+    track = track_shuttle(FakeReader(frames), 0, 19, FPS, homography=INSET_H, expected_px=7.0)
+    assert track.detected.sum() >= 15
+    assert np.median(_errors(track, path, track.detected)) < 3.0
+    # And they are the airborne ones, not just the frames still over the floor.
+    assert np.count_nonzero(track.detected & (track.xy[:, 1] < top)) >= off_floor - 2
 
 
 @pytest.mark.parametrize(

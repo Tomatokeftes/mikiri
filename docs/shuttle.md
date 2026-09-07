@@ -13,7 +13,9 @@ Mikiri takes a deliberately narrow approach.
 
 Tracking a shuttle for a whole rally on consumer footage is unreliable. Tested
 on a real match clip, the general tracker reported detections spread across the
-entire frame: it was following motion, not a shuttle.
+entire frame: it was following motion, not a shuttle. The next section revisits
+that with numbers, because part of what made it unreliable turned out to be a
+bug in the searched region rather than a fact about the footage.
 
 But Mikiri already knows something a general tracker does not. The swing
 detector says *when* the player hit, and the racket-head estimate says *where*
@@ -25,6 +27,58 @@ That is the **Find shuttle** button in the Strokes panel. What it recovers --
 the launch direction and speed -- is exactly what separates a smash from a
 clear from a drop, which the body pose cannot. Contacts where nothing is found
 keep their descriptor and no shot name.
+
+## Tracking a whole rally, measured, and why a turn is not a contact
+
+The bet above was made when the searched region was the court floor, so it was
+partly a bet against a bug. With the air above the court searched, the
+rally-long path is worth measuring rather than dismissing, and the reason to
+want it is specific: a contact is the shuttle changing direction, so the turns
+in a rally-long track would be contacts measured directly instead of inferred
+from a wrist. That would settle `MIN_PEAK_SPEED_BH`, which `strokes.py` records
+as a club-footage bar that the broadcast's far player is above on 46% of his
+play frames.
+
+Measured on frames 10861 to 13418 of game one. First, the range is not two
+rallies: 21% of it is close-ups and replays, and `segments.court_visibility`
+separates them totally -- a median score of 0.90, with nothing at all between
+0.2 and 0.7 -- leaving three court-visible stretches of 36.9, 8.4 and 35.9
+seconds. Confining the track to those, as the app would, cuts the turning seams
+from 71 to 45 and leaves every one of the 25 that sit near a pose contact: a
+quarter of what looked like evidence was the tracker chasing a face.
+
+On those 81 seconds the track gives 654 detections in 68 flights, a median of
+eight frames each. Inside a flight the measurement is clean, and it is the
+cleanest number here: for a shuttle moving faster than 10 px a frame the
+frame-to-frame turn is a median of 0.8 degrees and at most 5.2, which is
+gravity and drag doing all they can do. So a turn of 150 degrees is real.
+
+**But a turn is not a contact, and the reason is the camera.** At the top of a
+lift the shuttle stalls and falls back, and from behind the baseline that
+reverses its image direction as sharply as any racket. Seam 11644 to 11659 was
+cropped and looked at: 166.8 degrees, and the picture is the shuttle hanging
+above the court while the player is still winding up to smash it. Nothing that
+was tried separates the two cases -- the speed through the seam (a median gain
+of 1.2 against 1.5), the distance to a tracked player (100 px against 112), or
+how far the two flights' ends are apart against how far the shuttle could have
+travelled between them.
+
+And the comparison that was being made cannot settle it in either direction,
+which is the more useful half of this result. Sorting seams by whether a pose
+contact is near them assumes the pose contacts are right, and on this footage
+they are known not to be -- 693 for 29 points. A seam matching none of them is
+not thereby false, and a seam matching one is not thereby true.
+
+So the rally-long track is now good enough to be worth reviewing and not good
+enough to label anything by itself. What would settle it is the 45 turning
+seams looked at one at a time with the shuttle drawn on the video, which is a
+far smaller job than hand-labelling contacts frame by frame and is the shape
+the review queue already has. It is not done, and until it is, nothing in the
+app reads a contact off the shuttle.
+
+Cost, measured on the same range: 406 ms a frame at 1920x1080, so a whole game
+would be hours. Confining the track to court-visible play is not an
+optimisation here but the difference between a run and no run.
 
 ## Shot names need a side-on camera, and Mikiri checks
 
@@ -100,6 +154,40 @@ inside the cut. Only the post-hit search gets that exemption, because only it is
 told where the racket was; the rally-long tracker loses the shuttle while it is
 within a body-width of a player and picks it up again as a separate tracklet
 once it is clear.
+
+**The searched region is the court and the air above it, not the court.** The
+homography knows where the court is, and masking to it removes the crowd, the
+scoreboard and the next court along for nothing. It was the *floor* quad, which
+is the wrong region for the one object this module exists to find: a shuttle
+spends most of its flight off the floor, and a raised world point projects
+above its floor position in the image. On the benchmark broadcast the floor
+quad's top edge is image row 397 and twelve of the nineteen hand-read shuttle
+positions -- the entire airborne half of a lift -- lie between rows 92 and 321.
+The mask was not ranking them behind the competition. It was deleting the
+pixels: eleven of those twelve frames returned no candidate at all, and the
+tracker simply lost the flight at the moment the shuttle cleared the players'
+heads.
+
+`shuttle_region` extends each column of the floor mask upward, which is the
+bound available without a camera. A raised point projects toward the vertical
+vanishing point, which for a camera above the court sits below the frame, so
+raising moves a point up the image and never down; all 23,012 tracked player
+boxes on that broadcast agree, every one with its head above its feet. Bounding
+the extension at a reachable height would need the camera, and this clip has no
+net posts clicked to recover one from.
+
+What it costs, sampling two rallies every tenth frame: the searched region goes
+from 41% of the frame to 78%, frames at the twelve-candidate cap go from 17.2%
+to 20.7%, and a frame costs 631 ms instead of 386. What it buys: frames where
+the search finds *nothing* fall from 57.8% to 26.6%, against 23.8% with no mask
+at all -- so on this footage the mask was costing most of the shuttle and buying
+almost nothing, and the nineteen ground-truth positions still come out first or
+second of at most two candidates. The court is kept rather than dropped because
+what it still removes costs nothing to remove.
+
+The lesson is the same one this module has already learnt once: the ground-truth
+test passed throughout, because it called the detector with no mask. A test that
+does not run the code path the app runs is not a guard.
 
 **The shuttle is a streak.** This is the trap worth naming. Hall lighting caps
 the usable shutter speed, so a fast shuttle smears across many pixels. Gating
@@ -227,7 +315,8 @@ and looked at**.
 | --- | --- | --- |
 | motion alone, players left in | 35 of 38 | 0 |
 | brightness gate, players cut out | 14 of 38 | 8 |
-| and the leaving rule | **8 of 38** | **8** |
+| and the leaving rule | 8 of 38 | 8 |
+| and the air above the court | **13 of 38** | **13** |
 
 The first row reproduces the original result exactly. The middle row is where
 the crops earned their keep: six of those fourteen were still the player, and
@@ -251,10 +340,21 @@ false ones 0%. With it, 8 of 8 surviving launches are on the shuttle.
 The exemption is kept, because it is what lets a real flight be seen from its
 first frame; the leaving rule is what makes it safe to have.
 
+The last row is the floor mask, found afterwards and described under *How the
+detector works*. Every one of the five launches it adds rises steeply -- 87,
+93, 94, 106 and 121 degrees -- which is the class the floor quad was deleting,
+and none of the eight is lost. All five were cropped at full resolution and
+looked at, and all five are the shuttle: two of them read as doubtful at a
+120 px crop and are unmistakable at 40 px magnified four times, which is worth
+recording as a lesson about how these crops have to be read. Neither
+confidence nor the number of points separated the doubtful pair from the rest
+-- 0.87 with seven points and 0.41 with three -- and this module has now twice
+found that confidence does not tell it what it wants to know.
+
 What is **not** verified, and must not be assumed:
 
-* **Recall.** 8 launches for 38 contacts is not 8 correct answers out of 38
-  possible ones. Nothing here establishes how many of the other 30 had a
+* **Recall.** 13 launches for 38 contacts is not 13 correct answers out of 38
+  possible ones. Nothing here establishes how many of the other 25 had a
   findable shuttle, because that would need the flights hand-labelled as well
   as the positions. All that is established is that what it *does* report is
   the shuttle rather than a shoe.
