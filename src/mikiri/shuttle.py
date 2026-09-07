@@ -748,11 +748,15 @@ def expected_shuttle_px(homography: np.ndarray | None, shape: tuple[int, ...]) -
 def court_mask(
     shape: tuple[int, ...], homography: np.ndarray | None, margin_m: float = COURT_MARGIN_M
 ) -> np.ndarray | None:
-    """Binary mask of the court plus a margin, for free removal of spectators.
+    """Binary mask of the court floor plus a margin, for free removal of spectators.
 
     Everything outside the playing area -- the crowd, the scoreboard, a passing
     player on the next court -- is motion this tracker has no interest in, and
     the homography already knows where the court is.
+
+    This is the floor and only the floor. Anything looking for the shuttle
+    wants :func:`shuttle_region` instead, because a shuttle in the air
+    projects above the floor quad and this mask would delete it.
 
     Args:
         shape: Frame shape, ``(h, w)`` or ``(h, w, c)``.
@@ -791,6 +795,50 @@ def court_mask(
     if int(mask.sum()) == 0:
         return None
     return mask
+
+
+def shuttle_region(
+    shape: tuple[int, ...], homography: np.ndarray | None, margin_m: float = COURT_MARGIN_M
+) -> np.ndarray | None:
+    """Where on the frame the shuttle can be: the court, and the air above it.
+
+    :func:`court_mask` is the floor, and both search paths used to look in it
+    directly. That is the wrong region for the one object this module exists
+    to find, because a shuttle spends most of its flight off the floor and a
+    raised point projects *above* its floor position in the image. On the
+    benchmark broadcast the floor quad's top edge is image row 397 and twelve
+    of the nineteen hand-read shuttle positions -- every airborne one, the
+    whole of a lift -- lie between rows 92 and 321. The mask was not ranking
+    them behind the competition, it was deleting the pixels: eleven of those
+    twelve frames yielded no candidate at all.
+
+    Extending each column upward is the bound available without a camera. A
+    raised world point projects toward the vertical vanishing point, which for
+    a camera above the court sits below the frame, so raising moves a point up
+    the image and never down; all 23,012 tracked player boxes on that
+    broadcast agree, every one with its head above its feet. Bounding the
+    extension at a reachable height needs the camera, and this clip has no net
+    posts clicked to recover one from.
+
+    What the court still removes -- the near foreground, the side stands, the
+    next court along -- costs nothing to remove, so it is kept rather than
+    dropped. What the extension costs is measured in ``docs/shuttle.md``.
+
+    Args:
+        shape: Frame shape, ``(h, w)`` or ``(h, w, c)``.
+        homography: Image-to-court homography, or ``None``.
+        margin_m: Metres of slack around the doubles court, on the floor.
+
+    Returns:
+        A ``uint8`` mask (255 inside), or ``None`` where :func:`court_mask`
+        can build none -- in which case masking nothing is the safe answer.
+    """
+    mask = court_mask(shape, homography, margin_m)
+    if mask is None:
+        return None
+    # Every pixel with court below it in the same column, which is a running
+    # maximum up the image and so the same scan read from the bottom.
+    return np.maximum.accumulate(mask[::-1], axis=0)[::-1]
 
 
 def player_mask(
@@ -922,7 +970,7 @@ def detect_candidates(
         expected_px: Expected shuttle footprint in pixels (see
             :func:`expected_shuttle_px`).
         threshold: Difference magnitude that counts as motion, 0..255.
-        mask: Optional region to search, e.g. from :func:`court_mask`.
+        mask: Optional region to search, e.g. from :func:`shuttle_region`.
         accumulated: Faded per-pixel maximum of recent difference maps, taken
             into the maximum with this frame's so a stalling shuttle survives.
             Blobs it contributes that have no motion in the current frame come
@@ -1326,11 +1374,19 @@ def track_shuttle(
 ) -> ShuttleTrack:
     """Best-effort shuttle track over a frame range.
 
-    This is the secondary path. Full-rally tracking on consumer footage is not
-    dependable and the returned track says so honestly: frames where nothing
-    was found stay ``nan``, frames coasted through an occlusion are marked
-    ``interpolated`` and never ``detected``. Prefer :func:`launch_after_hit`
-    whenever the contact frames are known.
+    This is the secondary path, and the returned track says what it knows
+    honestly: frames where nothing was found stay ``nan``, frames coasted
+    through an occlusion are marked ``interpolated`` and never ``detected``.
+    Prefer :func:`launch_after_hit` whenever the contact frames are known.
+
+    Measured on 81 seconds of court-visible play from the benchmark broadcast
+    it gives 654 detections in 68 flights, and inside a flight the positions
+    are good enough that a shuttle moving faster than 10 px a frame turns by a
+    median of 0.8 degrees and at most 5.2. What that does *not* buy is
+    contacts: from behind the baseline the top of a lift reverses the image
+    direction as sharply as a racket does, and nothing tried so far separates
+    the two. See ``docs/shuttle.md``. It costs about 0.4 s a frame at
+    1920x1080, so give it play frames and not a whole clip.
 
     Args:
         reader: Anything with ``read(idx) -> frame | None``.
@@ -1338,7 +1394,8 @@ def track_shuttle(
         end: Last frame of the range, inclusive.
         fps: Frames per second, carried through for downstream speeds.
         homography: Image-to-court homography. When given it sets the expected
-            blob size and masks detections to the court plus a margin.
+            blob size and masks detections to the court and the air above
+            it (:func:`shuttle_region`).
         player_boxes: ``{frame: [[x0, y0, x1, y1], ...]}``. Both bounds the
             largest acceptable blob and removes the players from the searched
             region (:func:`player_mask`). No racket-head exemption is made
@@ -1393,7 +1450,7 @@ def track_shuttle(
             width = int(shape[1])
             if size_px is None:
                 size_px = expected_shuttle_px(homography, shape)
-            mask = court_mask(shape, homography)
+            mask = shuttle_region(shape, homography)
         # The players move, so their cut-out is rebuilt every frame while the
         # court's is not.
         here = player_mask(shape, (player_boxes or {}).get(start + i) or ())
@@ -1678,7 +1735,7 @@ def launch_after_hit(
     width = int(shape[1])
     max_step = min(max_step, width / 3.0)
     size_px = float(expected_px) if expected_px else expected_shuttle_px(homography, shape)
-    mask_court = court_mask(shape, homography)
+    mask_court = shuttle_region(shape, homography)
 
     miss = 0
     ratios: list[float] = []

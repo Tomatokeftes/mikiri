@@ -255,12 +255,52 @@ Not verified, and the module docstrings say so:
   (`MIN_OUTSIDE_PLAYER_SHARE`), which is a definition rather than a
   threshold and separates 100% from 0%. That gives **8 of 38, all eight on
   the shuttle**, re-cropped and checked.
-  **What is still not established is recall.** 8 of 38 is not 8 right out
-  of 38 possible: nothing says how many of the other 30 had a findable
+  **Then the searched region turned out to be the court *floor*, and it was
+  deleting the half of every flight that is off the ground.** Both search
+  paths intersected their region with `court_mask`, which is the floor quad
+  plus a ground margin, and a shuttle in the air projects above it: the
+  quad's top edge is image row 397 and twelve of the nineteen hand-read
+  positions -- the whole airborne half of a lift -- lie between rows 92 and
+  321. Not ranked behind the competition, deleted: eleven of those twelve
+  frames returned no candidate at all. `shuttle_region` extends each column
+  upward, which is the bound available without a camera and the one this
+  broadcast allows, since it has no net posts clicked. Measured: frames where
+  the search finds nothing fall from 57.8% to 26.6%, against 23.8% with no
+  mask at all, for 3.5 more points of frames at the candidate cap. The launch
+  pass goes from **8 of 38 to 13 of 38, all thirteen on the shuttle** --
+  reverting the region reproduces the old 8 exactly, the five added all rise
+  steeply at 87 to 121 degrees, which is the class the floor quad removed,
+  and all five were cropped and looked at. Two read as doubtful at a 120 px
+  crop and are unmistakable magnified, which is how these crops have to be
+  read; confidence again told nobody anything (0.87 with seven points, 0.41
+  with three). The ground-truth test passed throughout, because it called the
+  detector with no mask: a test that does not run the path the app runs is
+  not a guard, and there is now one that does.
+  **What is still not established is recall.** 13 of 38 is not 13 right out
+  of 38 possible: nothing says how many of the other 25 had a findable
   shuttle, which needs the flights hand-labelled and not just the
   positions. And only two rallies were cropped. So the launch path is now
   worth believing when it speaks, and says nothing about how often it should
   have. Contact sheets are in the 2026-09-07 session.
+* **Reading contacts off a rally-long shuttle track: measured, and it does
+  not work yet.** The idea was that a contact *is* the shuttle turning, so
+  the turns would settle `MIN_PEAK_SPEED_BH` without hand-labelling. With the
+  region fixed the track is real -- 654 detections in 68 flights over 81 s of
+  court-visible play -- and inside a flight it is clean: above 10 px a frame
+  the turn is a median 0.8 degrees and at most 5.2, so a 150-degree turn is
+  not noise. But **from behind the baseline the top of a lift reverses the
+  image direction as sharply as a racket does**, and the crop of seam
+  11644-11659 is the shuttle hanging above the court while the player winds
+  up to smash it. Neither the speed through the seam, the distance to a
+  tracked player, nor the span against the reachable distance separates the
+  cases. Two side findings worth keeping: 21% of the supposed two-rally range
+  is close-ups and replays, and confining the track to the court-visible
+  stretches cuts the turning seams from 71 to 45 while losing none of the 25
+  near a pose contact; and sorting seams by whether a pose contact is near
+  them cannot settle anything either way, because the pose contacts are the
+  thing under suspicion. What would settle it is the 45 seams reviewed one at
+  a time with the shuttle drawn, which the review queue is already shaped
+  for. Cost: 406 ms a frame at 1920x1080. See `docs/shuttle.md`.
 
 Known gaps:
 
