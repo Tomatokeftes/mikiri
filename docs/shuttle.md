@@ -189,6 +189,20 @@ The lesson is the same one this module has already learnt once: the ground-truth
 test passed throughout, because it called the detector with no mask. A test that
 does not run the code path the app runs is not a guard.
 
+**What the extension does on an eye-level camera is measured but not settled.**
+On 500 frames of `lindan_rally` the floor quad finds 13 shuttle positions and
+the extension finds 161, so the change matters there too and in the same
+direction. But 91% of those 161 are above the far baseline, where at eye level
+the crowd and the advertising boards are, and cropping them finds both kinds:
+real shuttles at the top of a clear, unmistakable and quite invisible to the
+floor quad, and **LED advertising panels**, which change their content and so
+present motion and a brightness rise at once -- the two signals the gate
+conjoins -- in shuttle-sized bright patches. On a raised broadcast camera the
+boards sit low in the frame and mostly below the play; at eye level they run
+straight through the players' own height. Which of the 161 is which has not
+been counted, and until it is, this clip has a shuttle track worth looking at
+and not one worth computing from.
+
 **The shuttle is a streak.** This is the trap worth naming. Hall lighting caps
 the usable shutter speed, so a fast shuttle smears across many pixels. Gating
 candidates on roundness or compactness -- the obvious thing to do -- silently

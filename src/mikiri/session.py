@@ -908,6 +908,16 @@ class ProjectSession:
         pixels of body height the non-racket arm swings for balance about as
         fast as the racket arm swings at the shuttle. Asking is therefore the
         only defendable answer, per ``docs/tactical.md``.
+
+        **Asking the shuttle which wrist it arrives at was tried and fails**,
+        which is worth knowing because the idea is a good one and the failure
+        is not where anyone would look for it. It is right on the broadcast
+        and backwards on both players of ``lindan_rally``, where the votes are
+        cast by LED advertising panels rather than by the shuttle: those
+        boards change their content, so they present motion and a brightness
+        rise at once, and at eye level they sit at the players' own height. A
+        withholding rule that tests whether the vote is decisive cannot catch
+        that, because a fixed bias votes decisively. See ``docs/strokes.md``.
         """
         answered = self.project.match_review.racket_hands.get(side or "")
         if answered in ("right", "left"):

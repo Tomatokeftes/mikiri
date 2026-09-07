@@ -323,6 +323,22 @@ Known gaps:
   times per hundred frames and follows the player's facing), so the failure
   is the signal, not the labelling: at 160 to 420 px of body height the
   balance arm swings about as fast as the racket arm.
+  **Asking the shuttle instead was tried on 2026-09-07, works on the
+  broadcast, and is backwards on the clip that can test it, so it was
+  reverted** (`docs/strokes.md` keeps the write-up). Count which wrist each
+  measured shuttle position within a racket's reach was nearer to, one vote
+  a contact: on game one the near player votes 18 of 18 left and the far 30
+  of 35, reproducing the subject's own answered hand without being told it.
+  But both players there are left-handed, so it cannot tell a measurement
+  from a bias; `lindan_rally`, whose near player is right-handed and far
+  player left-handed, gets **both backwards**, 14-3 and 10-2. Cropping the
+  detections that cast those votes says why: they are **LED advertising
+  panels**, which change content and so offer motion and a brightness rise
+  at once, and at eye level sit at the players' own height rather than low
+  in frame as on a raised camera. A withholding rule on whether the *vote*
+  is decisive cannot catch that -- a fixed bias votes decisively -- which is
+  this module's old lesson in new clothes: a count could look like success,
+  and so can a split.
   Answering it matters. On `lindan_rally` it does not raise the far
   player's contact count (16 to 13, since his misses are prominence
   failures on a small, foreshortened swing, not the wrong arm), but on game

@@ -84,6 +84,62 @@ that player's own successive contacts, which is longer still. Its practical job
 is to stop a follow-through being counted as a second stroke; on the demo clip
 at 0.30 s it was, and at 0.45 s it is not.
 
+## Which hand holds the racket, and why the shuttle did not settle it
+
+Every contact on a side is found from the arm the racket hand names, so that
+hand has to be settled before anything else means much. It is asked, and
+asking is still the only defendable answer. The obvious estimator -- the racket
+wrist is the faster one at a swing -- votes 47% to 55% left on the four
+benchmark players whose hand is known, a coin flip, and the failure is in the
+signal rather than the labelling: at 160 to 420 pixels of body height the
+balance arm swings about as fast as the racket arm.
+
+**Asking the shuttle instead was tried on 2026-09-07 and does not work. The
+attempt is written up here because the way it fails is worth knowing.** The
+idea is sound and is what RallyLens does: at a contact the shuttle is at the
+racket, so it is at the racket hand, and the other hand is a body's width
+away. Count, for every measured shuttle position within a racket's reach of a
+wrist, which wrist it was nearer; collapse runs of frames so one contact votes
+once; name the hand when enough contacts have voted and the split is one a
+coin would rarely produce.
+
+On game one of the benchmark broadcast it works, and convincingly: the near
+player votes 18 of 18 left and the far player 30 of 35, both at a coin-flip
+probability under 0.0001, the winning wrist beating the other by about 0.4
+body heights. The near player is the subject, whose hand the user had already
+answered as left, and the measurement reproduces that answer without being
+told it. Both players in that game are left-handed, though, so the clip cannot
+tell a working measurement from one biased left.
+
+`lindan_rally` can, because its near player is right-handed and its far player
+left-handed, both read by eye off full-resolution crops. **It gets both
+backwards** -- the near player 14 votes to 3 for the wrong hand, the far
+player 10 to 2. At the radius that was chosen it withholds on both, so the bar
+happened to save it; a little more footage would have pushed a wrong answer
+through.
+
+Cropping the detections that actually cast those votes says why, and it is not
+a threshold that needs moving. They are **LED advertising panels**. Those
+boards change their content, so they offer motion and a brightness rise at the
+same moment -- the two signals the shuttle gate conjoins -- in bright patches
+of about the right size, and on an eye-level camera they run straight through
+the players' own height rather than sitting low in the frame as they do on a
+raised broadcast camera. Inside a racket's reach, which for a 419-pixel player
+is 293 pixels, whichever wrist is nearer to a fixed board is decided by where
+the board is and not by who hit anything. A fixed bias produces a clean-looking
+split.
+
+The rule this breaks is the one the module is built on, in a new disguise. The
+withholding tested whether the *vote* was decisive; it could not test whether
+the *detections* were the shuttle, and a geometrically biased junk detector
+votes decisively. This module already learnt once that a count can look like
+success. A split can too.
+
+What would be needed is not a tighter radius but a different premise: require
+the shuttle to be *arriving* along a gravity-consistent path rather than merely
+present, which a static board cannot fake. That is a design and not a tweak,
+and it has not been attempted.
+
 ## Reading the numbers
 
 Racket speed is reported in body heights per second, which needs no
