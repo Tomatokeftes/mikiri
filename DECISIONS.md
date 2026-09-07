@@ -786,6 +786,36 @@ need the flights hand-labelled, not just the positions.
 See [docs/shuttle.md](docs/shuttle.md); the ground truth is `shuttle_truth` in
 `benchmarks/clips.json`.
 
+## A turn in the shuttle's path is a question, not a contact
+
+A contact *is* the shuttle changing direction, so the turns in a rally-long
+track looked like contacts measured directly, on the other object, instead of
+inferred from a wrist. They are not, and the reason is the camera: from behind
+the baseline the top of a lift reverses the shuttle's image direction as
+sharply as a racket does. The seam that settled it, cropped and looked at, is
+the shuttle hanging above the court while the player winds up to smash it.
+Nothing separated the cases -- not the speed through the seam, not the distance
+to a tracked player, not the span against the reachable distance.
+
+The old rule would have withheld the turns. The amended one asks instead, and
+this is the clearest case for it: the person who filmed the clip can settle in
+a second what no measurement here can. So `turning_seams` reports the turns as
+questions, each raised with the shuttle drawn on the video, and the user says
+which side hit or that nothing did.
+
+Three choices inside that are worth keeping. **The question does not mention
+the pose detector's opinion**, because on this footage that is the thing under
+test -- 693 contacts for 29 points -- and showing it would collect agreement
+rather than evidence; for the same reason the queue could not be built from
+the chain's own contradictions here, which is what every other question in it
+is. **Both answers are stored**, as a `SeamVerdict`, and the "not a hit" half
+is the point: without it a turn nobody marked cannot be told from a turn nobody
+examined, and a count of hits found is not a rate. It is the first record in
+this project that says where a contact is *not*. **And the panel refuses a
+detection rate**, because the turns are the ones the track *found*, and a hit
+the track never saw leaves no turn to judge -- the same gap as "13 of 38 is not
+13 out of 38 possible" above, and it needs the flights labelled to close.
+
 ## Bouts before any per-rally figure
 
 A clip is not a rally, and dividing a whole-clip total by nothing produced a

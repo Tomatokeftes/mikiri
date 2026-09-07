@@ -76,6 +76,7 @@
         <label class="chk"><input type="checkbox" id="show-court" checked> Court points</label>
         <label class="chk"><input type="checkbox" id="show-racket" checked> Racket</label>
         <label class="chk" title="What the shuttle search found after each contact, with a fading trail. Checked by eye on one clip, where it was the player rather than the shuttle -- draw it to judge it, do not trust it."><input type="checkbox" id="show-shuttle"> Shuttle</label>
+        <label class="chk" title="The shuttle tracked across the play, in yellow, which is what the Turns questions are asking you to look at. Not checked by eye: that is the job it is here for."><input type="checkbox" id="show-shuttle-track" checked> Shuttle track</label>
         <label class="chk"><input type="checkbox" id="swap-lr"> Swap L/R</label>
         <label class="chk"><input type="checkbox" id="edit-toggle"> Edit keypoints</label>
         <button id="undo-btn" class="btn icon" title="Ctrl+Z" disabled>Undo</button>
@@ -231,6 +232,15 @@
         <ul id="strokes-list" class="events-list"></ul>
         <p class="muted small-text" id="strokes-note"></p>
         <p class="muted small-text explain" id="strokes-explain"></p>
+      </div>
+      <div class="panel hidden" id="seams-panel">
+        <div class="panel-title" title="turns in the shuttle's own path, and what you saw at each">Turns <span class="muted small-text explain" id="seams-sub">turns in the shuttle's own path, and what you saw at each</span>
+          <span class="spacer"></span>
+          <button class="btn small" id="seam-btn" title="Track the shuttle across the play and raise every turn in its path as a question. Slow: about half a second a frame.">Track shuttle</button>
+        </div>
+        <div id="seams-summary" class="footwork"></div>
+        <p class="muted small-text" id="seams-note"></p>
+        <p class="muted small-text explain" id="seams-explain"></p>
       </div>
       <div class="panel hidden" id="tactics-panel">
         <div class="panel-title" title="what each side played and whether it worked; every figure carries how it was known">Tactics <span class="muted small-text explain">what each side played and whether it worked; every figure carries how it was known</span></div>

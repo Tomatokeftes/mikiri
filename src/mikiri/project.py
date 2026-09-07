@@ -220,6 +220,29 @@ class IssueDismissal(BaseModel):
     side: str | None = None
 
 
+class SeamVerdict(BaseModel):
+    """What the user saw at one turn in the shuttle track, keyed by its own frames.
+
+    The first ground truth in this project that says where a contact is *not*.
+    A :class:`ContactEdit` records the contacts; this records the turns judged
+    and found innocent, which is the half that makes a rate measurable rather
+    than a count. Without it, a seam nobody marked is indistinguishable from a
+    seam nobody looked at, and no detection bar can be set against that.
+
+    Keyed by ``before`` and ``after`` rather than by a single frame because a
+    seam is a span: the turn is known to lie between the last sighting and the
+    next, and pinning it to one frame inside that gap would assert a precision
+    the track does not have. ``contact`` carries the side when the user says a
+    racket did it, and the matching :class:`ContactEdit` is written alongside;
+    the verdict itself survives whatever later happens to that contact.
+    """
+
+    before: int
+    after: int
+    verdict: Literal["contact", "turn"]
+    side: Literal["near", "far"] | None = None
+
+
 class MatchReview(BaseModel):
     """What the user has told the rally chain; see :mod:`mikiri.match`.
 
@@ -240,6 +263,12 @@ class MatchReview(BaseModel):
     #: be a field nothing could fill. An absent side has not been answered
     #: and is assumed right-handed.
     racket_hands: dict[str, Literal["right", "left"]] = Field(default_factory=dict)
+    #: What the user saw at each turn in the shuttle track they were shown.
+    #: Kept separately from ``contact_edits`` although a "contact" verdict
+    #: writes one of those too, because these two answer different questions:
+    #: an edit says what the chain should believe, a verdict says what a person
+    #: looked at and what they saw. Only the second can measure a detector.
+    seam_verdicts: list[SeamVerdict] = Field(default_factory=list)
 
 
 class Project(BaseModel):

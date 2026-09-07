@@ -392,9 +392,15 @@ The amended rule opens doors; it does not open all of them.
    court by naming the server; `d` leaves a question. Answers are stored on
    the project keyed by frame, contact answers are applied after detection
    and recovery, and a confirmed contact carries `confirmed` provenance and
-   is never asked about again. See `docs/match.md`. Still open: undoing an
-   answer from the panel, and every answer feeding the per-player classifier
-   of step 5, which is the reason the queue exists.
+   is never asked about again. See `docs/match.md`. The queue then took its
+   first questions from outside the chain: the turns in the shuttle's own
+   tracked path, which are a second and independent measurement of where the
+   contacts are rather than a contradiction between the chain's own facts.
+   That matters because the chain's contacts are the thing under suspicion on
+   broadcast footage, so a queue built only from their disagreements can never
+   catch the mistakes they agree on. See `docs/shuttle.md`. Still open: every
+   answer feeding the per-player classifier of step 5, which is the reason the
+   queue exists.
 5. **Shot naming** through the three sources, with per-pair confusion reporting.
    *Done, first version:* `classify.py` trains a per-player multinomial
    logistic regression on the user's own labels, gathered by a Tag shots mode

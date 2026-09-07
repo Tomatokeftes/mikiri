@@ -70,15 +70,90 @@ they are known not to be -- 693 for 29 points. A seam matching none of them is
 not thereby false, and a seam matching one is not thereby true.
 
 So the rally-long track is now good enough to be worth reviewing and not good
-enough to label anything by itself. What would settle it is the 45 turning
-seams looked at one at a time with the shuttle drawn on the video, which is a
-far smaller job than hand-labelling contacts frame by frame and is the shape
-the review queue already has. It is not done, and until it is, nothing in the
-app reads a contact off the shuttle.
+enough to label anything by itself. What would settle it is the turning seams
+looked at one at a time with the shuttle drawn on the video, which is a far
+smaller job than hand-labelling contacts frame by frame and is the shape the
+review queue already has.
 
 Cost, measured on the same range: 406 ms a frame at 1920x1080, so a whole game
 would be hours. Confining the track to court-visible play is not an
 optimisation here but the difference between a run and no run.
+
+## The seam review: asking instead of hiding
+
+That review is now built, and it is the amended rule
+(`CLAUDE.md`, `docs/tactical.md`) applied to the one thing this module could
+never settle alone. Withholding was the only option while nobody could be
+asked. Somebody can be asked here -- they filmed the clip and played the rally
+-- so the seams become questions rather than an empty panel.
+
+`turning_seams` finds them: two flights meeting across a gap the shuttle went
+unseen for, turning further than free flight allows. Three bars, each measured
+rather than argued. The turn must exceed 150 degrees, because inside a flight a
+shuttle above 10 px a frame turns by a median of 0.8 degrees and at most 5.2.
+Both flights must be above that 10 px a frame, because a stalling shuttle's
+direction is genuinely ambiguous and a wandering centroid would otherwise
+manufacture a reversal out of nothing. And the gap must be under 0.8 s, because
+beyond that the two flights need not be the same passage of the same shuttle at
+all -- joining them would invent a turn rather than measure one.
+
+**Only turns between flights are found.** A contact the tracker never lost the
+shuttle through would turn within one flight, and whether that happens on real
+footage is unknown here, so looking for it would be a guess wearing a
+measurement's clothes.
+
+`ProjectSession.track_shuttle_over_play` runs the track over the stretches of
+play the clip's own segmentation gives, which on a calibrated broadcast is the
+wide shots and nothing else. That is the measurement above turned into a
+default: it removed a quarter of what looked like evidence, cutting the seams
+from 71 to 45 while losing none of the 25 near a pose contact, because the rest
+was the tracker chasing a face. Cancel is checked once a frame, not once a
+stretch: a stretch is a whole rally, so at 0.4 s a frame a per-stretch check
+would leave a cancel waiting minutes, which is the user's loudest complaint
+about this app.
+
+### What the question does not say
+
+It does not say what the pose detector thinks. On this footage the pose
+contacts are the thing under suspicion -- 693 of them for 29 points -- so
+leading with one would collect agreement rather than evidence. The user is
+shown the shuttle, in yellow and separately from the launches, and asked what
+they saw: which side hit, at the frame they scrub to, or that nothing did.
+
+### Both answers are recorded, and that is the point
+
+A `SeamVerdict` is kept either way. The "yes" also writes a `ContactEdit` so the
+chain learns about the hit, but the verdict is the durable half, because an
+edit can be overwritten by a later answer and leaves no trace that anybody ever
+looked. Without the "no" answers a seam nobody marked is indistinguishable from
+a seam nobody examined, and no detection bar can be set against that. This is
+the first record in the project that says where a contact is *not*.
+
+### Run once on the footage it was built for
+
+Frames 10861 to 11800 of game one -- the first court-visible stretch of the
+range this document analyses -- through the app's own button, 403 s for 939
+frames, which is the 0.4 s a frame quoted above. The track gave 489 detections
+in 62 flights and `turning_seams` raised **12 questions**.
+
+The first was cropped and looked at, frames 10940 to 10952. The shuttle
+descends steeply toward the near player, is unseen for exactly the three frames
+he reaches and swings through, and reappears climbing fast enough to leave the
+crop in four frames. It is a near-side contact, and it is the question the
+panel asks, answerable in a second by anyone watching. That is one seam of
+twelve and it is a demonstration that the path works, **not** a measurement of
+how many of the twelve are contacts -- which is what the review is for and what
+nobody has sat down and done yet.
+
+### What it still cannot say, and the panel says so
+
+The counts are over **turns the shuttle track found**, which is not the
+population anybody wants. A hit the track never saw leaves no turn to judge, so
+these figures can never give a contact-detection accuracy. That is the same
+gap this document already records for the launch pass -- 13 of 38 is not 13
+right out of 38 possible -- and closing it needs the flights hand-labelled, not
+merely the turns judged. The Turns panel reports what was judged and refuses
+the rate.
 
 ## Shot names need a side-on camera, and Mikiri checks
 

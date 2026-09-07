@@ -27,6 +27,10 @@ const S = {
   // the player, not the shuttle, so it is a thing to inspect rather than a
   // thing to leave on. See docs/shuttle.md.
   showShuttle: false,
+  // On by default, unlike the launches above: this one exists to be looked at,
+  // and a seam question with the shuttle hidden is a question nobody can
+  // answer. It draws nothing until the track has been run.
+  showShuttleTrack: true,
   // The court map shows one rally by default: patterns live inside a rally,
   // and the whole clip is the average of thirty of them.
   courtScope: 'rally', showHeat: true, showPath: true, heat: null, poseKey: '',
@@ -175,8 +179,10 @@ const SHUTTLE_TRAIL = 12;
 // nothing is interpolated across a frame the search missed, because a smooth
 // curve through a gap is a drawing of a shuttle rather than a measurement of
 // one.
-function drawShuttle(ctx, scale) {
-  const flights = (S.pose && S.pose.shuttle) || [];
+function drawShuttle(ctx, scale, opts) {
+  const which = (opts && opts.which) || 'shuttle';
+  const tint = (opts && opts.tint) || '250,252,255';
+  const flights = (S.pose && S.pose[which]) || [];
   if (!flights.length) return;
   const r = Math.max(2.5, scale * S.state.video.width / 320);
   ctx.lineCap = 'round';
@@ -189,7 +195,7 @@ function drawShuttle(ctx, scale) {
       ctx.beginPath();
       ctx.moveTo(seen[k][1] * scale, seen[k][2] * scale);
       ctx.lineTo(seen[k + 1][1] * scale, seen[k + 1][2] * scale);
-      ctx.strokeStyle = `rgba(250,252,255,${(0.95 * fade).toFixed(3)})`;
+      ctx.strokeStyle = `rgba(${tint},${(0.95 * fade).toFixed(3)})`;
       ctx.lineWidth = Math.max(1, r * 0.9 * (1 - age));
       ctx.stroke();
     }
@@ -197,7 +203,7 @@ function drawShuttle(ctx, scale) {
     if (last[0] === S.frame) {
       ctx.beginPath();
       ctx.arc(last[1] * scale, last[2] * scale, r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.98)';
+      ctx.fillStyle = `rgba(${tint},0.98)`;
       ctx.fill();
       ctx.lineWidth = Math.max(1, r * 0.4);
       ctx.strokeStyle = 'rgba(255,210,60,0.95)';
@@ -285,6 +291,10 @@ function renderVideo() {
     if (S.calibPick.points.length === 2) { const [a, b] = S.calibPick.points; ctx.beginPath(); ctx.moveTo(a[0] * scale, a[1] * scale); ctx.lineTo(b[0] * scale, b[1] * scale); ctx.stroke(); }
   }
   if (S.showShuttle) drawShuttle(ctx, scale);
+  // Yellow, and a different array, because the two are not equally believable:
+  // the launches above were cropped and checked one at a time, this track has
+  // not been, and telling them apart by eye is the whole point of drawing it.
+  if (S.showShuttleTrack) drawShuttle(ctx, scale, { which: 'shuttle_track', tint: '255,214,64' });
   // racket-head estimate
   if (S.pose && S.pose.racket && $('#show-racket').checked) {
     const i = poseIndex(S.frame);
@@ -797,7 +807,7 @@ function renderAll() {
   if (!S.state) return;
   renderInfo(); renderTrim(); renderEvents(); renderOptions();
   renderVideo(); renderTimeline(); renderPlots(); renderCourt();
-  renderStrokes(); renderRallies(); renderMatch(); renderReview(); renderTactics(); renderDoubles(); renderTrends(); renderCoaching(); renderCameraView();
+  renderStrokes(); renderSeams(); renderRallies(); renderMatch(); renderReview(); renderTactics(); renderDoubles(); renderTrends(); renderCoaching(); renderCameraView();
   renderSideTabs(); renderNextStep();
 }
 
@@ -1249,6 +1259,33 @@ function renderCameraView() {
   el.title = v.description + NL + NL + v.hidden.map((h) => `${h.metric}: ${h.why} ${h.fix}`).join(NL);
 }
 
+// The turn review's own panel: how much of the shuttle's path has been looked
+// at, and what was found. It appears as soon as there is a tracking run, before
+// the shuttle has been searched for, because the button that starts that search
+// lives here and a panel that only exists after the thing it starts is a
+// feature nobody finds. Not before, though: without a run there are no play
+// stretches to search and the button would have nothing to do.
+function renderSeams() {
+  const s = S.state && S.state.seams;
+  const kv = (k, v) => `<span class="k">${k}</span><span>${v}</span>`;
+  const panel = $('#seams-panel');
+  panel.classList.toggle('hidden', !(S.state && S.state.has_pose));
+  if (!s) {
+    $('#seams-summary').innerHTML = '';
+    $('#seams-note').textContent = 'The shuttle has not been tracked across the play yet.';
+    $('#seams-explain').textContent = 'A contact is the shuttle turning, so its turns are where the hits are. Tracking costs about half a second a frame and only runs on the stretches of play.';
+    return;
+  }
+  const rows = [kv('turns found', String(s.n_seams)), kv('judged', `${s.n_judged} of ${s.n_seams}`)];
+  if (s.n_judged) {
+    rows.push(kv('were hits', `${s.n_contacts} (near ${s.by_side.near}, far ${s.by_side.far})`));
+    rows.push(kv('were not', String(s.n_turns)));
+  }
+  $('#seams-summary').innerHTML = rows.join('');
+  $('#seams-note').textContent = s.note + (s.complete ? '' : ' Open questions are in Review.');
+  $('#seams-explain').textContent = s.explain;
+}
+
 function renderStrokes() {
   const panel = $('#strokes-panel');
   const sv = S.pose && S.pose.strokes;
@@ -1654,6 +1691,10 @@ async function answerReview(choice) {
     if (o.value != null) body.value = o.value;
     // A move keeps the contact's own frame and takes the user's as the destination.
     if (o.moves) body.value = String(S.frame);
+    // A seam answer is about a span, not the frame it was answered on: the
+    // user scrubs to the hit, so their frame says where the contact is and
+    // the span says which question they were looking at.
+    if (o.seam) body.seam = o.seam;
   }
   try { applyState(await api('PUT', `/api/projects/${S.pid}/review`, body)); setStatus('Answered'); }
   catch (e) { setStatus(e.message, true); }
@@ -2091,6 +2132,18 @@ function bindUI() {
       setStatus(n ? `Shuttle found after ${n} contact${n === 1 ? '' : 's'}` : 'No shuttle found; strokes keep their descriptions');
     } catch (e) { setStatus(e.message, true); } finally { btn.disabled = false; }
   });
+  $('#seam-btn').addEventListener('click', async () => {
+    const btn = $('#seam-btn');
+    btn.disabled = true; setStatus('Tracking the shuttle across the play...');
+    try {
+      const { job_id } = await api('POST', `/api/projects/${S.pid}/shuttle/track`);
+      const res = await pollJob(job_id, (j) => setStatus(j.message || 'Tracking the shuttle...'));
+      const n = (res && res.result && res.result.seams) || 0;
+      applyState(await api('GET', `/api/projects/${S.pid}`)); await loadPose(); renderAll();
+      setStatus(n ? `${n} turn${n === 1 ? '' : 's'} to review` : 'No turns found in the shuttle path');
+    } catch (e) { setStatus(e.message, true); } finally { btn.disabled = false; }
+  });
+  $('#show-shuttle-track').addEventListener('change', (e) => { S.showShuttleTrack = e.target.checked; renderVideo(); });
   $('#racket-hand').addEventListener('change', optionThenPose('racket_hand'));
   $('#lead-leg').addEventListener('change', optionThenPose('lead_leg'));
   $('#conf-threshold').addEventListener('change', async (e) => { applyState(await api('PUT', `/api/projects/${S.pid}/options`, { conf_threshold: +e.target.value })); await loadPose(); renderAll(); });

@@ -139,7 +139,19 @@ queue. Each kind of question admits only the answers that would settle it:
 * an **open outcome** is a choice of winner;
 * a **doubtful service or receiver court** is a choice of server;
 * a **racket hand** is right or left, asked once per side and asked first,
-  because every contact on that side is found from the arm it names.
+  because every contact on that side is found from the arm it names;
+* a **shuttle seam** -- a turn in the shuttle's own tracked path -- is a hit by
+  one side at the frame the user scrubs to, or it is not a hit at all. The only
+  kind here that is not a contradiction the chain derived: it comes from a
+  second and independent measurement, described in `docs/shuttle.md`.
+
+Order follows what an answer costs the answers already given, which puts the
+racket hands first, the shuttle's turns next and the chain's own questions
+last. A racket hand re-detects every contact on its side, so answering it later
+would re-detect the contacts underneath answers already given. A seam verdict
+adds or confirms a contact and so changes what the chain asks about
+alternation, while no chain answer changes a turn. That is the only order in
+which nothing has to be answered twice.
 
 `u` takes the last answer back, whatever it changed -- a contact edit, a
 dismissal, a shot label, a move -- for as long as the project is open; the
@@ -164,6 +176,18 @@ same endpoint takes shot labels from the panel's Tag shots mode
 for the per-player classifier described in `docs/classifier.md`, and racket
 hands from either the queue or the project panel (`action: set_racket_hand`,
 with the hand in `value`).
+
+A seam answer carries one extra field, `seam`, the `[before, after]` span the
+question was about. It is sent rather than worked out from the frame because
+the user is free to scrub anywhere before answering, so matching their frame
+back to a seam would be a guess about which question they were looking at. The
+answer then writes two records, not one: a `SeamVerdict`, which says a person
+looked at this turn and what they saw, and -- only when they saw a hit -- the
+`ContactEdit` that tells the chain about it. Both, because they answer
+different questions. An edit says what the chain should believe and can be
+overwritten by a later answer; a verdict is evidence about the detector, and
+the "not a hit" verdicts are the half without which a turn nobody marked
+cannot be told from a turn nobody examined. One answer is still one undo.
 
 ## Sides own events, players are an attribution
 

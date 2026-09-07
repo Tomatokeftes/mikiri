@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import cv2
@@ -170,6 +171,36 @@ RACKET_KEEP_BH = 0.25
 #: exemption -- have every detection inside. So the value only has to sit
 #: between none and all, and the margin is the whole range.
 MIN_OUTSIDE_PLAYER_SHARE = 0.5
+
+#: Turn between two consecutive flights, in degrees, that no free flight can
+#: produce. Measured on 81 seconds of court-visible play from
+#: ``momota_lindan_broadcast``: inside a flight, for a shuttle moving faster
+#: than :data:`MIN_SEAM_SPEED_PX`, the frame-to-frame turn is a median of 0.8
+#: degrees and at most 5.2, which is gravity and drag doing all they can do. So
+#: a turn of this size is a real change of direction and not the measurement
+#: wandering. It is emphatically *not* a contact -- see :func:`turning_seams`.
+MIN_SEAM_TURN_DEG = 150.0
+#: Speed, in pixels a frame, below which a flight's direction is not worth
+#: differencing. The turn figures above were measured above this bar; under it
+#: the step is a couple of pixels and its angle is mostly the centroid jitter
+#: of a smear. A slow shuttle is exactly the stalling shuttle whose direction
+#: is genuinely ambiguous, so refusing to call a turn there is the honest
+#: outcome rather than a convenience.
+MIN_SEAM_SPEED_PX = 10.0
+#: Detections spanned at each side of a seam to get its in and out direction:
+#: the straight displacement from the first of them to the last, over the
+#: frames between. Two points would be one step and would carry the whole of
+#: that step's centroid jitter into the angle; much more than this and a real
+#: curve -- a flight is a parabola -- starts bending the estimate away from the
+#: direction at the seam itself.
+SEAM_FIT_POINTS = 3
+#: Longest unseen gap, in seconds, that two flights may still be two halves of
+#: one turn. A racket hides the shuttle for as long as the swing and the body
+#: cover it; the one seam of this kind that has been cropped and looked at
+#: spans 15 frames. Beyond this the two flights need not be the same shuttle
+#: passage at all, and joining them would invent a turn rather than measure
+#: one.
+MAX_SEAM_GAP_S = 0.8
 
 #: Accepted blob area, as a multiple of the expected shuttle footprint. The
 #: upper bound is additionally multiplied by the blob's elongation, because a
@@ -1371,6 +1402,8 @@ def track_shuttle(
     threshold: int = DIFF_THRESHOLD,
     samples: int = PLATE_SAMPLES,
     brightness_gate: bool = True,
+    check_cancel: Callable[[], None] | None = None,
+    progress: Callable[[float], None] | None = None,
 ) -> ShuttleTrack:
     """Best-effort shuttle track over a frame range.
 
@@ -1410,6 +1443,11 @@ def track_shuttle(
         samples: Frames sampled for the plate.
         brightness_gate: Require a brightness arrival as well as motion. See
             :func:`detect_candidates`.
+        check_cancel: Called once per frame and free to raise, which aborts the
+            track. Checked per frame rather than per range because a range here
+            is a whole rally: at 0.4 s a frame, a check between ranges would
+            leave a cancel waiting minutes.
+        progress: Called once per frame with the share of the range done.
 
     Returns:
         A :class:`ShuttleTrack` covering ``start..end`` inclusive; a zero-length
@@ -1440,6 +1478,10 @@ def track_shuttle(
     accum: deque[np.ndarray] = deque(maxlen=ACCUM_FRAMES)
     cands: list[list[Candidate]] = [[] for _ in range(n)]
     for i in range(n):
+        if check_cancel is not None:
+            check_cancel()
+        if progress is not None:
+            progress(i / float(n))
         frame = reader.read(start + i)
         if frame is None:
             prev = None
@@ -1531,6 +1573,182 @@ def _player_blob_cap(player_boxes: dict[int, list] | None, frame: int) -> float 
     if not diagonals:
         return None
     return float(MAX_BLOB_PLAYER_FRACTION * min(diagonals))
+
+
+@dataclass
+class Seam:
+    """Two flights meeting at a turn no free flight could have made.
+
+    The shuttle was seen, lost, and seen again going a very different way.
+    Between :attr:`before` and :attr:`after` something reversed it, and the
+    honest statement of what that was is: not known here.
+
+    **A seam is not a contact, and the reason is the camera.** At the top of a
+    lift the shuttle stalls and falls back, and from behind the baseline that
+    reverses its image direction as sharply as any racket does. The one seam of
+    this kind that has been cropped and looked at -- frames 11644 to 11659 of
+    ``momota_lindan_broadcast``, turning 166.8 degrees -- is the shuttle
+    hanging above the court while the player is still winding up to smash it.
+    Nothing tried separates the two cases: not the speed through the seam (a
+    median gain of 1.2 against 1.5), not the distance to a tracked player (100
+    px against 112), not the span against the distance the shuttle could have
+    covered. So this class carries a measurement and no name, and the naming is
+    the review queue's job. See ``docs/shuttle.md``.
+
+    Attributes:
+        before: Last frame the shuttle was detected on the way in, absolute.
+        after: First frame it was detected on the way out, absolute.
+        turn_deg: Angle between the two directions, in ``[0, 180]``.
+        in_deg: Incoming travel direction, y-up (0 = image-right, +90 = up).
+        out_deg: Outgoing travel direction, same convention.
+        in_speed_px: Incoming speed in pixels a frame.
+        out_speed_px: Outgoing speed in pixels a frame.
+    """
+
+    before: int
+    after: int
+    turn_deg: float
+    in_deg: float
+    out_deg: float
+    in_speed_px: float
+    out_speed_px: float
+
+    @property
+    def frame(self) -> int:
+        """Middle of the unseen gap.
+
+        Where to put the video, not where the turn happened: the turn is known
+        only to lie between :attr:`before` and :attr:`after`, and the middle is
+        the closest thing to it that does not claim more. A user answering a
+        seam scrubs from here to the frame they judge the hit on, which is why
+        the queue's contact answers take the frame the user is on rather than
+        this one.
+        """
+        return (int(self.before) + int(self.after)) // 2
+
+    @property
+    def gap(self) -> int:
+        """Frames the shuttle went unseen for."""
+        return int(self.after) - int(self.before) - 1
+
+    def to_dict(self) -> dict:
+        """JSON-friendly view (rounded)."""
+        return {
+            "before": int(self.before),
+            "after": int(self.after),
+            "frame": int(self.frame),
+            "gap": int(self.gap),
+            "turn_deg": round(float(self.turn_deg), 1),
+            "in_deg": round(float(self.in_deg), 1),
+            "out_deg": round(float(self.out_deg), 1),
+            "in_speed_px": round(float(self.in_speed_px), 1),
+            "out_speed_px": round(float(self.out_speed_px), 1),
+        }
+
+
+def _flights(track: ShuttleTrack) -> list[list[int]]:
+    """Runs of consecutively detected frames, as indices into the track.
+
+    Detected only. A frame the tracker coasted through is exactly the frame a
+    seam is measured *across*, so counting it as a sighting would erase the gap
+    that makes the seam visible.
+    """
+    out: list[list[int]] = []
+    run: list[int] = []
+    for i, det in enumerate(track.detected):
+        if det and np.isfinite(track.xy[i]).all():
+            run.append(i)
+            continue
+        if len(run) >= 2:
+            out.append(run)
+        run = []
+    if len(run) >= 2:
+        out.append(run)
+    return out
+
+
+def _end_direction(track: ShuttleTrack, run: list[int], leaving: bool) -> tuple[float, float]:
+    """Direction and speed at one end of a flight, as ``(deg, px per frame)``.
+
+    ``leaving`` picks the end: the last :data:`SEAM_FIT_POINTS` of the run when
+    the flight is arriving at a seam, the first of them when it is leaving one.
+    The estimate is the straight displacement across that span divided by the
+    frames it took, so a frame the run skipped costs speed rather than
+    inventing it.
+    """
+    idx = run[-SEAM_FIT_POINTS:] if leaving else run[:SEAM_FIT_POINTS]
+    a, b = idx[0], idx[-1]
+    delta = track.xy[b] - track.xy[a]
+    frames = float(b - a)
+    if frames <= 0 or not np.isfinite(delta).all():
+        return float("nan"), float("nan")
+    deg = math.degrees(math.atan2(-float(delta[1]), float(delta[0])))
+    return deg, float(math.hypot(float(delta[0]), float(delta[1])) / frames)
+
+
+def turning_seams(
+    track: ShuttleTrack,
+    min_turn_deg: float = MIN_SEAM_TURN_DEG,
+    min_speed_px: float = MIN_SEAM_SPEED_PX,
+    max_gap_s: float = MAX_SEAM_GAP_S,
+) -> list[Seam]:
+    """Where a tracked shuttle changed direction more than free flight allows.
+
+    A contact *is* the shuttle turning, so these are the frames worth looking
+    at to find one. They are not the contacts themselves and this module will
+    not pretend otherwise: :class:`Seam` says why, at length, and every seam
+    returned here is a question rather than an answer.
+
+    Two known limits, both stated rather than worked around. Only turns
+    *between* flights are found, because that is what has been measured: a
+    contact the tracker never lost the shuttle through would turn within one
+    flight, and whether that happens on real footage is unknown, so looking for
+    it would be a guess wearing a measurement's clothes. And a seam whose
+    flights are slow is dropped rather than reported with a wide error bar,
+    because a stalling shuttle is precisely the case where the direction is
+    genuinely ambiguous.
+
+    Args:
+        track: A track from :func:`track_shuttle`.
+        min_turn_deg: Turn a seam must exceed. See :data:`MIN_SEAM_TURN_DEG`.
+        min_speed_px: Speed both flights must exceed at the seam, in pixels a
+            frame. See :data:`MIN_SEAM_SPEED_PX`.
+        max_gap_s: Longest unseen gap two flights may span. See
+            :data:`MAX_SEAM_GAP_S`.
+
+    Returns:
+        Seams in frame order, with absolute frame numbers. Empty when the track
+        holds fewer than two flights.
+    """
+    runs = _flights(track)
+    if len(runs) < 2:
+        return []
+    max_gap = max(1, int(round(max_gap_s * float(track.fps or 0.0))))
+    out: list[Seam] = []
+    for cur, nxt in zip(runs[:-1], runs[1:]):
+        if nxt[0] - cur[-1] - 1 > max_gap:
+            continue
+        in_deg, in_speed = _end_direction(track, cur, leaving=True)
+        out_deg, out_speed = _end_direction(track, nxt, leaving=False)
+        if not all(math.isfinite(v) for v in (in_deg, in_speed, out_deg, out_speed)):
+            continue
+        if in_speed < min_speed_px or out_speed < min_speed_px:
+            continue
+        turn = abs((out_deg - in_deg + 180.0) % 360.0 - 180.0)
+        if turn < min_turn_deg:
+            continue
+        out.append(
+            Seam(
+                before=int(track.start + cur[-1]),
+                after=int(track.start + nxt[0]),
+                turn_deg=float(turn),
+                in_deg=float(in_deg),
+                out_deg=float(out_deg),
+                in_speed_px=float(in_speed),
+                out_speed_px=float(out_speed),
+            )
+        )
+    return out
 
 
 def initial_speed(distance_m: float, dt_s: float, drag_length_m: float = DRAG_LENGTH_M) -> float:

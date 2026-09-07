@@ -117,6 +117,13 @@ ISSUE_RECOVERED_CONTACT = "recovered_contact"
 #: asked rather than measured because it cannot be measured here: see
 #: :meth:`mikiri.session.ProjectSession.racket_hand_for`.
 ISSUE_RACKET_HAND = "racket_hand"
+#: The shuttle turned by more than free flight allows, and nothing here knows
+#: whether a racket did it. Unlike every other kind above, this one is not a
+#: contradiction the chain derived from its own facts: it comes from the
+#: shuttle track, which is a second and independent measurement, and it is
+#: raised precisely because the pose contacts it would otherwise be checked
+#: against are the thing under suspicion. See :func:`mikiri.shuttle.turning_seams`.
+ISSUE_SHUTTLE_SEAM = "shuttle_seam"
 
 #: What an answer from the review queue can do. Each maps to one thing the
 #: session knows how to record, keyed by frame so it survives re-segmentation.
@@ -136,6 +143,12 @@ ACTION_LABEL_SHOT = "label_shot"
 #: rides in the answer's ``value`` rather than its side, because the side
 #: says whose hand it is and the value says which one.
 ACTION_SET_RACKET_HAND = "set_racket_hand"
+#: A turn in the shuttle track that no racket caused -- the top of a lift, or
+#: the tracker crossing between two different objects. Recorded rather than
+#: dismissed, because the two mean opposite things: dismissing leaves a
+#: question open for somebody to answer later, while this *is* the answer, and
+#: it is the half of the ground truth that says where a contact is not.
+ACTION_SEAM_NOT_CONTACT = "seam_not_contact"
 ACTIONS = (
     ACTION_LABEL_SHOT,
     ACTION_CONFIRM_CONTACT,
@@ -144,6 +157,7 @@ ACTIONS = (
     ACTION_CONFIRM_WINNER,
     ACTION_CONFIRM_SERVER,
     ACTION_SET_RACKET_HAND,
+    ACTION_SEAM_NOT_CONTACT,
     ACTION_DISMISS,
 )
 

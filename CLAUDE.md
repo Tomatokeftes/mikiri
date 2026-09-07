@@ -102,7 +102,7 @@ Notes that will otherwise cost time:
 | `doubles.py` | formation of a pair from the two partners' court tracks, and whether it fits the shot the pair just played |
 | `footwork.py` | split steps and the moves they prepare |
 | `strokes.py` | swing detection and the two-tier stroke description |
-| `shuttle.py`, `shots.py` | classical shuttle search after each contact, and shot naming gated on it |
+| `shuttle.py`, `shots.py` | classical shuttle search after each contact, the rally-long track and the turns in it, and shot naming gated on the first |
 | `coaching.py` | turning the numbers into at most three things to work on |
 | `tracking.py` | one tracker per player, each held to its side of the net by the homography, and all of them inside the court |
 | `pipeline.py` | the tracking run and its cache (`CACHE_VERSION`); segments the clip first and spends the model only where there is something to see |
@@ -301,6 +301,32 @@ Not verified, and the module docstrings say so:
   thing under suspicion. What would settle it is the 45 seams reviewed one at
   a time with the shuttle drawn, which the review queue is already shaped
   for. Cost: 406 ms a frame at 1920x1080. See `docs/shuttle.md`.
+  **That review is now built, and it is the amended rule applied to the one
+  thing this module could never settle alone.** `shuttle.turning_seams` finds
+  the turns -- above 150 degrees, both flights above 10 px a frame, across a
+  gap under 0.8 s, every bar taken from the measurements above --
+  `session.track_shuttle_over_play` runs the track over the clip's own play
+  stretches and inside the trim, and each turn becomes a Review question with
+  the shuttle drawn on the video in yellow. The question does not say what the
+  pose detector thought, on purpose: on this footage that is the thing under
+  test, so leading with it would collect agreement rather than evidence. Both
+  answers are kept as a `SeamVerdict` -- a hit by one side at the frame the
+  user scrubs to, or not a hit at all -- and the "not a hit" half is the point,
+  because without it a turn nobody marked cannot be told from a turn nobody
+  examined. It is the first record here that says where a contact is *not*.
+  **What it still cannot give is a detection rate**, and the panel refuses one:
+  the counts are over turns the *track* found, and a hit the track never saw
+  leaves no turn to judge. That is the same gap as the launch pass's 13 of 38,
+  and closing it needs the flights hand-labelled, not the turns judged.
+  Run once end to end through the app's own button on frames 10861-11800 of
+  game one: 403 s for 939 frames, 489 detections in 62 flights, **12
+  questions**. The first was cropped -- the shuttle drops to the near player,
+  goes unseen for exactly the three frames he swings through, and climbs away
+  steeply -- and is plainly a near-side contact. That is one seam of twelve and
+  says the path works, not how many of the twelve are hits.
+  Not done: nobody has sat down and answered a clip's worth of them yet, so
+  `MIN_PEAK_SPEED_BH` and the forehand/backhand axis are still blocked on
+  exactly the labelling this was built to collect.
 
 Known gaps:
 
@@ -425,9 +451,15 @@ in their words as far as possible; each is a real defect, not a preference:
   clip no longer waits for the whole decode, and a second run does not
   rescan. Still not interruptible: loading the pose models on the first
   frame (several seconds) and the inference of one frame. The shuttle search
-  and the frame-cache fill check per frame already. Measure the time from
-  Cancel to the job reading cancelled on the broadcast clip before calling
-  this done.
+  and the frame-cache fill check per frame already, and so does the
+  rally-long shuttle track, which needed it most: a stretch there is a whole
+  rally, so a per-stretch check would leave a cancel waiting minutes at 0.4 s
+  a frame. **Measured once, on the broadcast clip and for that job only:** the
+  job's own timer read 21.7 s when Cancel was pressed and 21.8 s when it
+  stopped, so under a tenth of a second. That is one job of several and does
+  not settle the item -- the tracking job, which is the one the complaint was
+  about, is still unmeasured and still not interruptible while the models
+  load.
 * **Far too much text.** Done. Every sentence in a panel was sorted into
   one of two kinds: what a measurement refuses to say, which stays on the
   page always, and what merely explains how a number was reached, which

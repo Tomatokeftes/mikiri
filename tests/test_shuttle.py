@@ -21,6 +21,7 @@ from mikiri.shuttle import (
     DRAG_LENGTH_M,
     MAX_USEFUL_RISE_RATIO,
     MIN_LAUNCH_POINTS,
+    MIN_SEAM_TURN_DEG,
     RACKET_KEEP_BH,
     Candidate,
     Launch,
@@ -39,6 +40,7 @@ from mikiri.shuttle import (
     rise_selectivity,
     shuttle_region,
     track_shuttle,
+    turning_seams,
 )
 
 H, W = 360, 640
@@ -1107,3 +1109,127 @@ def test_court_mask_covers_the_court_and_refuses_nonsense():
     assert court_mask((H, W), np.full((3, 3), np.nan)) is None
     assert court_mask((H, W), np.zeros((3, 3))) is None
     assert court_mask((5,), PERSPECTIVE_H) is None
+
+
+# -- turning seams -------------------------------------------------------
+
+
+def _track(points, detected, fps=FPS, start=0):
+    """A ShuttleTrack from a list of points and a detected flag per frame."""
+    det = np.asarray(detected, dtype=bool)
+    return ShuttleTrack(
+        xy=np.asarray(points, dtype=float),
+        detected=det,
+        interpolated=np.zeros(len(det), dtype=bool),
+        score=np.where(det, 0.8, np.nan),
+        fps=fps,
+        start=start,
+    )
+
+
+def _reversal(speed=20.0, gap=4, n=8):
+    """A shuttle flying right, lost for ``gap`` frames, then flying left."""
+    out, det = [], []
+    for i in range(n):
+        out.append([100.0 + speed * i, 300.0])
+        det.append(True)
+    for _ in range(gap):
+        out.append([np.nan, np.nan])
+        det.append(False)
+    turn = out[n - 1][0]
+    for i in range(n):
+        out.append([turn - speed * (i + 1), 300.0])
+        det.append(True)
+    return out, det
+
+
+def test_a_reversal_is_a_seam_and_a_straight_flight_is_not():
+    """The measurement the whole seam review rests on: a shuttle that comes back.
+
+    Guards the case a bug in the angle fold would break silently -- reporting
+    every gap as a turn would bury the real turns in a queue nobody finishes.
+    """
+    seams = turning_seams(_track(*_reversal()))
+    assert len(seams) == 1
+    assert seams[0].turn_deg == pytest.approx(180.0, abs=1.0)
+    assert seams[0].before == 7 and seams[0].after == 12
+
+    straight, det = _reversal()
+    # Same gap, but the second flight carries on the way the first was going.
+    for i in range(12, len(straight)):
+        straight[i] = [straight[7][0] + 20.0 * (i - 7), 300.0]
+    assert turning_seams(_track(straight, det)) == []
+
+
+def test_a_seam_is_reported_at_absolute_frames():
+    """A track over frames 10000+ must raise questions there, not at zero.
+
+    The queue seeks the video to a seam's frame, so an offset dropped here
+    puts the user at the start of a two-hour broadcast on every question.
+    """
+    pts, det = _reversal()
+    seam = turning_seams(_track(pts, det, start=10000))[0]
+    assert (seam.before, seam.after) == (10007, 10012)
+    assert seam.frame == 10009, "the middle of the gap, where the turn must lie"
+
+
+def test_a_slow_shuttle_turning_is_refused_rather_than_reported():
+    """A stalling shuttle's direction is genuinely ambiguous, so no seam is claimed.
+
+    This is the case the review exists to be honest about: at the top of a lift
+    the shuttle barely moves, and a centroid wandering by a pixel would
+    otherwise manufacture a 180-degree turn out of nothing.
+    """
+    assert turning_seams(_track(*_reversal(speed=1.0))) == []
+
+
+def test_flights_too_far_apart_are_not_joined_into_a_turn():
+    """Two flights either side of a long gap need not be the same passage.
+
+    Without the gap bound the tracker losing the shuttle for a second and
+    picking up the *next* rally's would be reported as a contact.
+    """
+    fps = 30.0
+    assert turning_seams(_track(*_reversal(gap=4), fps=fps)) != []
+    assert turning_seams(_track(*_reversal(gap=40), fps=fps)) == []
+
+
+def test_a_coasted_position_does_not_close_the_gap_a_seam_is_measured_across():
+    """Interpolated frames are not sightings, and counting them would hide seams.
+
+    The tracker fills short occlusions by interpolation, which is exactly where
+    a contact hides: treating those as detections would join the two flights
+    into one and the turn would never be raised.
+    """
+    pts, det = _reversal()
+    track = _track(pts, det)
+    # Fill the gap the way the tracker does, and mark it as coasted, not seen.
+    for i in range(8, 12):
+        t = (i - 7) / 5.0
+        track.xy[i] = (1.0 - t) * track.xy[7] + t * track.xy[12]
+        track.interpolated[i] = True
+    assert len(turning_seams(track)) == 1, "still one seam: coasting is not seeing"
+
+
+def test_a_turn_below_the_bar_is_not_a_seam():
+    """Gravity bends a flight, and a bend is not a contact.
+
+    The bar is set from measured free flight: a shuttle turns under a degree a
+    frame, so anything near the threshold is the deflection of a real arc.
+    """
+    pts, det = _reversal()
+    # Leave the second flight going up-right rather than back: a bend, not a turn.
+    for i in range(12, len(pts)):
+        k = i - 11
+        pts[i] = [pts[7][0] + 20.0 * k, 300.0 - 8.0 * k]
+    seams = turning_seams(_track(pts, det))
+    assert seams == []
+    assert turning_seams(_track(pts, det), min_turn_deg=10.0), "the bend is measurable, just small"
+    assert MIN_SEAM_TURN_DEG > 90.0, "a bar below a right angle would call arcs contacts"
+
+
+def test_a_track_with_nothing_in_it_raises_no_questions():
+    """Degenerate input returns no seams rather than raising."""
+    assert turning_seams(_track(np.zeros((0, 2)), [])) == []
+    assert turning_seams(_track([[1.0, 2.0], [3.0, 4.0]], [True, True])) == []
+    assert turning_seams(_track([[np.nan, np.nan]] * 6, [True] * 6)) == []

@@ -122,6 +122,11 @@ class ReviewBody(BaseModel):
     #: For a shot label the shot, and for a racket hand the hand, both in the
     #: user's own words.
     value: str | None = None
+    #: For a seam answer, the span the question was about as ``[before, after]``.
+    #: Sent rather than inferred from ``frame``: the user is free to scrub
+    #: anywhere before answering, so matching their frame back to a seam would
+    #: be a guess about which question they were looking at.
+    seam: list[int] | None = None
 
 
 class EventUpdateBody(BaseModel):
@@ -695,6 +700,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         job = st.jobs.start("shuttle", work)
         return {"job_id": job.id}
 
+    @app.post("/api/projects/{pid}/shuttle/track")
+    def track_shuttle_route(pid: str) -> dict:
+        """Track the shuttle across the play, and raise its turns as questions.
+
+        Separate from the launch search above and far more expensive -- about
+        0.4 s a frame -- so it is its own button and its own job rather than
+        something a run does on the way past.
+        """
+        s = session(pid)
+
+        def work(job: Job) -> dict:
+            n = s.track_shuttle_over_play(job.check_cancel, job.set_progress)
+            return {"seams": n}
+
+        job = st.jobs.start("shuttle_track", work)
+        return {"job_id": job.id}
+
     @app.get("/api/projects/{pid}/events/suggest")
     def suggest(pid: str) -> dict:
         s = session(pid)
@@ -733,7 +755,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def answer_review(pid: str, body: ReviewBody) -> dict:
         s = session(pid)
         try:
-            s.answer_review(body.action, body.frame, body.side, body.kind, body.value)
+            s.answer_review(body.action, body.frame, body.side, body.kind, body.value, body.seam)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return s.state()

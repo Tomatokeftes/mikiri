@@ -12,6 +12,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -61,9 +62,11 @@ from mikiri.match import (
     ACTION_LABEL_SHOT,
     ACTION_MOVE_CONTACT,
     ACTION_REMOVE_CONTACT,
+    ACTION_SEAM_NOT_CONTACT,
     ACTION_SET_RACKET_HAND,
     CONFIRMABLE,
     ISSUE_RACKET_HAND,
+    ISSUE_SHUTTLE_SEAM,
     SIDES,
     Confirmation,
     MatchChain,
@@ -97,6 +100,7 @@ from mikiri.project import (
     MatchReview,
     Project,
     RallyConfirmation,
+    SeamVerdict,
     ShotLabel,
     SmoothingSettings,
     TrackedPlayer,
@@ -119,6 +123,9 @@ from mikiri.strokes import summarise as stroke_summary
 from mikiri.tactics import tactics_summary, trends
 from mikiri.tracking import SIDE_FAR
 from mikiri.video import FrameCache, VideoInfo, VideoReader, fit_size, probe_video
+
+if TYPE_CHECKING:  # imported where it is used, like the rest of the shuttle module
+    from mikiri.shuttle import Seam, ShuttleTrack
 
 #: The frame cache is filled ahead only this far on opening a clip: eight
 #: minutes at 25 fps, which covers any clip a phone records and the start of
@@ -218,6 +225,15 @@ class ProjectSession:
         #: calibration stays usable either way, so this is a note, not an error.
         self.court_camera_error: str | None = None
         self._launches_store: dict | None = None
+        #: The rally-long shuttle track, one entry per stretch of play, and the
+        #: turns found in it. Kept for the open session only and never written
+        #: to the project: at 0.4 s a frame this is minutes of work, but it is
+        #: a *measurement of the video*, so a stale copy loaded from disk
+        #: against different tracking or a different trim would be worse than
+        #: no copy at all. What survives a save is the user's verdicts on it,
+        #: which are the part no re-run can reproduce.
+        self._shuttle_tracks: list[ShuttleTrack] | None = None
+        self._seams: list[Seam] | None = None
         self.lock = threading.RLock()
 
     # -- opening ---------------------------------------------------------
@@ -429,7 +445,13 @@ class ProjectSession:
 
         Shuttle launches deliberately survive: they cost a video decode, and
         they are matched to strokes by frame with a tolerance, so a small
-        change does not move a contact out from under one.
+        change does not move a contact out from under one. The rally-long
+        shuttle track survives for the stronger version of the same reason: it
+        is a measurement of the video's own pixels, indexed by absolute frame,
+        and nothing here changes what was in those pixels. Even a re-track
+        leaves it standing -- that changes which stretches would be searched
+        next time and how the players are masked out, not what was seen in the
+        frames already searched.
         """
         self._track = None
         self._racket = None
@@ -1277,6 +1299,37 @@ class ProjectSession:
                 IssueDismissal(kind=str(kind), frame=int(frame), side=side)
             )
 
+    def record_seam_verdict(
+        self, before: int, after: int, verdict: str, side: str | None = None
+    ) -> None:
+        """Record what the user saw at one turn in the shuttle track.
+
+        The verdict is kept whichever way it went, which is the whole point of
+        having it: a seam marked "not a contact" is the only record that says
+        somebody looked and found nothing, and without those a count of
+        contacts found is not a rate of contacts found. One verdict per seam --
+        answering it again replaces the earlier one.
+        """
+        if verdict not in ("contact", "turn"):
+            raise ValueError(f"no such seam verdict {verdict!r}")
+        if verdict == "contact" and side not in SIDES:
+            raise ValueError("a seam judged a contact needs the side that hit")
+        with self.lock:
+            kept = [
+                v
+                for v in self.project.match_review.seam_verdicts
+                if (int(v.before), int(v.after)) != (int(before), int(after))
+            ]
+            kept.append(
+                SeamVerdict(
+                    before=int(before),
+                    after=int(after),
+                    verdict=verdict,  # type: ignore[arg-type]
+                    side=side,  # type: ignore[arg-type]
+                )
+            )
+            self.project.match_review.seam_verdicts = kept
+
     def answer_review(
         self,
         action: str,
@@ -1284,6 +1337,7 @@ class ProjectSession:
         side: str | None,
         kind: str | None = None,
         value: str | None = None,
+        seam: list[int] | None = None,
     ) -> None:
         """Record one answer from the queue or the tagger as the fact it settles.
 
@@ -1291,6 +1345,12 @@ class ProjectSession:
         which records two contact edits. Raises ``ValueError`` for an action
         the queue does not offer, or an answer missing the side or value it
         needs.
+
+        A ``seam`` span makes the answer two records rather than one: the
+        verdict, which says what a person saw at that turn, and -- when they
+        saw a hit -- the contact edit that tells the chain about it. Both, and
+        in that order, because they answer different questions and only the
+        first can ever measure the detector.
         """
         if action == ACTION_UNDO:
             self.undo_review()
@@ -1299,6 +1359,13 @@ class ProjectSession:
             (self.project.match_review.model_copy(deep=True), self.project.racket_hand)
         )
         del self._review_undo[:-MAX_REVIEW_UNDO]
+        if action == ACTION_SEAM_NOT_CONTACT:
+            if not seam or len(seam) < 2:
+                raise ValueError("a seam answer needs the span it is about")
+            self.record_seam_verdict(seam[0], seam[1], "turn")
+            return
+        if seam and len(seam) >= 2 and action == ACTION_ADD_CONTACT:
+            self.record_seam_verdict(seam[0], seam[1], "contact", side)
         if action == ACTION_MOVE_CONTACT:
             if side is None or value is None:
                 raise ValueError("moving a contact needs a side and the frame it moves to")
@@ -1358,12 +1425,21 @@ class ProjectSession:
             + len(review.confirmations)
             + len(review.dismissed)
             + len(review.racket_hands)
+            + len(review.seam_verdicts)
             + (1 if review.score_start is not None else 0)
         )
         can_undo = bool(self._review_undo)
         m = self.match()
         if m is None:
-            return {"open": [], "n_open": 0, "answered": answered, "can_undo": can_undo}
+            # A seam is a measurement of the video, not of the chain, so it is
+            # askable on a clip that has no chain to raise questions of its own.
+            seams = self._seam_items()
+            return {
+                "open": seams,
+                "n_open": len(seams),
+                "answered": answered,
+                "can_undo": can_undo,
+            }
         start = self.pose_start
         dismissed = [(d.kind, int(d.frame) - start, d.side) for d in review.dismissed]
         items = review_items(m, self.info.fps, dismissed)
@@ -1372,11 +1448,16 @@ class ProjectSession:
             for opt in item["options"]:
                 if opt.get("frame") is not None:
                     opt["frame"] = int(opt["frame"]) + start
-        # Which hand each player holds the racket in comes first, because every
-        # contact on that side was detected from the arm it names: answering it
-        # after the contact questions would re-detect the contacts underneath
-        # the answers already given.
-        items = self._racket_hand_items(m) + items
+        # Order follows what an answer costs the answers already given. The
+        # racket hand comes first because every contact on that side was
+        # detected from the arm it names, so answering it later re-detects the
+        # contacts underneath the answers already given. The shuttle's turns
+        # come next for a weaker version of the same reason: answering one adds
+        # or confirms a contact, which changes what the chain asks about
+        # alternation, while no chain answer changes a turn. Both directions
+        # were checked; this is the only order in which nothing is answered
+        # twice.
+        items = self._racket_hand_items(m) + self._seam_items() + items
         return {"open": items, "n_open": len(items), "answered": answered, "can_undo": can_undo}
 
     def _racket_hand_items(self, m: MatchChain) -> list[dict]:
@@ -1426,6 +1507,75 @@ class ProjectSession:
                             "label": f"{hand.capitalize()}-handed",
                         }
                         for hand in ("right", "left")
+                    ],
+                }
+            )
+        return out
+
+    def _seam_items(self) -> list[dict]:
+        """One question per turn in the shuttle track nobody has judged yet.
+
+        Asked before the chain's own questions and after the racket hands, for
+        the reason given in :meth:`review_queue`: answering one of these adds or
+        confirms a contact and so changes what the chain asks, while nothing the
+        chain asks changes a turn.
+
+        The question deliberately does not say what the pose detector thinks.
+        On this footage the pose contacts are the thing under suspicion -- 693
+        for 29 points -- so showing one next to the shuttle would be inviting
+        the user to agree with the measurement being tested. What they are
+        shown is the shuttle, and what they are asked is what they saw.
+        """
+        seams = self.shuttle_seams()
+        if not seams:
+            return []
+        review = self.project.match_review
+        judged = {(int(v.before), int(v.after)) for v in review.seam_verdicts}
+        left = {(d.kind, int(d.frame)) for d in review.dismissed if d.kind == ISSUE_SHUTTLE_SEAM}
+        fps = self.info.fps or 1.0
+        out: list[dict] = []
+        for seam in seams:
+            if (seam.before, seam.after) in judged:
+                continue
+            if (ISSUE_SHUTTLE_SEAM, int(seam.frame)) in left:
+                continue
+            span = [int(seam.before), int(seam.after)]
+            out.append(
+                {
+                    "id": f"{ISSUE_SHUTTLE_SEAM}:{seam.before}:{seam.after}",
+                    "kind": ISSUE_SHUTTLE_SEAM,
+                    "rally": None,
+                    "frame": int(seam.frame),
+                    "side": None,
+                    "seam": span,
+                    "question": (
+                        f"The shuttle turned {seam.turn_deg:.0f} degrees at "
+                        f"{seam.before / fps:.1f} s. Did a racket do it?"
+                    ),
+                    "detail": (
+                        f"Last seen at frame {seam.before}, next seen at {seam.after}. "
+                        "No free flight turns this far, but the top of a lift reverses "
+                        "the same way from behind the baseline, so this cannot be told "
+                        "apart without looking. Scrub to the hit before answering."
+                    ),
+                    "options": [
+                        {
+                            "action": ACTION_ADD_CONTACT,
+                            "side": side,
+                            "frame": None,
+                            "seam": span,
+                            "label": f"Yes, the {side} side hit, at the frame I am on",
+                        }
+                        for side in SIDES
+                    ]
+                    + [
+                        {
+                            "action": ACTION_SEAM_NOT_CONTACT,
+                            "side": None,
+                            "frame": int(seam.frame),
+                            "seam": span,
+                            "label": "No: it turned on its own, or that is not the shuttle",
+                        }
                     ],
                 }
             )
@@ -1541,17 +1691,7 @@ class ProjectSession:
         camera = calib.camera if (calib is not None and calib.has_camera()) else None
         H = self.homography()
 
-        # Every tracked person's box, so the search can cut them out. The
-        # hitter's own body is the strongest distractor in the small disc the
-        # search looks at, and it is the one thing already known every frame.
-        boxes: dict[int, list] = {}
-        for meta in (self.project.frame_meta, *(o.frame_meta for o in self.project.others)):
-            for m in meta or ():
-                box = m.get("bbox")
-                frame_no = m.get("frame")
-                if box and frame_no is not None:
-                    boxes.setdefault(int(frame_no), []).append(list(box))
-
+        boxes = self.player_boxes()
         found: dict[int, object] = {}
         with VideoReader(self.info.path, self.info) as reader:
             plate = background_plate(
@@ -1582,6 +1722,229 @@ class ProjectSession:
         with self.lock:
             self._launches = found  # the setter drops the memoised strokes
         return len(found)
+
+    def player_boxes(self) -> dict[int, list]:
+        """Every tracked person's box, by absolute frame.
+
+        The hitter's own body is the strongest distractor anywhere near the
+        racket, and it is the one thing already known on every frame, so both
+        shuttle searches cut it out of what they look at.
+        """
+        boxes: dict[int, list] = {}
+        for meta in (self.project.frame_meta, *(o.frame_meta for o in self.project.others)):
+            for m in meta or ():
+                box = m.get("bbox")
+                frame_no = m.get("frame")
+                if box and frame_no is not None:
+                    boxes.setdefault(int(frame_no), []).append(list(box))
+        return boxes
+
+    def play_stretches(self) -> list[tuple[int, int]]:
+        """Stretches of play the shuttle is worth looking for in, absolute and inclusive.
+
+        The clip's own segmentation where there is one, which on a calibrated
+        broadcast means the wide shots and nothing else. That is not a saving
+        to be traded against accuracy: at 0.4 s a frame it is the difference
+        between a run and no run, and the frames it drops are close-ups,
+        replays and adverts in which there is no shuttle to find. It also
+        removes a quarter of what looked like evidence -- confining the track
+        this way on the benchmark broadcast cut the turning seams from 71 to
+        45 while losing none of the 25 that sit near a pose contact, because
+        the rest was the tracker chasing a face.
+
+        Intersected with the trim, which is the only lever the user has on a
+        job measured in hours: a whole game is 40 minutes of tracking at this
+        cost, and narrowing the in and out points is how somebody says which
+        rally they actually want looked at. Every other consumer of the trim
+        means the same thing by it.
+
+        Falls back to the whole trimmed range when the clip was not segmented,
+        which is the honest behaviour and an expensive one: an uncalibrated
+        broadcast is kept whole on purpose (see :mod:`mikiri.segments`), so
+        this is where that cost lands.
+        """
+        if self.project.tracking is None:
+            return []
+        whole = (
+            max(int(self.project.tracking.start), int(self.project.trim_start)),
+            min(int(self.project.tracking.end), int(self.project.trim_end)),
+        )
+        if whole[1] <= whole[0]:
+            return []
+        runs = getattr(self.project.tracking, "segments", None)
+        if not runs:
+            return [whole]
+        out = []
+        for run in runs:
+            if run.get("state") != STATE_PLAY:
+                continue
+            lo, hi = max(whole[0], int(run["start"])), min(whole[1], int(run["end"]))
+            if hi > lo:
+                out.append((lo, hi))
+        return out or [whole]
+
+    def track_shuttle_over_play(
+        self,
+        check_cancel: Callable[[], None] | None = None,
+        progress: Callable[[float, str], None] | None = None,
+    ) -> int:
+        """Track the shuttle across every stretch of play, and find its turns.
+
+        The second and independent measurement of where the contacts are. The
+        detector this app has run on until now reads a contact off the
+        *player's* wrist, and on broadcast footage it over-triggers badly --
+        693 contacts for 29 points on game one of the benchmark. A shuttle that
+        reverses is the other half of the same event, measured on the other
+        object, and the two disagreeing is exactly the information the wrist
+        alone cannot supply.
+
+        What this does not do is decide. The turns come back as questions
+        (:data:`mikiri.match.ISSUE_SHUTTLE_SEAM`), because from behind the
+        baseline the top of a lift reverses the shuttle as sharply as a racket
+        does and nothing measured here separates the two. See
+        :func:`mikiri.shuttle.turning_seams`.
+
+        Returns the number of turns found for review.
+        """
+        from mikiri.shuttle import background_plate, track_shuttle, turning_seams
+
+        stretches = self.play_stretches()
+        if not stretches:
+            return 0
+        H = self.homography()
+        boxes = self.player_boxes()
+        total = sum(hi - lo + 1 for lo, hi in stretches)
+        done = 0
+        tracks: list[ShuttleTrack] = []
+        with VideoReader(self.info.path, self.info) as reader:
+            # One plate for the whole clip rather than one per stretch: the
+            # camera does not move between rallies, and building it per stretch
+            # would pay for a sample of frames again on every one of them.
+            plate = background_plate(
+                reader, self.project.trim_start, self.project.trim_end, colour=True
+            )
+            for k, (lo, hi) in enumerate(stretches):
+                span = hi - lo + 1
+                base = done
+
+                def report(share: float, base: int = base, span: int = span, k: int = k) -> None:
+                    if progress is not None:
+                        progress(
+                            (base + share * span) / max(total, 1),
+                            f"Shuttle through play {k + 1} of {len(stretches)}",
+                        )
+
+                tracks.append(
+                    track_shuttle(
+                        reader,
+                        lo,
+                        hi,
+                        self.info.fps,
+                        homography=H,
+                        player_boxes=boxes,
+                        plate=plate,
+                        check_cancel=check_cancel,
+                        progress=report,
+                    )
+                )
+                done += span
+        seams = [s for t in tracks for s in turning_seams(t)]
+        with self.lock:
+            self._shuttle_tracks = tracks
+            self._seams = seams
+        return len(seams)
+
+    def shuttle_seams(self) -> list[Seam]:
+        """The turns found by the last :meth:`track_shuttle_over_play`, or none."""
+        return list(self._seams or [])
+
+    def seams_summary(self) -> dict | None:
+        """What the seam review has established, and what it has not.
+
+        ``None`` only before the track has been run. Once it has, this reports
+        even when it found nothing, and the difference matters: "not looked at"
+        and "looked at, no turns" are opposite states, and collapsing them into
+        an empty panel is the kind of silence this project treats as a bug
+        rather than a withholding.
+
+        The withholding here is the important part, and it is not the usual
+        one. Every figure below is a count of *turns the shuttle track found*,
+        and that is a different population from the contacts actually played:
+        nothing here knows how many hits the track missed, because a missed hit
+        leaves no turn to be counted. So this reports how many of the turns
+        shown to a person were hits, and refuses the number everybody actually
+        wants -- how often contact detection is right -- because measuring that
+        needs the hits the track never saw, which needs the flights hand
+        labelled and not merely the turns judged. Saying "13 of 38" without
+        that caveat is exactly the mistake ``docs/shuttle.md`` records.
+        """
+        if self._shuttle_tracks is None:
+            return None
+        seams = self.shuttle_seams()
+        verdicts = {
+            (int(v.before), int(v.after)): v for v in self.project.match_review.seam_verdicts
+        }
+        judged = [verdicts[(s.before, s.after)] for s in seams if (s.before, s.after) in verdicts]
+        contacts = [v for v in judged if v.verdict == "contact"]
+        return {
+            "n_seams": len(seams),
+            "n_judged": len(judged),
+            "n_contacts": len(contacts),
+            "n_turns": len(judged) - len(contacts),
+            "by_side": {side: sum(1 for v in contacts if v.side == side) for side in SIDES},
+            "complete": len(judged) == len(seams),
+            "note": (
+                # "Tracked and found nothing" is a result, and it is not the
+                # same statement as "not tracked": the first says the shuttle's
+                # path holds no turn sharp enough to be a hit, which on a clip
+                # with rallies in it means the track failed rather than the
+                # rallies did.
+                "The shuttle was tracked across the play and its path holds no turn "
+                "sharp enough to be a hit."
+                if not seams
+                else f"{len(judged)} of {len(seams)} turns judged"
+                + (
+                    f": {len(contacts)} were hits and {len(judged) - len(contacts)} were not."
+                    if judged
+                    else "."
+                )
+            ),
+            "explain": (
+                "A turn is the shuttle reversing further than free flight allows. These "
+                "counts are over the turns the shuttle track found, not over the hits "
+                "played: a hit the track never saw leaves no turn to judge, so nothing "
+                "here says how often contact detection is right. That needs the flights "
+                "labelled, not just these turns."
+            ),
+        }
+
+    def shuttle_track_points(self) -> list[list[list[float]]]:
+        """The rally-long track's flights, as ``[[frame, x, y], ...]`` each.
+
+        Kept apart from :meth:`shuttle_points` in the payload although both
+        draw the same way, because they are not equally believable and the
+        overlay says so in its colours. A launch has been cropped and checked
+        one by one; this path has not, and it is the thing the seam questions
+        are asking the user to check. Detected frames only: a coasted position
+        drawn as a sighting would be the app inventing the very evidence it is
+        asking about.
+        """
+        out: list[list[list[float]]] = []
+        for track in self._shuttle_tracks or ():
+            flight: list[list[float]] = []
+            for i, seen in enumerate(track.detected):
+                p = track.xy[i]
+                if seen and np.isfinite(p).all():
+                    flight.append(
+                        [int(track.start + i), round(float(p[0]), 1), round(float(p[1]), 1)]
+                    )
+                    continue
+                if len(flight) >= 2:
+                    out.append(flight)
+                flight = []
+            if len(flight) >= 2:
+                out.append(flight)
+        return out
 
     def racket(self) -> RacketSeries | None:
         """Racket-head estimate for the effective keypoints, or ``None``."""
@@ -2039,6 +2402,7 @@ class ProjectSession:
             "bouts": self.bouts_summary(),
             "match": self.match_summary(),
             "review": self.review_queue(),
+            "seams": self.seams_summary(),
             "tagging": self.tagging(),
             "tactics": self.tactics(),
             "doubles": self.doubles(),
@@ -2121,6 +2485,7 @@ class ProjectSession:
             "meta": self.project.frame_meta or [],
             "suggestions": [s.to_dict() for s in self.suggestions()],
             "shuttle": self.shuttle_points(),
+            "shuttle_track": self.shuttle_track_points(),
             "metrics": self.metrics(),
             "assessment": self.assessment(),
             # Which end the subject defends. Positions below are in the
