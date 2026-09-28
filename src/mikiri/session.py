@@ -890,6 +890,16 @@ class ProjectSession:
                 mask[lo:hi] = True
         return mask
 
+    def cuts(self) -> list[int]:
+        """Pose-frame indices of the first frame after each cut in the tracked range."""
+        cuts = getattr(self.project.tracking, "cuts", None) or []
+        kp = self.raw_keypoints()
+        if kp is None:
+            return []
+        n = int(kp.shape[0])
+        offset = self.pose_start
+        return [int(c) - offset for c in cuts if 0 < int(c) - offset < n]
+
     def bouts(self) -> BoutSeries | None:
         """Bouts of play and the rests between them, or ``None`` without a court.
 
@@ -900,7 +910,7 @@ class ProjectSession:
         track = self.court_track()
         if track is None:
             return None
-        return segment_bouts(track, self.strokes(), play_mask=self.play_mask())
+        return segment_bouts(track, self.strokes(), play_mask=self.play_mask(), cuts=self.cuts())
 
     def bouts_summary(self) -> dict | None:
         """JSON-friendly bout figures, or ``None`` without a court."""
@@ -1205,7 +1215,9 @@ class ProjectSession:
             return None
         subject, other_series = self.chain_strokes()
         others = [(t, s) for t, s in zip(self.other_tracks(), other_series) if t is not None]
-        return segment_bouts(track, subject, play_mask=self.play_mask(), others=others)
+        return segment_bouts(
+            track, subject, play_mask=self.play_mask(), others=others, cuts=self.cuts()
+        )
 
     def side_players(self) -> list[SidePlayer]:
         """Every tracked player as the chain sees them, the subject first.
@@ -1243,9 +1255,15 @@ class ProjectSession:
         if all(len(t) < 2 for t in sides.values()):
             return None
         contacts = gather_contacts(players, self.info.fps)
-        return doubles_summary(
+        out = doubles_summary(
             sides, contacts, self.info.fps, play_mask=self.play_mask(), you=self.subject_side
         )
+        if out is not None:
+            # How often the tracker had to re-settle which partner is which,
+            # and how often it could not: after an unresolved crossing every
+            # per-player fact on that side rests on continuity alone.
+            out["identity"] = getattr(self.project.tracking, "identity", None)
+        return out
 
     def match(self) -> MatchChain | None:
         """The rally chain, or ``None`` without a court and a player on each side."""
@@ -2356,6 +2374,8 @@ class ProjectSession:
                 side=result.side,
                 players=1 + len(result.others),
                 segments=(result.extra.get("segments") or {}).get("runs") or None,
+                cuts=(result.extra.get("segments") or {}).get("cuts") or None,
+                identity=result.extra.get("identity") or None,
             )
             self.project.conf_threshold = req.conf_threshold
             self._raw = result.keypoints.astype(np.float32)

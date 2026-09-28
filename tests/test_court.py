@@ -557,3 +557,25 @@ def test_drawn_ellipse_points_the_way_the_covariance_says():
         want = court_deg % 180.0
         err = min(abs(got - want), 180.0 - abs(got - want))
         assert err < 8.0, (court_deg, got)
+
+
+def test_a_court_whose_near_baseline_is_out_of_frame_can_still_be_calibrated():
+    """A raised camera behind the court loses the near baseline below the bottom edge.
+
+    The men's doubles broadcast added on 2026-09-25 frames the far baseline and
+    cuts the near one off, so every preset that starts from the near corners
+    had nothing to click. The nearest painted line in the picture is the
+    doubles long service line, 76 cm inside the baseline, and a preset built on
+    it must put the near corners where they are: below the picture.
+    """
+    width, height = 1280, 720
+    clicks = [[60.0, 664.0], [1275.0, 699.0], [996.0, 430.0], [573.0, 438.0]]
+    H, err = compute_homography(clicks, preset_points("doubles_long_service"))
+    assert err < 1e-6
+    corners = court_to_image(H, np.asarray(preset_points("doubles_corners"), dtype=float))
+    outside = (corners[:, 0] < 0) | (corners[:, 0] > width) | (corners[:, 1] > height)
+    assert outside[:2].all(), "the near corners lie outside the picture"
+    assert (corners[:2, 1] > clicks[0][1]).all(), "and nearer the camera than the clicks"
+    assert np.allclose(corners[2:], np.asarray(clicks[2:]), atol=1e-6), "far corners are clicked"
+    ends = court_to_image(H, np.array([[0.0, 0.76], [6.1, 0.76]]))
+    assert np.allclose(ends, np.asarray(clicks[:2]), atol=1e-6)

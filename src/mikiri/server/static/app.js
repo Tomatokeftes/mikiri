@@ -1559,7 +1559,16 @@ function renderDoubles() {
     blocks.push(`<div class="panel-title">${label}</div><div class="footwork">${lines.join('')}</div>`);
   }
   $('#doubles-sides').innerHTML = blocks.join('');
-  $('#doubles-note').textContent = 'Not measured: ' + (d.not_measured || []).join('; ') + '.';
+  // Which partner is which is settled by appearance where the two can be
+  // told apart, and left on continuity where they cannot; the count of
+  // unresolved crossings is what says how far to trust anything per partner.
+  const id = d.identity || null;
+  let identity = '';
+  if (id) {
+    const settled = (id.kept || 0) + (id.swapped || 0);
+    identity = `Partners re-settled after ${settled + (id.unresolved || 0)} crossings and cuts: ${settled} by appearance (${id.swapped || 0} swapped back), ${id.unresolved || 0} unresolved, where which partner is which rests on continuity alone. `;
+  }
+  $('#doubles-note').textContent = identity + 'Not measured: ' + (d.not_measured || []).join('; ') + '.';
   $('#doubles-explain').textContent = 'After a lift the pair should be side-by-side, after a downward shot front-and-back; the direction comes from the shot name where there is one and from an underarm contact otherwise.';
 }
 

@@ -139,6 +139,13 @@ class TrackingRun(BaseModel):
     #: tracked before segmentation existed, or with it turned off, and
     #: everything downstream falls back to speed alone when it is.
     segments: list[dict] | None = None
+    #: Video frame indices that are the first frame after a cut, from the
+    #: same scan. Bouts never span one. Absent on older projects.
+    cuts: list[int] | None = None
+    #: How the pairs' identities were settled on a doubles run, as counts of
+    #: ``kept``, ``swapped`` and ``unresolved`` decisions (see
+    #: :class:`mikiri.tracking.FrameMeta`). ``None`` on a run with no pair.
+    identity: dict | None = None
     #: Which side of the net the subject stood on, when the court was known.
     #: The footwork figures are computed in the subject's own frame, so this
     #: is what says whether that frame is the camera's or the flipped one.

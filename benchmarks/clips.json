@@ -199,6 +199,87 @@
       "note": "The first full match with a real broadcast's cuts, replays and adverts, which the not-badminton path of the segmenter had never met, and 785 MB, so nothing here decodes the whole of it: the reader test seeks, the frame cache fills ahead only to its budget, and the segmentation tests take game one. Three games: game one runs 426 to 1556 s, the interval to about 1700 s, and the match ends near 3080 s with an outro from 3120 s. Segmented; not yet through tracking or the chain in the suite."
     },
     {
+      "id": "doubles_lee_yoo_fu_zhang",
+      "file": "Yoo Yeon-seong #niceanglebadminton.mp4",
+      "title": "Lee Yong Dae and Yoo Yeon-seong v Fu Haifeng and Zhang Nan, men's doubles, Denmark Open: selected points from two games",
+      "source": "Broadcast footage re-cut by a YouTube channel, added by the user on 2026-09-25. Third party: kept locally, never committed or redistributed.",
+      "view": "behind the near baseline, raised well above head height, slightly left of centre; one locked-off camera throughout, no replays or close-ups",
+      "resolution": "1280x720",
+      "fps": 30.0,
+      "frames": 16517,
+      "duration_s": 550.6,
+      "edited": true,
+      "edited_note": "Cut to points only, and to a selection of them: about 35 stretches for 82 points on the scoreboard, so the score jumps between consecutive stretches and the serve chain will find rallies missing. The cuts are hard cuts on a locked-off camera, so the whole picture barely changes across one: the mean absolute frame difference at a cut is 5 to 12 on a 0 to 255 scale against a median of 1.5, which is what a scene-signature test that expects a different picture on each side of a cut will miss.",
+      "near_baseline_out_of_frame": true,
+      "near_baseline_note": "The near baseline lies below the bottom edge of the picture. The nearest painted line in frame is the near doubles long service line, 76 cm inside the baseline, so a near player standing on the baseline has his feet out of frame and no court position on those frames. Every court preset in the app starts from the near corners, so this clip cannot be calibrated by clicking in the UI; the calibration below was fitted to the painted lines.",
+      "guards": [
+        "four people are tracked on real doubles footage, two on each side, and nobody is confused with the umpire on his chair or the spectators above the far baseline",
+        "the cuts between points on a locked-off camera are found as splices and end the stretches of play, where the whole-picture cut test found none of them and eight points were one 90 s stretch",
+        "the clicked partner keeps his tracker through crossings and cuts, read off the two near players' shoes, and the far pair, alike down to the shoes and too small to read, are marked unresolved rather than guessed between"
+      ],
+      "identity_truth": {
+        "note": "The two Korean players wear identical shirts and shorts and different shoes, Lee red and Yoo yellow; the hue of the saturated pixels at each track's foot keypoints, smoothed over half a second, says which person each tracker is on, and the two near trackers show opposite colours on 4,641 to 5,131 of the 5,614 frames of game one depending on the run. Measured on 2026-09-25 over game one with four players: continuity alone swapped the two near trackers sixteen times, ten at crossings and six at the cuts between points, and the clicked player (Yoo) had his own tracker on 63% of the readable frames. With appearance re-settling the pair on chroma, part by part, as a streak of five verdicts on every clean frame, and no signature read under 200 px: four events, two of them the corrections, 98.7% of readable frames on Yoo, and the far pair unresolved on all 73 of their decisions.",
+        "near": {"red_shoes": "Lee Yong Dae", "yellow_shoes": "Yoo Yeon-seong"},
+        "continuity_only": {"swap_events": 16, "subject_on_clicked_share": 0.63},
+        "with_appearance": {"swap_events": 4, "subject_on_clicked_share": 0.987, "near_decisions": {"kept": 27, "swapped": 15, "unresolved": 7}, "far_decisions": {"unresolved": 73}}
+      },
+      "games": {
+        "game_one": {
+          "trim": [0, 5613],
+          "near": "KOR",
+          "score": [13, 21],
+          "note": "Frames 0 to 5613, the Korean pair near. The scoreboard reads 0-0 at frame 0, 6-9 at frame 3000 and 13-21 with game two at 2-0 by frame 5700; the cut at 5614 is the change of ends."
+        },
+        "game_two": {
+          "trim": [5614, 16469],
+          "near": "CHN",
+          "score": [23, 25],
+          "note": "Frames 5614 to 16469, the Chinese pair near. 13-3 and 21-1 at frame 6100, 13-16 and 21-14 at 12000, 23-23 at 16000, 23-25 at the end; the outro fades from frame 16470."
+        }
+      },
+      "players": {
+        "KOR": ["Lee Yong Dae", "Yoo Yeon-seong"],
+        "CHN": ["Fu Haifeng", "Zhang Nan"],
+        "kit_note": "Both Korean players in navy in game one and grey in game two, both Chinese players in red throughout: matching kit within each pair, so no colour signature separates partners on this clip."
+      },
+      "click": [645.0, 430.0],
+      "click_note": "the near-left player's torso in the first frame (Yoo Yeon-seong, by the name on his shirt), for the tracking click",
+      "court": {
+        "preset": "doubles_corners",
+        "frame": 0,
+        "note": "Fitted, not clicked, on a player-free median of 82 frames spread across the clip: from a rough start on the two doubles sidelines and the near long service line, the four court points were slid to minimise the squared distance from every projected line sample to the nearest thin bright pixel (tophat over grey, 11 px). The two near corners come out below the bottom edge of the picture and are recorded as such. Line share on the background 0.66 and on the first frame 0.61, lower than the Momota broadcast's 0.90 because at 720p the far court's lines are read through the net mesh; every frame of this clip is the wide shot, so the score has no close-ups to separate from.",
+        "image_points": [
+          [-29.6, 705.8],
+          [1336.5, 758.2],
+          [996.2, 430.1],
+          [572.9, 437.6]
+        ],
+        "world_points": [
+          [0.0, 0.0],
+          [6.1, 0.0],
+          [6.1, 13.4],
+          [0.0, 13.4]
+        ],
+        "line_share": 0.6
+      },
+      "note": "The first doubles footage in this repo. Each pair is in matching kit, which is the case a colour signature cannot help with, so it tests the honest path for partner identity first. Selected points, not a match, so the serve chain can be checked against the scoreboard at each serve but never across the gaps between stretches."
+    },
+    {
+      "id": "doubles_club_hall",
+      "file": "videoplayback.mp4",
+      "title": "Two doubles matches in a club hall, one continuous take (35 minutes)",
+      "source": "Downloaded video, added by the user on 2026-09-25. Third party: kept locally, never committed or redistributed.",
+      "view": "behind the near baseline at about head height, slightly left of centre; one continuous locked-off camera with no cuts, the rests between points left in, spectators walking through the foreground and neighbouring courts either side",
+      "resolution": "1920x1080",
+      "fps": 60.0,
+      "frames": 126967,
+      "duration_s": 2116.1,
+      "edited": false,
+      "guards": [],
+      "matches_note": "By eye from a contact sheet: a pair in black against a pair in white from the start to about 1360 s, then a second match with different players until the end. Both pairs of the first match are in matching kit within the pair. Not yet calibrated: the near court sits between two neighbouring courts whose lines run into the picture, and the near baseline is at the bottom edge, so the calibration needs the line fit rather than four clicks and has not been done.",
+      "note": "The realistic club case the doubles work is for: uncut, with the walk-backs between points, sixty frames a second and the whole near court in frame. Nothing asserts on it yet; the broadcast clip (doubles_lee_yoo_fu_zhang) is where the doubles tracking is measured first, because its scoreboard and its two shoe colours give ground truth this clip lacks."
+    },
+    {
       "id": "side_on_smash",
       "file": "VID_20260616_073553_226.mp4",
       "title": "Side-on jump smash, portrait",

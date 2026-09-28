@@ -682,19 +682,16 @@ def _find_serve(
         r.service_court = Fact(None, None, "no contact by the server was detected")
 
     # The receiver stands diagonally opposite, which in each player's own
-    # frame is the court of the same name. With two on the receiving side the
-    # receiver is not attributed, and the check is withheld rather than made
-    # against whichever partner happened to be nearer.
+    # frame is the court of the same name. With two on the receiving side
+    # the receiver is not attributed -- the tracker cannot say which partner
+    # is which -- but the rule still has something to check that needs no
+    # identity: one of the two must be standing in that court. A pair with
+    # nobody there is the same contradiction as a lone receiver in the wrong
+    # court, and is asked about the same way.
     receiving = by_side.get(other_side(str(r.server.value)), [])
-    if len(receiving) != 1:
-        r.receiver_court = Fact(
-            None,
-            None,
-            "two players on the receiving side; the receiver is not attributed"
-            if receiving
-            else "nobody tracked on the receiving side",
-        )
-    else:
+    if not receiving:
+        r.receiver_court = Fact(None, None, "nobody tracked on the receiving side")
+    elif len(receiving) == 1:
         court, how = service_court(_position_at(receiving[0].track, serve_frame))
         r.receiver_court = Fact(court, AUTO if court else None, f"at the serve, {how}")
         if r.service_court.known and r.receiver_court.known and court != r.service_court.value:
@@ -712,6 +709,70 @@ def _find_serve(
                     side=str(r.server.value),
                 )
             )
+    else:
+        _receiver_court_of_pair(r, receiving, serve_frame, fps)
+
+
+def _receiver_court_of_pair(
+    r: Rally, receiving: Sequence[SidePlayer], serve_frame: int, fps: float
+) -> None:
+    """The receiving pair's court at the serve, without saying which partner receives.
+
+    The court is known when exactly one partner stands in the court the serve
+    was made from -- that partner is the receiver, whoever they are -- and it
+    is the partner's court, not the partner's name, that the chain records.
+    Both in one court is a formation nobody receives in and is withheld
+    rather than judged; neither there, with both located, is the
+    contradiction.
+    """
+    courts = [service_court(_position_at(p.track, serve_frame)) for p in receiving]
+    located = [c for c, _ in courts if c is not None]
+    if not r.service_court.known:
+        r.receiver_court = Fact(
+            None, None, "two players on the receiving side, and no service court to test against"
+        )
+        return
+    if len(located) < len(courts):
+        r.receiver_court = Fact(
+            None,
+            None,
+            "two players on the receiving side and not both located at the serve; "
+            "the receiver is not attributed",
+        )
+        return
+    served_from = str(r.service_court.value)
+    there = [c for c in located if c == served_from]
+    if len(there) == 1:
+        r.receiver_court = Fact(
+            served_from,
+            AUTO,
+            f"at the serve, one of the two partners stood in the {served_from} court, "
+            "diagonally opposite the server; which partner is not attributed",
+        )
+        return
+    if len(there) == 2:
+        r.receiver_court = Fact(
+            None, None, f"both receiving partners stood in the {served_from} court at the serve"
+        )
+        return
+    other = located[0]
+    r.receiver_court = Fact(
+        other, AUTO, f"at the serve, both partners stood in their {other} court"
+    )
+    r.issues.append(
+        Issue(
+            ISSUE_RECEIVER_COURT,
+            r.index,
+            serve_frame,
+            f"Rally {r.index + 1} at {_seconds(serve_frame, fps)}: the {r.server.value} side "
+            f"served from the {served_from} court, but neither receiving partner stood in "
+            f"their {served_from} court. Is this the serve, and is that the server?",
+            "One receiving partner stands diagonally opposite the server, which in each "
+            "player's own frame is the court of the same name. Either the moment taken as "
+            "the serve is wrong, or the server is.",
+            side=str(r.server.value),
+        )
+    )
 
 
 def _check_alternation(r: Rally, fps: float) -> None:

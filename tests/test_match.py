@@ -509,3 +509,53 @@ def test_a_confirmed_recovered_contact_is_no_longer_a_question():
     assert _issues(chain, ISSUE_DOUBLE_CONTACT) == []
     hows = {c.frame: c.how for c in gather_contacts(players)}
     assert hows[dropped.frame] == CONFIRMED
+
+
+def test_a_receiving_pair_is_checked_by_whichever_partner_stands_diagonally_opposite():
+    """Doubles: the receiver's court needs no identity, only that one partner is in it.
+
+    On the men's doubles broadcast the receiver can never be attributed, since
+    the two partners are told apart by continuity alone; but the rule that one
+    of them stands diagonally opposite the server still holds, and withholding
+    the whole check because the name is unknown threw away a real constraint.
+    """
+    n = 200
+    far_kp = {30: (CENTRE_X + 1.0, 3.0)}
+    players = [
+        SidePlayer(
+            NEAR,
+            0,
+            StrokeSeries([_stroke(54)], fps=FPS),
+            _track(n, {30: (CENTRE_X + 1.0, 3.0)}),
+        ),
+        SidePlayer(FAR, 1, StrokeSeries([_stroke(30), _stroke(78)], fps=FPS), _track(n, far_kp)),
+        SidePlayer(
+            NEAR,
+            2,
+            StrokeSeries([_stroke(102)], fps=FPS),
+            _track(n, {30: (CENTRE_X - 1.0, 3.0)}),
+        ),
+    ]
+    chain = build_chain(_bouts([(20, 140)], n), players, FPS)
+    r = chain.rallies[0]
+    assert r.server.value == FAR and r.service_court.value == R
+    assert r.receiver_court.value == R and r.receiver_court.how == AUTO
+    assert "which partner is not attributed" in r.receiver_court.evidence
+    assert not _issues(chain, ISSUE_RECEIVER_COURT)
+
+
+def test_a_receiving_pair_with_nobody_diagonally_opposite_is_a_question():
+    """The same pair, both standing in the wrong court at the serve: asked, not guessed."""
+    n = 200
+    far_kp = {30: (CENTRE_X + 1.0, 3.0)}
+    wrong = {30: (CENTRE_X - 1.0, 3.0)}
+    players = [
+        SidePlayer(NEAR, 0, StrokeSeries([_stroke(54)], fps=FPS), _track(n, wrong)),
+        SidePlayer(FAR, 1, StrokeSeries([_stroke(30), _stroke(78)], fps=FPS), _track(n, far_kp)),
+        SidePlayer(NEAR, 2, StrokeSeries([_stroke(102)], fps=FPS), _track(n, dict(wrong))),
+    ]
+    chain = build_chain(_bouts([(20, 140)], n), players, FPS)
+    r = chain.rallies[0]
+    assert r.service_court.value == R
+    issues = _issues(chain, ISSUE_RECEIVER_COURT)
+    assert len(issues) == 1 and "neither receiving partner" in issues[0].question

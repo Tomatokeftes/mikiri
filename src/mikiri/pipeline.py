@@ -35,7 +35,7 @@ from mikiri.tracking import SIDES, FrameMeta, PlayersTracker
 from mikiri.video import FrameCache, VideoReader, downscale, video_id
 
 #: Bump when the reader or tracker changes so stale cached results are never reused.
-CACHE_VERSION = 6  # the segmenter judges frames by the court's lines when calibrated
+CACHE_VERSION = 7  # partners re-identified by appearance after crossings and cuts
 
 #: How often to run the model through a stretch the segmentation called idle,
 #: in hertz. Not zero, because identity is far cheaper to keep than to recover:
@@ -374,6 +374,7 @@ def run_tracking(
     stride_mask: np.ndarray | None = None
     stride = 1
     segments_summary: dict | None = None
+    cuts: list[int] = []
     segment_runs: list[dict] = []
     if req.segment:
         progress(-1.0, "Scanning the clip for play")
@@ -407,6 +408,7 @@ def run_tracking(
         seg = segment_clip(scan)
         segments_summary = seg.summary()
         segment_runs = [x.to_dict() for x in seg.segments]
+        cuts = list(seg.cuts)
         skip_mask = seg.state_mask(STATE_NOT_BADMINTON)
         fps = float(getattr(reader.info, "fps", 0.0) or 30.0)
         stride = max(1, int(round(fps / IDLE_TRACK_HZ)))
@@ -464,7 +466,7 @@ def run_tracking(
             # The tracker works in the downscaled frame, so everything handed
             # to it in video pixels -- the click, the court outline and the
             # homography -- has to be brought into that frame first.
-            tracker = _build_tracker(backend, req, scale)
+            tracker = _build_tracker(backend, req, scale, cuts=cuts)
             click = None
             if req.select_point is not None:
                 click = (req.select_point[0] * scale, req.select_point[1] * scale)
@@ -491,8 +493,17 @@ def run_tracking(
         # The runs travel with the result, not just the summary: bouts take
         # their boundaries from them, and recovering them later would mean
         # decoding the whole clip again.
-        extra["segments"] = {**segments_summary, "runs": segment_runs, "start": req.start}
+        extra["segments"] = {
+            **segments_summary,
+            "runs": segment_runs,
+            "start": req.start,
+            "cuts": [int(c) for c in cuts],
+        }
         extra["skipped_frames"] = int(n_skipped)
+    if tracker is not None and len(tracker.trackers) > 2:
+        # How the pairs' identities were settled, for the panels: a run with
+        # unresolved crossings has partners it cannot name from then on.
+        extra["identity"] = dict(tracker.identity_decisions)
     others = [
         PlayerTrack(side=tracker.trackers[k].side, keypoints=keypoints[k], meta=metas[k])
         for k in range(1, n_tracks)
@@ -512,7 +523,9 @@ def run_tracking(
     )
 
 
-def _build_tracker(backend: PoseBackend, req: RunRequest, scale: float) -> PlayersTracker:
+def _build_tracker(
+    backend: PoseBackend, req: RunRequest, scale: float, cuts: list[int] | None = None
+) -> PlayersTracker:
     """The tracker for ``req``, with its court geometry in the downscaled frame.
 
     The frames the tracker sees are ``scale`` times the video's size, so the
@@ -534,6 +547,7 @@ def _build_tracker(backend: PoseBackend, req: RunRequest, scale: float) -> Playe
         homography=homography,
         sides=SIDES if req.players > 1 else (),
         per_side=2 if req.players >= 4 else 1,
+        cuts=cuts or (),
         det_every=req.det_every,
         conf_thr=req.conf_threshold,
         court_polygon=polygon,

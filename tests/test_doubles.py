@@ -137,3 +137,87 @@ def test_two_partners_swinging_at_one_shuttle_are_one_contact_for_the_side():
     # The same player twice within the window is left for the chain to ask about.
     solo = gather_contacts([near_a, far], FPS)
     assert [c.frame for c in solo] == [30, 60, 90, 120]
+
+
+# --- appearance: who is who after a crossing --------------------------------------
+
+
+def _reversal_script(idx: int) -> list[np.ndarray]:
+    """Near partners walk into each other, meet, and each turns back the way they came.
+
+    Continuity carries a tracker straight through the meeting -- constant
+    velocity says each player keeps going -- so after it the two boxes sit on
+    the wrong people. That is the swap measured ten times in one game on the
+    first real doubles clip, and the case appearance has to settle.
+    """
+    if idx <= FRAMES // 2:
+        xa, xb = 1.0 + 2.0 * idx / (FRAMES // 2), 5.0 - 2.0 * idx / (FRAMES // 2)
+    else:
+        back = (idx - FRAMES // 2) / (FRAMES // 2)
+        xa, xb = 3.0 - 2.0 * back, 3.0 + 2.0 * back
+    # Near the camera, so the figures stand taller than MIN_SIGNATURE_HEIGHT_PX
+    # and have an appearance to be told apart by.
+    a = person_at(xa, 0.8, height_m=1.9)
+    b = person_at(xb, 0.8, height_m=1.8)
+    c = person_at(2.2, 9.2, height_m=1.75)
+    d = person_at(3.8, 11.5, height_m=1.7)
+    return [a, b, c, d]
+
+
+def _paint(frame: np.ndarray, people: list[np.ndarray], colours: list[tuple]) -> None:
+    """Fill each figure's box with its colour, so the pose samples read it."""
+    import cv2
+
+    frame[:] = 0
+    for kp, colour in zip(people, colours):
+        x0, y0 = int(kp[:, 0].min()) - 3, int(kp[:, 1].min()) - 3
+        x1, y1 = int(kp[:, 0].max()) + 3, int(kp[:, 1].max()) + 3
+        cv2.rectangle(frame, (x0, y0), (x1, y1), colour, -1)
+
+
+def _run_reversal(colours: list[tuple] | None):
+    backend = _CourtBackend(_reversal_script)
+    tracker = PlayersTracker(backend, homography=H, det_every=2, per_side=2)
+    frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    if colours is not None:
+        _paint(frame, _reversal_script(0), colours)
+    tracker.start(frame, click=None, frame_index=0)
+    decisions = []
+    last = None
+    for idx in range(FRAMES):
+        truth = _reversal_script(idx)
+        if colours is not None:
+            _paint(frame, truth, colours)
+        last = tracker.step(frame, idx)
+        decisions.extend(m.identity for _, m in last[:2] if m.identity is not None)
+    return tracker, last, decisions
+
+
+def test_partners_in_different_colours_are_put_back_on_their_own_people_after_crossing():
+    """Guards the swap continuity makes when two partners meet and turn back.
+
+    With the pair told apart by colour, whichever way the boxes came out of
+    the crossing, each tracker must end the clip on the person it started
+    on, and the frame where that was settled says so.
+    """
+    colours = [(255, 0, 0), (0, 0, 255), (0, 255, 0), (200, 200, 200)]
+    tracker, last, decisions = _run_reversal(colours)
+    truth = _reversal_script(FRAMES - 1)
+    assert decisions and set(decisions) <= {"kept", "swapped"}, decisions
+    for k in (0, 1):
+        kp, meta = last[k]
+        assert not meta.lost and not meta.ambiguous
+        assert np.allclose(kp[:, :2], truth[k][:, :2], atol=1e-3), k
+    assert tracker.identity_decisions["unresolved"] == 0
+
+
+def test_partners_who_look_alike_are_left_on_continuity_and_the_crossing_is_unresolved():
+    """The gate: two identical figures are never guessed between, only flagged.
+
+    On the first real clip both pairs wore matching kit, and the far pair
+    matched down to the shoes; a signature that cannot separate them must
+    say so rather than hand the boxes over on noise.
+    """
+    tracker, last, decisions = _run_reversal(None)
+    assert decisions and set(decisions) == {"unresolved"}, decisions
+    assert tracker.identity_decisions["kept"] == 0 and tracker.identity_decisions["swapped"] == 0

@@ -333,11 +333,40 @@ Known gaps:
 * Up to four players are tracked, one or two per side of the net, and only
   with a court: the others are identified by side and nothing else, so an
   uncalibrated clip gets the subject alone. Two per side is doubles
-  (`docs/doubles.md`): partners are told apart by continuity alone, the
-  frames where their boxes overlap are marked ambiguous, no shot is
-  attributed to one partner, and no real doubles footage has been through
-  it -- the four-player path is exercised on scripted people only. The
-  formation figures need no identity and are the doubles deliverable so far.
+  (`docs/doubles.md`), and the first real doubles footage went through it
+  on 2026-09-25: a points-only cut of a men's doubles game from a raised,
+  locked-off camera (`doubles_lee_yoo_fu_zhang`), plus an uncut 35-minute
+  club-hall recording (`doubles_club_hall`, registered and not yet
+  calibrated). Four people are found on 99% (near) and 84% (far) of frames
+  and nobody is confused with the umpire or the crowd. **Continuity alone
+  does not hold identity within a side**: read off the two near players'
+  shoes, which differ where their shirts do not, the two near trackers
+  swapped people sixteen times in one game, ten at crossings and six at
+  the cuts between points. Appearance is now consulted when an overlap
+  ends and after a cut, part by part (only the feet separate these two,
+  at 3.9 times their spread; the shirts, shorts and shins at under 1) and
+  as a streak of five verdicts checked on every clean frame, on chroma
+  only and never on a player under 200 px, behind a separability gate: a
+  pair alike on every part is marked `unresolved` and left on continuity,
+  which is the far pair here (73 of 73). Measured on the same game: the
+  clicked player's tracker is on him for 98.7% of the readable frames
+  against 63% on continuity alone, with two wrong stretches of about
+  seventy and eighty-five frames that are both corrected. No shot is
+  attributed to one partner yet;
+  the formation figures need no identity and are the doubles deliverable
+  so far, and the receiving pair's court is now checked at every serve by
+  whichever partner stands diagonally opposite, which needs no identity
+  either.
+* **The cuts between points on a locked-off camera were invisible to the
+  segmenter**, so eight points came out as one 90 s stretch and would have
+  been one rally with eight serves. `segments.find_splices` finds them as
+  single-frame spikes in the changed-pixel share (five times the
+  neighbourhood, above a 4% floor; checked on every clip here, none on the
+  phone recordings), a cut of either kind now starts a new segment, and
+  `rally.segment_bouts` never lets a bout span one. Splices do not count
+  toward `MANY_CUTS` and do not split the thresholding into shots, on
+  purpose: the twelve Lin Dan minutes have 56 of them and split correctly
+  by motion.
   Each side's racket hand is now a fact the review queue asks for before
   any contact question, and every contact on that side is detected from the
   arm it names. It is asked and not measured, and that is measured: on the

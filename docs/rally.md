@@ -37,6 +37,21 @@ bouts are dropped (`MIN_BOUT_S`, 2.0 s), in that order. The other order deletes
 a real rally that happens to contain a pause: a player waiting under a high
 clear is still rallying.
 
+**No bout spans a cut.** A match clip from the internet usually has the dead
+time between points edited out, and on a locked-off camera such a cut changes
+almost nothing in the picture: the hall, the court and the boards stay where
+they were and only the players jump. To the speed signal and to the clip
+states the end of one point and the serve of the next are then one continuous
+stretch of movement, and on the men's doubles clip eight points came out as
+one 90 s bout, which the rally chain would have read as one rally with eight
+serves in it. `segments.find_splices` finds those cuts as single-frame spikes
+in the changed-pixel share, five times their neighbourhood and above a floor
+(`SPLICE_CHANGED_MIN`), and the bouts split at them after the gaps are closed,
+since a one-frame gap at the cut would otherwise be closed straight back over.
+The rule was checked on every clip here: none on the phone recordings, exactly
+the three cuts between the four points of the Lin Dan rally, and two per
+cutaway on the Momota broadcast.
+
 ## What the bouts then say
 
 Everything in the summary is deliberately *in play*, with the rests excluded
