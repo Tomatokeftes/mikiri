@@ -245,3 +245,21 @@ def test_the_active_threshold_is_what_separates_walking_from_playing():
     above = _rally_speed([(10, ACTIVE_SPEED_MPS + 0.3)])
     assert "whole tracked range" in segment_bouts(_track(below)).note
     assert len(segment_bouts(_track(above)).bouts) == 1
+
+
+def test_no_bout_spans_a_cut_between_two_points():
+    """Guards two points cut together becoming one rally with two serves in it.
+
+    On the doubles clip the dead time between points is edited out, so the
+    end of one point and the serve of the next are one continuous stretch of
+    movement to the speed signal and to the clip states alike; only the cut
+    says where one ends. It splits after the gaps are closed, or the one-frame
+    gap would be closed straight back over.
+    """
+    speed = _rally_speed([(6, 2.5), (0.5, 2.5), (6, 2.5)])
+    cut = int(round(6.5 * FPS))
+    whole = segment_bouts(_track(speed))
+    assert len(whole.bouts) == 1
+    got = segment_bouts(_track(speed), cuts=[cut])
+    assert len(got.bouts) == 2
+    assert got.bouts[0].end == cut - 1 and got.bouts[1].start == cut

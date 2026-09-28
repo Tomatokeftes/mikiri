@@ -29,6 +29,7 @@ nothing here assumes there is exactly one person per side.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 
 import cv2
@@ -314,6 +315,12 @@ class FrameMeta:
     #: pose belongs to rests on continuity alone. Doubles only; nothing that
     #: attributes a contact to one partner may do so on such a frame.
     ambiguous: bool = False
+    #: Set on the frame where two partners' identities were re-settled after
+    #: an overlap or a cut: ``"kept"`` when their appearance confirmed the
+    #: continuity, ``"swapped"`` when it overruled it, ``"unresolved"`` when
+    #: the two look too alike to say and the continuity stands unchecked.
+    #: From an unresolved decision on, which partner is which is a guess.
+    identity: str | None = None
 
     def to_dict(self) -> dict:
         """Plain dict."""
@@ -366,6 +373,18 @@ class PersonTracker:
         #: partner tracker can be told where this one is heading when the
         #: two boxes lie over each other and position alone says nothing.
         self.prev_centre: np.ndarray | None = None
+        #: What this person looks like, for telling partners apart after
+        #: they cross. The reference stays with the tracker when the boxes
+        #: are swapped, because the reference *is* the identity.
+        self.appearance = Appearance()
+
+    def take_state_from(self, other: PersonTracker) -> None:
+        """Take over ``other``'s box and motion state: the person it was following."""
+        self.bbox = None if other.bbox is None else other.bbox.copy()
+        self.prev_centre = None if other.prev_centre is None else other.prev_centre.copy()
+        self.last_score = other.last_score
+        self.n_lost = other.n_lost
+        self.last_det_idx = other.last_det_idx
 
     def start(
         self, frame: np.ndarray, click: tuple[float, float] | None = None, frame_index: int = 0
@@ -611,6 +630,203 @@ class PersonTracker:
 #: Overlap at which two partners' boxes are one box for the purpose of
 #: telling them apart: above it a pose in either belongs to either.
 AMBIGUOUS_IOU = 0.5
+
+#: Where on the body a player's colours are read, as pairs of keypoints
+#: whose midpoint is sampled: the torso, each thigh, each shin and the
+#: feet. Parts rather than one box histogram because on the first real
+#: doubles clip the two partners wore identical shirts and shorts and
+#: differed only in their shoes, and a whole-box average buries the shoes
+#: under the shirt. Each part is compared on its own and the pair is told
+#: apart by whichever parts differ.
+SIGNATURE_PARTS: dict[str, tuple[tuple[str, str], ...]] = {
+    "torso": (("left_shoulder", "right_hip"), ("right_shoulder", "left_hip")),
+    "thighs": (("left_hip", "left_knee"), ("right_hip", "right_knee")),
+    "shins": (("left_knee", "left_ankle"), ("right_knee", "right_ankle")),
+    "feet": (
+        ("left_ankle", "left_big_toe"),
+        ("right_ankle", "right_big_toe"),
+        ("left_heel", "left_big_toe"),
+        ("right_heel", "right_big_toe"),
+    ),
+}
+#: Radius of the colour patch at each sample, as a share of the box height.
+SIGNATURE_PATCH_SHARE = 0.02
+SIGNATURE_PATCH_MIN_PX = 2
+#: Below this box height, in the tracker's own pixels, no signature is read
+#: at all. At 150 px a shoe is eight pixels long and the keypoints jitter by
+#: a few, so the foot patch reads the floor as often as the shoe; measured
+#: on the far pair of the first real clip, whose feet differ by 26 Lab units
+#: over the whole game against spreads of 43 and 72, and whose references
+#: nonetheless came out "separable" on more than half the frames, because
+#: a reference with a hundred frames of memory follows whatever mixture of
+#: shoe and floor the last hundred frames held, and two players standing
+#: at different depths hold different mixtures. That is a difference of
+#: position, not of person, and it would swap the trackers when the pair
+#: rotate. A player too small to read is left on continuity and said so.
+MIN_SIGNATURE_HEIGHT_PX = 200
+#: How fast the reference follows new frames. At 0.05 a reference is about
+#: twenty frames of history, long enough to ride out a blurred swing and
+#: short enough to follow a change of lighting across the court.
+APPEARANCE_RATE = 0.05
+#: Frames of reference a tracker needs before its appearance is consulted.
+MIN_APPEARANCE_FRAMES = 15
+#: How far apart two partners' references must be on a body part, in
+#: multiples of the larger of their own frame-to-frame spreads on that
+#: part, before the part is used to tell them apart. Judged part by part
+#: and never on the average: on the first real clip the two near players
+#: differed only in their shoes, at 3.9 times the spread, and averaged
+#: with three identical parts that fell to 1.3 and told nobody anything.
+#: Below it on every part the pair look alike to this measure and the
+#: honest answer is that the crossing is unresolved, not a guess.
+SEPARABLE_RATIO = 2.0
+#: Spread is never taken below this, in Lab chroma units: the noise of a
+#: JPEG patch, which a reference built on a still player would otherwise
+#: undercut and make any difference look decisive.
+SPREAD_FLOOR = 4.0
+#: A swap has to beat keeping the continuity by this factor of the total
+#: distance, so a near-tie leaves the continuity alone.
+SWAP_MARGIN = 0.7
+#: Consecutive clean frames of evidence a decision needs. One frame of the
+#: shoes lands nearer the wrong person 4% to 13% of the time on the first
+#: real clip; five in a row do not. After an overlap or a cut the frames
+#: are marked ambiguous until the decision, because until then they are.
+SETTLE_FRAMES = 5
+#: Frames a settling may wait for its evidence before giving up as
+#: unresolved: a partner lost behind the other for longer than this has
+#: no evidence to give, and holding the frames ambiguous for the rest of
+#: the rally would withhold more than the doubt warrants.
+SETTLE_PATIENCE = 30
+
+
+def _sample_colour(lab: np.ndarray, x: float, y: float, radius: int) -> np.ndarray | None:
+    """Median Lab colour of the patch around ``(x, y)``, or ``None`` off the frame."""
+    h, w = lab.shape[:2]
+    xi, yi = int(round(x)), int(round(y))
+    if xi < 0 or yi < 0 or xi >= w or yi >= h:
+        return None
+    patch = lab[max(0, yi - radius) : yi + radius + 1, max(0, xi - radius) : xi + radius + 1]
+    if patch.size == 0:
+        return None
+    return np.median(patch.reshape(-1, 3), axis=0)
+
+
+def appearance_signature(
+    frame: np.ndarray, kp: np.ndarray, conf_thr: float
+) -> dict[str, np.ndarray]:
+    """The colours of one pose's body parts, from :data:`SIGNATURE_PARTS`.
+
+    Each part is the median over its samples of the median patch colour, as
+    the two chroma channels of Lab and not its lightness: two players' kit
+    differs in hue, while lightness follows the lighting where each of them
+    happens to stand, and on the first real clip keeping it in opened the
+    gate on identical shirts and shins one frame in six. Parts with no
+    confident keypoint pair are left out rather than filled in.
+    """
+    box = keypoints_bbox(kp, conf_thr=conf_thr)
+    if box is None or (box[3] - box[1]) < MIN_SIGNATURE_HEIGHT_PX:
+        return {}
+    radius = max(SIGNATURE_PATCH_MIN_PX, int(round(SIGNATURE_PATCH_SHARE * (box[3] - box[1]))))
+    x0, y0 = max(0, int(box[0]) - radius - 1), max(0, int(box[1]) - radius - 1)
+    x1, y1 = int(box[2]) + radius + 2, int(box[3]) + radius + 2
+    crop = frame[y0:y1, x0:x1]
+    if crop.size == 0:
+        return {}
+    lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB).astype(np.float32)
+    out: dict[str, np.ndarray] = {}
+    for part, pairs in SIGNATURE_PARTS.items():
+        samples = []
+        for a, b in pairs:
+            pa, pb = kp[KP[a]], kp[KP[b]]
+            if pa[2] < conf_thr or pb[2] < conf_thr:
+                continue
+            c = _sample_colour(lab, (pa[0] + pb[0]) / 2 - x0, (pa[1] + pb[1]) / 2 - y0, radius)
+            if c is not None:
+                samples.append(c)
+        if samples:
+            out[part] = np.median(np.stack(samples), axis=0)[1:]
+    return out
+
+
+def signature_distance(a: dict[str, np.ndarray], b: dict[str, np.ndarray]) -> float | None:
+    """Mean Lab distance over the parts both signatures have, or ``None`` with none shared."""
+    shared = [k for k in a if k in b]
+    if not shared:
+        return None
+    return float(np.mean([np.linalg.norm(a[k] - b[k]) for k in shared]))
+
+
+class Appearance:
+    """A running reference of what one tracked person looks like.
+
+    The reference is an exponential average of the frame signatures taken on
+    frames where the person was confidently posed and not overlapping a
+    partner, and ``spread`` is, per part, the running mean distance of those
+    frames from the reference: how much this one person varies from frame
+    to frame, which is the yardstick a difference between two people on that
+    part has to clear before it means anything.
+    """
+
+    def __init__(self) -> None:
+        self.reference: dict[str, np.ndarray] = {}
+        self.spread: dict[str, float] = {}
+        self.n_frames: int = 0
+
+    def update(self, signature: dict[str, np.ndarray]) -> None:
+        """Fold one frame's signature into the reference."""
+        if not signature:
+            return
+        for part, colour in signature.items():
+            if part in self.reference:
+                d = float(np.linalg.norm(colour - self.reference[part]))
+                self.spread[part] = (1 - APPEARANCE_RATE) * self.spread.get(
+                    part, d
+                ) + APPEARANCE_RATE * d
+                self.reference[part] = (1 - APPEARANCE_RATE) * self.reference[
+                    part
+                ] + APPEARANCE_RATE * colour
+            else:
+                self.reference[part] = colour.copy()
+                self.spread[part] = SPREAD_FLOOR
+        self.n_frames += 1
+
+    def ready(self) -> bool:
+        """Whether enough frames have been seen to consult this reference."""
+        return self.n_frames >= MIN_APPEARANCE_FRAMES and bool(self.reference)
+
+    def distance(self, signature: dict[str, np.ndarray], parts: list[str]) -> float | None:
+        """Summed distance from ``signature`` to the reference over ``parts``, or ``None``."""
+        shared = [k for k in parts if k in signature and k in self.reference]
+        if not shared:
+            return None
+        return float(sum(np.linalg.norm(signature[k] - self.reference[k]) for k in shared))
+
+
+def separable_parts(a: Appearance, b: Appearance) -> list[str]:
+    """The body parts on which two references differ by more than either varies on its own.
+
+    Empty when the two look alike everywhere, or when either reference is
+    too young to consult.
+    """
+    if not (a.ready() and b.ready()):
+        return []
+    out = []
+    for part in a.reference:
+        if part not in b.reference:
+            continue
+        between = float(np.linalg.norm(a.reference[part] - b.reference[part]))
+        spread = max(
+            a.spread.get(part, SPREAD_FLOOR), b.spread.get(part, SPREAD_FLOOR), SPREAD_FLOOR
+        )
+        if between >= SEPARABLE_RATIO * spread:
+            out.append(part)
+    return out
+
+
+def separable(a: Appearance, b: Appearance) -> bool:
+    """Whether two references can be told apart on any part."""
+    return bool(separable_parts(a, b))
+
+
 #: Cost of a pairing the assignment must not make.
 _FORBIDDEN = 1e6
 
@@ -632,10 +848,21 @@ class PlayersTracker:
     partners cross and swap halves constantly and the side constraint says
     nothing about which of them is which. When two partners' boxes lie over
     each other the frame is marked ambiguous on both, and nothing downstream
-    attributes a contact to either of them on it. Appearance is not used yet:
-    partners in matching kit are exactly the case where it would not help,
-    and the ambiguity flag is the honest answer until something better is
-    measured.
+    attributes a contact to either of them on it.
+
+    Continuity alone was measured on the first real doubles clip and it is
+    not enough: over one game the two near trackers swapped people sixteen
+    times, ten at crossings and six at the cuts between points, where the
+    picture jumps and continuity means nothing. So when an overlap ends, and
+    on the first frame after a cut, each tracker's :class:`Appearance` is
+    consulted: if the two partners' references are separable -- further
+    apart than either varies on its own -- the boxes are handed to whichever
+    tracker each person now matches, and the frame says ``kept`` or
+    ``swapped``. If they are not separable, as two players in identical kit
+    are, nothing is guessed: the continuity stands and the frame says
+    ``unresolved``, which is what the review queue will ask about. Partners
+    in matching kit are exactly the case a colour signature cannot help
+    with, and the flag is the honest answer there.
 
     Sharing the calls matters on a CPU: the detector is the expensive stage,
     and RTMPose takes all the boxes of one frame in one call.
@@ -647,6 +874,7 @@ class PlayersTracker:
         homography: np.ndarray | None = None,
         sides: tuple[str, ...] = SIDES,
         per_side: int = 1,
+        cuts: Iterable[int] = (),
         **tracker_kwargs: object,
     ) -> None:
         self.backend = backend
@@ -655,6 +883,27 @@ class PlayersTracker:
         self.per_side = max(1, int(per_side))
         self.kwargs = dict(tracker_kwargs)
         self.trackers: list[PersonTracker] = []
+        #: Frame indices that are the first frame after a cut in the clip.
+        #: Continuity across one is void, so partners are re-identified
+        #: there by appearance, and the detector is made to run.
+        self.cuts: set[int] = {int(c) for c in cuts}
+        #: Whether each side's pair overlapped on the previous frame, keyed by
+        #: the group's first tracker index: an overlap that has just ended
+        #: is when identities are re-settled.
+        self._overlapping: dict[int, bool] = {}
+        #: Frames since an overlap ended or a cut landed, keyed like
+        #: ``_overlapping``, while the pair's identities are unsettled.
+        self._settling: dict[int, int] = {}
+        #: Consecutive clean frames whose evidence said swap, and said keep.
+        #: Kept on every clean frame, not only after overlaps: a swap the
+        #: assignment makes silently -- at a cut the splice finder missed,
+        #: or a re-detection that landed on the partner with no overlap to
+        #: mark it -- shows up nowhere else, and on the first real clip one
+        #: such swap at frame 319 put the clicked player's tracker on his
+        #: partner for the rest of the game.
+        self._streak: dict[int, dict[str, int]] = {}
+        #: How the identity decisions went, for the run's report.
+        self.identity_decisions: dict[str, int] = {"kept": 0, "swapped": 0, "unresolved": 0}
 
     def _new(self, side: str | None) -> PersonTracker:
         return PersonTracker(self.backend, homography=self.homography, side=side, **self.kwargs)
@@ -771,6 +1020,10 @@ class PlayersTracker:
         n = len(self.trackers)
         detected = [False] * n
         groups = self._groups()
+        at_cut = frame_index in self.cuts
+        if at_cut:
+            for t in self.trackers:
+                t.last_det_idx = None
         if any(t.due(frame_index) for t in self.trackers):
             people = self.backend.detect_people(frame, frame_index=frame_index)
             for group in groups:
@@ -798,10 +1051,113 @@ class PlayersTracker:
                 out[k] = t.absorb(person, w, h, frame_index, detected[k])
             # Partners whose boxes lie over one another cannot be told apart
             # by where they are; say so on both, this frame.
+            overlapping = False
             for a in range(len(members)):
                 for b in range(a + 1, len(members)):
                     ba, bb = members[a].bbox, members[b].bbox
                     if ba is not None and bb is not None and iou(ba, bb) > AMBIGUOUS_IOU:
                         out[group[a]][1].ambiguous = True
                         out[group[b]][1].ambiguous = True
+                        overlapping = True
+            was_overlapping = self._overlapping.get(group[0], False)
+            self._overlapping[group[0]] = overlapping
+            if len(group) == 2 and not overlapping:
+                if was_overlapping or at_cut:
+                    self._settling[group[0]] = 0
+                    self._streak[group[0]] = {"swap": 0, "keep": 0}
+                self._check_pair(frame, group, out)
         return [pair for pair in out if pair is not None]
+
+    def _check_pair(
+        self,
+        frame: np.ndarray,
+        group: list[int],
+        out: list[tuple[np.ndarray, FrameMeta] | None],
+    ) -> None:
+        """One clean frame of a pair: weigh the evidence, learn, and decide when it is time.
+
+        With the two references separable on some part, this frame says
+        whether each tracker's person looks more like its own reference or
+        the partner's, and the verdicts are counted in a streak. A streak of
+        :data:`SETTLE_FRAMES` swap verdicts exchanges the trackers' boxes
+        wherever it happens. After an overlap or a cut the pair is settling:
+        the frames are marked ambiguous until a streak either way decides
+        them, a pair that cannot be told apart is marked unresolved at once,
+        and one that gives no evidence for :data:`SETTLE_PATIENCE` frames is
+        marked unresolved and left on continuity.
+
+        A frame that on the separable parts lies nearer the partner's
+        reference is not learned: it is either a swap not yet caught or a
+        bad patch, and learning it would teach the reference the wrong
+        person, which is how a reference gets polluted past ever settling.
+        """
+        ka, kb = group
+        ta, tb = self.trackers[ka], self.trackers[kb]
+        (kp_a, meta_a), (kp_b, meta_b) = out[ka], out[kb]
+        settling = self._settling.get(ka)
+        parts = separable_parts(ta.appearance, tb.appearance)
+        streak = self._streak.setdefault(ka, {"swap": 0, "keep": 0})
+        if settling is not None:
+            if not parts:
+                self._mark_identity(out, group, "unresolved")
+                del self._settling[ka]
+                settling = None
+            else:
+                meta_a.ambiguous = meta_b.ambiguous = True
+                self._settling[ka] = settling + 1
+        sig_a = {} if meta_a.lost else appearance_signature(frame, kp_a, ta.conf_thr)
+        sig_b = {} if meta_b.lost else appearance_signature(frame, kp_b, tb.conf_thr)
+        verdict = None
+        if parts and sig_a and sig_b:
+            d_aa, d_bb = ta.appearance.distance(sig_a, parts), tb.appearance.distance(sig_b, parts)
+            d_ab, d_ba = tb.appearance.distance(sig_a, parts), ta.appearance.distance(sig_b, parts)
+            if None not in (d_aa, d_bb, d_ab, d_ba):
+                verdict = "swap" if d_ab + d_ba < SWAP_MARGIN * (d_aa + d_bb) else "keep"
+        if verdict is None:
+            streak["swap"] = streak["keep"] = 0
+        else:
+            streak[verdict] += 1
+            streak["keep" if verdict == "swap" else "swap"] = 0
+
+        decided = None
+        if streak["swap"] >= SETTLE_FRAMES:
+            # The person tracker A was following is the one B's reference
+            # describes, and vice versa: exchange the boxes and this frame's
+            # poses, and keep each reference where it is.
+            saved = (ta.bbox, ta.prev_centre, ta.last_score, ta.n_lost, ta.last_det_idx)
+            ta.take_state_from(tb)
+            tb.bbox, tb.prev_centre, tb.last_score, tb.n_lost, tb.last_det_idx = saved
+            out[ka], out[kb] = (kp_b, meta_b), (kp_a, meta_a)
+            sig_a, sig_b = sig_b, sig_a
+            decided = "swapped"
+        elif settling is not None and streak["keep"] >= SETTLE_FRAMES:
+            decided = "kept"
+        elif settling is not None and self._settling.get(ka, 0) >= SETTLE_PATIENCE:
+            decided = "unresolved"
+        if decided is not None:
+            streak["swap"] = streak["keep"] = 0
+            if settling is not None:
+                del self._settling[ka]
+                if decided != "unresolved":
+                    meta_a.ambiguous = meta_b.ambiguous = False
+            self._mark_identity(out, group, decided)
+
+        # Learn this frame, unless it looks like the partner.
+        if self._settling.get(ka) is not None:
+            return
+        for t, sig, other in ((ta, sig_a, tb), (tb, sig_b, ta)):
+            if not sig:
+                continue
+            if parts:
+                own = t.appearance.distance(sig, parts)
+                theirs = other.appearance.distance(sig, parts)
+                if own is not None and theirs is not None and theirs < own:
+                    continue
+            t.appearance.update(sig)
+
+    def _mark_identity(
+        self, out: list[tuple[np.ndarray, FrameMeta] | None], group: list[int], how: str
+    ) -> None:
+        for k in group:
+            out[k][1].identity = how
+        self.identity_decisions[how] += 1

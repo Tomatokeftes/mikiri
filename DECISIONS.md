@@ -845,6 +845,49 @@ The detector is not validated against labelled footage and says so in its own
 docstring: a brief two-footed rise before a move is a split step, but so is a
 recovery push-off. The rate is a lower bound on preparation of some kind.
 
+## A cut between points is a bout boundary, and a splice is not a scene change
+
+The cut detector asked for half the picture to change, which a cut to a
+replay or the crowd does and a cut between two points on a locked-off camera
+never does: measured on the men's doubles clip the fifteen point cuts change
+4% to 15% of the pixels against a median of 1.6%. What marks them is that
+the change is one frame, five to thirty times the frames around it, where a
+smash with four players moving changes as much for a third of a second and
+never stands far above its own neighbourhood. `find_splices` uses both the
+floor and the ratio, and the rule was checked against every clip in the
+benchmarks before it was kept.
+
+Two things a splice deliberately does not do. It does not split the clip into
+shots for thresholding, because both sides of it are the same scene with the
+same motion distribution, and thresholding each point on its own would put
+the threshold inside the point. And it does not count toward `MANY_CUTS`,
+the rule that refuses to split an uncalibrated directed clip: the twelve
+minutes of Lin Dan have 56 splices and split correctly by motion, because
+the walk-backs are still in them. A splice starts a new segment and ends a
+bout, and that is all.
+
+## Partners are told apart by appearance where they can be, and flagged where they cannot
+
+Continuity alone was the doubles tracker's identity within a side, and the
+first real clip measured it: over one game the two near trackers swapped
+people sixteen times, ten at crossings and six at the cuts between points,
+read off the two players' shoes, which differ where their shirts do not.
+Appearance is now consulted whenever an overlap ends and on the first frame
+after a cut, as a per-part colour signature -- torso, thighs, shins, feet --
+because a whole-box histogram buries the one part that differed under the
+shirt that did not.
+
+The rule that keeps this honest is the separability gate. The two partners'
+references are compared only when they differ by more than either varies on
+its own frame to frame (`SEPARABLE_RATIO`); below that the crossing is
+marked `unresolved` on both trackers and the continuity stands unchecked,
+and the Formation panel says how many crossings were settled and how many
+were not. Two players in matching kit and matching shoes, as the far pair on
+that clip, are the case a colour signature cannot help with, and guessing
+between them on noise would put one player's shots in the other's record --
+the same class of mistake as reporting a number the measurement cannot
+defend. The review queue is where an unresolved crossing goes next.
+
 ## Coaching says at most three things, with the evidence attached
 
 Advice is capped at three cues because a list of twelve is a list of none.

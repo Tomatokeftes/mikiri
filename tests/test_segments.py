@@ -431,3 +431,54 @@ def test_a_saved_scan_loads_back_equal_and_a_missing_one_is_none(tmp_path):
     assert np.array_equal(back.signature, scan.signature, equal_nan=True)
     assert back.start == scan.start and back.fps == scan.fps
     assert load_scan(tmp_path / "nothing.npz") is None
+
+
+# --- splices: the cuts between points on a locked-off camera ------------------------
+
+
+def test_a_splice_between_two_points_is_found_and_a_burst_of_movement_is_not():
+    """Guards the eight points that came out as one 90 s stretch on the doubles clip.
+
+    On a locked-off camera with the dead time cut out, the picture barely
+    changes across a cut -- 4% to 15% of the pixels, against half the frame
+    for a scene change -- so the whole-picture test never fires. What marks a
+    splice is that the change is a single frame, an order of magnitude above
+    its neighbours; a smash with four players moving changes as much but
+    lasts several frames and never stands that far above its own
+    neighbourhood.
+    """
+    from mikiri.segments import find_splices
+
+    changed = np.full(600, 0.012)
+    changed[200] = 0.09  # a cut between points: everyone jumps at once
+    changed[400:412] = 0.05  # a smash: a lot moves, for a third of a second
+    changed[500] = 0.03  # a flicker: isolated but under the floor
+    assert find_splices(changed, FPS) == [200]
+
+
+def test_a_whole_picture_cut_is_also_a_splice_and_the_two_are_one_cut_when_adjacent():
+    from mikiri.segments import find_cuts, find_splices
+
+    changed = np.full(300, 0.01)
+    changed[100] = 0.8
+    changed[101] = 0.09
+    assert find_cuts(changed, FPS) == [100]
+    assert find_splices(changed, FPS) == [100]
+
+
+def test_a_splice_starts_a_new_play_segment_without_changing_the_state():
+    """Two points cut together must not be one stretch of play, and no rest is invented."""
+    from mikiri.segments import find_splices
+
+    scan = _scan([(2.0, QUIET), (20.0, BUSY), (3.0, QUIET)])
+    scan.changed[:] = 0.01
+    cut = _frames(12.0)
+    scan.changed[cut] = 0.1
+    assert find_splices(scan.changed, FPS) == [cut]
+    result = segment_clip(scan)
+    plays = _play_segments(result)
+    assert len(plays) == 2, [(s.start, s.end) for s in plays]
+    assert plays[0].end == cut - 1 and plays[1].start == cut
+    assert result.cuts == [cut]
+    assert "no rally spans one" in result.note
+    assert result.summary()["n_play"] == 2

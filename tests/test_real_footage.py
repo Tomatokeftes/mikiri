@@ -993,3 +993,196 @@ def test_the_brightness_gate_separates_on_every_benchmark_clip(clip_id: str):
         f"{clip_id}: the gate kept {ratio:.0%} of the moving pixels, so it is separating "
         "nothing and a launch found here would rest on motion alone"
     )
+
+
+# --- doubles: a points-only cut of a men's doubles game on a locked-off camera -------
+
+DOUBLES = benchmark_clip("doubles_lee_yoo_fu_zhang") or {}
+_DB_COURT = DOUBLES.get("court", {})
+DOUBLES_GAME_ONE = DOUBLES.get("games", {}).get("game_one", {})
+
+
+@pytest.fixture(scope="module")
+def doubles_scan():
+    """Game one of the doubles clip scanned once, with the court scored."""
+    from mikiri.court import compute_homography
+    from mikiri.segments import court_line_samples, scan_motion
+
+    path = clip_path("doubles_lee_yoo_fu_zhang")
+    if path is None:
+        pytest.skip("benchmark clip 'doubles_lee_yoo_fu_zhang' not present")
+    start, end = DOUBLES_GAME_ONE.get("trim", [0, 5613])
+    H, _ = compute_homography(_DB_COURT["image_points"], _DB_COURT["world_points"])
+    with VideoReader(path) as reader:
+        samples = court_line_samples(H, reader.info.width, reader.info.height)
+        return scan_motion(reader, int(start), int(end), court_samples=samples)
+
+
+def test_the_cuts_between_points_on_a_locked_off_camera_are_found_and_end_the_stretches(
+    doubles_scan,
+):
+    """Guards eight points coming out as one 90 s stretch of play.
+
+    This clip is cut to points with the dead time removed, on a camera that
+    never moves, so a cut changes almost nothing but where the players stand:
+    the whole-picture cut test finds none of its fifteen cuts, and without
+    them game one was four stretches of play, one of them ninety seconds.
+    The splice test finds them as single-frame spikes, and every stretch of
+    play then ends at a cut or a rest. Numbers from 2026-09-25, when the
+    fifteen cuts were counted by eye from frame differences and the three
+    the first count missed were cropped and looked at.
+    """
+    from mikiri.segments import find_cuts, find_splices, segment_clip
+
+    assert find_cuts(doubles_scan.changed, doubles_scan.fps) == [], "no scene changes here"
+    splices = find_splices(doubles_scan.changed, doubles_scan.fps)
+    assert 13 <= len(splices) <= 17, f"{len(splices)} splices, expected about fifteen"
+    for known in (982, 1168, 1907, 2141, 2849, 3060, 3400, 3864, 4534, 4802, 5195):
+        assert any(abs(s - known) <= 1 for s in splices), f"the cut at {known} was not found"
+    seg = segment_clip(doubles_scan)
+    assert not seg.not_segmented, seg.note
+    assert seg.cuts == [int(seg.start + s) for s in splices]
+    plays = [s for s in seg.segments if s.state == STATE_PLAY]
+    assert len(plays) >= len(splices), f"{len(plays)} stretches of play for {len(splices)} cuts"
+    longest = max(s.seconds for s in plays)
+    assert longest < 40.0, f"a stretch of {longest:.0f} s is several points fused"
+    assert "no rally spans one" in seg.note
+
+
+DOUBLES_PREFIX = 1300
+DOUBLES_FEET = (
+    "left_ankle",
+    "right_ankle",
+    "left_big_toe",
+    "right_big_toe",
+    "left_heel",
+    "right_heel",
+)
+
+
+def _shoe_colour(hsv: np.ndarray, kp: np.ndarray) -> int:
+    """+1 for red shoes, -1 for yellow, 0 when the feet cannot be read on this frame.
+
+    The ground truth this clip offers for free: the two Korean players wear
+    identical shirts and shorts and different shoes, Lee red and Yoo yellow.
+    """
+    from mikiri.keypoints import KP
+
+    pts = kp[[KP[n] for n in DOUBLES_FEET]]
+    pts = pts[pts[:, 2] > 0.3]
+    if len(pts) < 2:
+        return 0
+    patches = []
+    for x, y, _ in pts:
+        x0, y0 = int(x) - 6, int(y) - 6
+        patches.append(hsv[max(0, y0) : y0 + 13, max(0, x0) : x0 + 13].reshape(-1, 3))
+    pix = np.concatenate(patches)
+    sat = pix[(pix[:, 1] > 90) & (pix[:, 2] > 90)]
+    if len(sat) < 10:
+        return 0
+    h = sat[:, 0]
+    red = float(np.mean((h < 12) | (h > 160)))
+    yellow = float(np.mean((h >= 18) & (h <= 40)))
+    if red - yellow > 0.15:
+        return 1
+    if yellow - red > 0.15:
+        return -1
+    return 0
+
+
+@pytest.fixture(scope="module")
+def doubles_prefix_session():
+    """The first 1300 frames of game one tracked once with four players.
+
+    Forty-three seconds holding three cuts between points and about a dozen
+    crossings of the near pair; the whole game is nine minutes of tracking,
+    which is more than the suite should spend on this.
+    """
+    path = clip_path("doubles_lee_yoo_fu_zhang")
+    if path is None:
+        pytest.skip("benchmark clip 'doubles_lee_yoo_fu_zhang' not present")
+    settings = Settings(
+        backend="rtmlib", rtmlib_mode="balanced", frame_cache_longest=640, det_every=4
+    )
+    try:
+        backend = build_backend(settings, path)
+        backend.load()
+    except ModelNotAvailableError as exc:
+        pytest.skip(str(exc))
+    s = ProjectSession.open_video(path, settings)
+    s.project.project_path = None
+    s.set_trim(0, DOUBLES_PREFIX - 1)
+    s.set_court(_DB_COURT["preset"], _DB_COURT["image_points"], _DB_COURT["world_points"], frame=0)
+    req = s.run_request(tuple(DOUBLES["click"]), players=4)
+    result = run_tracking(s.reader, backend, req, frame_cache=s.frame_cache)
+    s.apply_result(result, req)
+    yield s, result
+    s.close()
+
+
+def test_four_players_are_tracked_on_real_doubles_footage_and_kept_on_their_sides(
+    doubles_prefix_session,
+):
+    """Guards the four-player path on the first real doubles clip.
+
+    Both near players are found on nearly every frame, both far players on
+    most, and nobody is ever the umpire on his chair beside the court or
+    the crowd above the far baseline: every found pose maps inside the
+    court, on its own side. Numbers from the whole game on 2026-09-25: near
+    99%, far 84%.
+    """
+    s, result = doubles_prefix_session
+    assert result.side == "near"
+    assert [o.side for o in result.others] == ["near", "far", "far"]
+    found = lambda metas: np.mean([not m.lost and not m.skipped for m in metas])  # noqa: E731
+    assert found(result.meta) > 0.95 and found(result.others[0].meta) > 0.95
+    assert found(result.others[1].meta) > 0.7 and found(result.others[2].meta) > 0.7
+    tracks = s.other_tracks()
+    assert all(t is not None for t in tracks)
+    for o, track in zip(result.others, tracks):
+        pos = np.asarray(track.positions, dtype=float)
+        ok = np.isfinite(pos).all(axis=1)
+        assert ok.mean() > 0.6, o.side
+        # Positions are in each player's own frame, the far pair's flipped to
+        # their own baseline. The umpire's chair stands two metres beside the
+        # sideline and the crowd well behind either baseline; a player's own
+        # ankle bias reaches about 1.5 m past a line on this camera.
+        x, y = pos[ok, 0], pos[ok, 1]
+        inside = (x > -2.0) & (x < 8.1) & (y > -2.5) & (y < 9.0)
+        assert inside.mean() > 0.99, f"{o.side} player mapped off the court"
+
+
+def test_the_clicked_partner_keeps_his_tracker_through_crossings_and_cuts(doubles_prefix_session):
+    """Guards continuity swapping the two near trackers, measured by their shoes.
+
+    Over the whole game continuity alone swapped them sixteen times and the
+    clicked player, Yoo in yellow shoes, had his own tracker on 33% of the
+    frames. With appearance re-settling the pair after every overlap and
+    cut, the tracker stays on him for most of the clip, the decisions are
+    made on the near side, and the far pair -- matching down to the shoes
+    and too small to read at this resolution -- are marked unresolved,
+    never guessed.
+    """
+    import cv2
+
+    s, result = doubles_prefix_session
+    near_decisions = [m.identity for m in result.meta if m.identity]
+    assert near_decisions and set(near_decisions) & {"kept", "swapped"}, near_decisions
+    far_decisions = [m.identity for m in result.others[1].meta if m.identity]
+    assert far_decisions and set(far_decisions) == {"unresolved"}, far_decisions
+    assert result.extra["identity"]["unresolved"] >= len(set(far_decisions))
+    labels = []
+    with VideoReader(clip_path("doubles_lee_yoo_fu_zhang")) as reader:
+        for i, (_idx, frame) in enumerate(reader.iter_range(0, DOUBLES_PREFIX - 1)):
+            ma, mb = result.meta[i], result.others[0].meta[i]
+            if ma.lost or mb.lost or ma.ambiguous or mb.ambiguous:
+                continue
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            a = _shoe_colour(hsv, result.keypoints[i])
+            b = _shoe_colour(hsv, result.others[0].keypoints[i])
+            if a and b and a == -b:
+                labels.append(a)
+    labels = np.asarray(labels)
+    assert labels.size > 0.5 * DOUBLES_PREFIX, "the two pairs of shoes are readable on most frames"
+    on_yoo = float(np.mean(labels == -1))
+    assert on_yoo > 0.75, f"the subject tracker sat on Yoo for {on_yoo:.0%} of the readable frames"

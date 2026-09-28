@@ -246,6 +246,7 @@ def segment_bouts(
     min_bout_s: float = MIN_BOUT_S,
     contact_halo_s: float = CONTACT_HALO_S,
     others: Sequence[tuple[object, object]] = (),
+    cuts: Sequence[int] = (),
 ) -> BoutSeries:
     """Cut a court track into bouts of work.
 
@@ -272,6 +273,12 @@ def segment_bouts(
             subject stands still under a clear. The per-bout distances and
             speeds stay the subject's own. Leave empty for the biomechanical
             figures, which follow one player by design.
+        cuts: Pose-frame indices that are the first frame after a cut in
+            the clip. No bout spans one: on a clip whose dead time between
+            points was edited out, the two points either side of a cut are
+            one continuous stretch of movement to every other signal here,
+            and were one bout -- and so one rally, with two serves in it --
+            until the cut was made a boundary.
 
     Returns:
         A :class:`BoutSeries`. With no usable speed the whole tracked range is
@@ -317,8 +324,19 @@ def segment_bouts(
             merged[-1][1] = b
         else:
             merged.append([a, b])
+    # Cuts split after the gaps are closed, or a one-frame gap at the cut
+    # would be closed straight back over.
+    split: list[list[int]] = []
+    for a, b in merged:
+        pieces = [[a, b]]
+        for c in sorted(int(c) for c in cuts):
+            last = pieces[-1]
+            if last[0] < c <= last[1]:
+                pieces[-1] = [last[0], c - 1]
+                pieces.append([c, last[1]])
+        split.extend(pieces)
     min_len = max(1, int(round(min_bout_s * fps)))
-    kept = [(a, b) for a, b in merged if (b - a + 1) >= min_len]
+    kept = [(a, b) for a, b in split if (b - a + 1) >= min_len]
 
     note = ""
     not_segmented = False

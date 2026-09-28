@@ -95,6 +95,22 @@ PRESETS: dict[str, dict] = {
         ],
         "hint": "Click near-left singles corner, near-right singles corner, then the right and left ends of the near short-service line.",
     },
+    # A raised camera behind the court often frames the far baseline and
+    # loses the near one below the bottom edge, as a broadcast's main camera
+    # does. The nearest painted line still in the picture is then the doubles
+    # long service line, 76 cm inside the baseline, so the near clicks go on
+    # its ends and the sidelines are extrapolated the last 76 cm; the far
+    # corners are clicked as they are.
+    "doubles_long_service": {
+        "label": "Doubles court, near baseline out of frame (long service line and far corners)",
+        "points": [
+            (0.0, LONG_SERVICE_FROM_BASELINE),
+            (DOUBLES_WIDTH, LONG_SERVICE_FROM_BASELINE),
+            (DOUBLES_WIDTH, COURT_LENGTH),
+            (0.0, COURT_LENGTH),
+        ],
+        "hint": "Click the left and right ends of the near doubles long service line (the line 76 cm inside the baseline), then the far-right and far-left doubles corners.",
+    },
 }
 
 

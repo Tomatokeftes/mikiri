@@ -126,6 +126,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from scipy.ndimage import median_filter
 
 from mikiri.court import (
     COURT_LENGTH,
@@ -234,6 +235,29 @@ EDITED_MAX_REST_S = 8.0
 #: too short to have earned a long rest yet, and calling it edited would be a
 #: guess about what was not filmed.
 EDITED_MIN_RESTS = 6
+#: A splice is a cut between two takes of the *same* scene: a locked-off
+#: camera with the dead time between points edited out, which is what a
+#: match clip from the internet usually is. Almost nothing in the picture
+#: changes across one -- the hall, the court and the boards are where they
+#: were -- so it never reaches :data:`CUT_CHANGED_FRACTION`; what changes is
+#: that every player jumps to a new place at once, a single-frame spike an
+#: order of magnitude above the frames around it. Measured on the men's
+#: doubles clip: the fifteen cuts between points change 4% to 15% of the
+#: picture against a median of 1.6% and a local median of about 1%, so
+#: they are 5.6 to 31 times their neighbourhood; the strongest thing a
+#: rally does, a smash with four players moving, reaches 5.5% but stays
+#: under twice its neighbourhood because it lasts several frames. The
+#: floor keeps a flicker on a still clip out, and the ratio keeps a burst
+#: of movement out. Checked on every other clip here: none on the two
+#: phone recordings and the side-on clip, the three cuts between the four
+#: points of the Lin Dan rally and none inside them, and about twice the
+#: cutaway count on the Momota broadcast, since a cutaway is two cuts.
+SPLICE_CHANGED_MIN = 0.04
+SPLICE_RATIO = 5.0
+#: Half-width, in seconds, of the window whose median a splice is compared
+#: against: long enough to hold a rally's own movement, short enough that a
+#: point cut a second earlier does not raise it.
+SPLICE_WINDOW_S = 0.5
 #: Two cuts closer together than this are treated as one. A single bright
 #: frame, a flash or a dropped frame otherwise reads as a cut straight back,
 #: producing a camera shot one frame long.
@@ -389,6 +413,10 @@ class ClipSegments:
     #: anything derived from the *rests* is measuring the editor and must be
     #: withheld. See :data:`EDITED_WORK_REST`.
     rests_edited: bool = False
+    #: Video frame indices that are the first frame after a cut, of either
+    #: kind: a scene change or a splice between two takes of this court.
+    #: No rally spans one, and a tracker's continuity across one is void.
+    cuts: list[int] = field(default_factory=list)
 
     def state_mask(self, *states: str) -> np.ndarray:
         """Boolean mask over the scanned range, True in any of ``states``."""
@@ -448,6 +476,7 @@ class ClipSegments:
             "segments": [s.to_dict() for s in self.segments],
             "motion": [None if not np.isfinite(v) else round(float(v), 2) for v in self.motion],
             "start": int(self.start),
+            "cuts": [int(c) for c in self.cuts],
             "summary": self.summary(),
         }
 
@@ -844,6 +873,39 @@ def find_cuts(changed: np.ndarray, fps: float, min_shot_s: float = MIN_SHOT_S) -
     return kept
 
 
+def find_splices(changed: np.ndarray, fps: float, min_shot_s: float = MIN_SHOT_S) -> list[int]:
+    """Indices where the same scene was cut and rejoined: the cuts between points.
+
+    See :data:`SPLICE_CHANGED_MIN`. A whole-picture cut passes this test
+    too, so the result includes everything :func:`find_cuts` finds; callers
+    that need only the scene changes keep using that.
+
+    Args:
+        changed: Per-frame share of pixels that changed, from a
+            :class:`MotionScan`.
+        fps: Frames per second.
+        min_shot_s: Splices closer together than this collapse into one.
+
+    Returns:
+        Sorted indices, relative to the scan, of the first frame after each
+        splice.
+    """
+    x = np.nan_to_num(np.asarray(changed, dtype=float), nan=0.0)
+    if x.size < 3:
+        return []
+    half = max(1, int(round(SPLICE_WINDOW_S * fps)))
+    local = median_filter(x, size=2 * half + 1, mode="nearest")
+    hits = np.flatnonzero((x >= SPLICE_CHANGED_MIN) & (x >= SPLICE_RATIO * np.maximum(local, 1e-4)))
+    if hits.size == 0:
+        return []
+    spacing = max(1, int(round(min_shot_s * fps)))
+    kept = [int(hits[0])]
+    for h in hits[1:]:
+        if int(h) - kept[-1] >= spacing:
+            kept.append(int(h))
+    return kept
+
+
 def play_threshold(motion: np.ndarray) -> tuple[float, bool]:
     """Where to cut this clip's motion into play and not-play.
 
@@ -1030,9 +1092,20 @@ def segment_clip(
         if (b - a + 1) >= interval:
             states[a : b + 1] = STATE_INTERVAL
 
+    # A splice between two points on a locked-off camera changes nothing in
+    # the picture but where the players stand, so the motion split does not
+    # see it and two points cut together come out as one stretch of play --
+    # on the doubles clip, one of 90 s holding eight points. A cut of either
+    # kind therefore always starts a new segment, whatever the state.
+    splices = set(find_splices(scan.changed, fps))
+    all_cuts = sorted(set(cuts) | splices)
+    boundary = np.zeros(n, dtype=bool)
+    for c in all_cuts:
+        if 0 < c < n:
+            boundary[c] = True
     segments: list[Segment] = []
     for i in range(n):
-        if segments and states[i] == segments[-1].state:
+        if segments and states[i] == segments[-1].state and not boundary[i]:
             segments[-1].end = scan.start + i
         else:
             segments.append(Segment(scan.start + i, scan.start + i, str(states[i]), fps))
@@ -1052,6 +1125,12 @@ def segment_clip(
     if cuts and not directed:
         plural = "s" if len(cuts) > 1 else ""
         notes.append(f"{len(cuts)} camera cut{plural} found; each shot split separately")
+    n_splices = len(splices - set(cuts))
+    if n_splices:
+        plural = "s" if n_splices > 1 else ""
+        notes.append(
+            f"{n_splices} cut{plural} between points on the same camera found; no rally spans one"
+        )
     off = sum(1 for c in on_court if not c)
     if off:
         plural = "s" if off > 1 else ""
@@ -1066,6 +1145,7 @@ def segment_clip(
         n_frames=n,
         start=scan.start,
         not_segmented=not_segmented,
+        cuts=[int(scan.start + c) for c in all_cuts if 0 < c < n],
     )
 
     # In an unedited recording somebody eventually takes a proper break. When
