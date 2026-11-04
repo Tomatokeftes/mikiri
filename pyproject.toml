@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "Local video biomechanics app for badminton: pose tracking, joint angles, events and export packs."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
-authors = [{ name = "Mikiri" }]
+license = { file = "LICENSE" }
+authors = [{ name = "Theodoros Visvikis" }]
 keywords = ["badminton", "biomechanics", "pose-estimation", "video-analysis"]
 classifiers = [
   "Programming Language :: Python :: 3",

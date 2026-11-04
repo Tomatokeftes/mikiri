@@ -381,3 +381,7 @@ front end), `tests`, `docs`, `demo` (the synthetic clip), `benchmarks` (real
 footage and what each clip is for). Every non-obvious choice is written up in
 [DECISIONS.md](DECISIONS.md), and [CLAUDE.md](CLAUDE.md) is the orientation for
 anyone (or anything) picking the codebase up cold.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The pose models are downloaded on first run and come under their own terms.
