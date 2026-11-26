@@ -1273,10 +1273,11 @@ function renderSeams() {
   if (!s) {
     $('#seams-summary').innerHTML = '';
     $('#seams-note').textContent = 'The shuttle has not been tracked across the play yet.';
-    $('#seams-explain').textContent = 'A contact is the shuttle turning, so its turns are where the hits are. Tracking costs about half a second a frame and only runs on the stretches of play.';
+    $('#seams-explain').textContent = 'A contact is the shuttle turning, so its turns are where the hits are. Tracking only runs on the stretches of play: a few hundredths of a second a frame with the learned detector installed, about half a second without it.';
     return;
   }
   const rows = [kv('turns found', String(s.n_seams)), kv('judged', `${s.n_judged} of ${s.n_seams}`)];
+  if (s.source) rows.push(kv('detector', s.source === 'tracknet' ? 'learned (TrackNetV3)' : 'classical'));
   if (s.n_judged) {
     rows.push(kv('were hits', `${s.n_contacts} (near ${s.by_side.near}, far ${s.by_side.far})`));
     rows.push(kv('were not', String(s.n_turns)));

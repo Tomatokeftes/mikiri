@@ -180,6 +180,19 @@ MIN_OUTSIDE_PLAYER_SHARE = 0.5
 #: a turn of this size is a real change of direction and not the measurement
 #: wandering. It is emphatically *not* a contact -- see :func:`turning_seams`.
 MIN_SEAM_TURN_DEG = 150.0
+#: Turn, in degrees, that a shuttle *seen straight through* must exceed to be
+#: raised. Lower than :data:`MIN_SEAM_TURN_DEG` because nothing has to be
+#: assumed about an unseen gap: both directions are measured on consecutive
+#: frames either side of one frame. Set from the first track that could show
+#: such turns at all, the learned one on frames 10861-11800 of
+#: ``momota_lindan_broadcast``: with both speeds above
+#: :data:`MIN_SEAM_SPEED_PX`, sixteen in-flight turns came out as eleven of 98
+#: degrees or more and five of 36 or less, with nothing between. All eleven
+#: were looked at as thumbnails and each has a player's racket at the turn; an
+#: overhead clear from the far end turns the image direction by about 100
+#: degrees and not 180, which is why the between-flights bar would lose it.
+#: One range of one clip, so the gap is an observation and not a law.
+MIN_INFLIGHT_TURN_DEG = 90.0
 #: Speed, in pixels a frame, below which a flight's direction is not worth
 #: differencing. The turn figures above were measured above this bar; under it
 #: the step is a couple of pixels and its angle is mostly the centroid jitter
@@ -369,11 +382,16 @@ class ShuttleTrack:
     score: np.ndarray  # (n,) detection quality 0..1, nan where unknown
     fps: float
     start: int = 0  # index of the first frame of the range in the source video
+    #: Which detector produced it: ``"classical"`` for :func:`track_shuttle`,
+    #: ``"tracknet"`` for the learned one in :mod:`mikiri.tracknet`. Provenance:
+    #: the two fail differently, and a reader of a track is owed which it has.
+    source: str = "classical"
 
     def to_dict(self) -> dict:
         """JSON-friendly view (rounded)."""
         return {
             "start": int(self.start),
+            "source": self.source,
             "fps": round(float(self.fps), 3),
             "xy": [
                 None if not np.isfinite(p).all() else [round(float(p[0]), 1), round(float(p[1]), 1)]
@@ -1577,11 +1595,13 @@ def _player_blob_cap(player_boxes: dict[int, list] | None, frame: int) -> float 
 
 @dataclass
 class Seam:
-    """Two flights meeting at a turn no free flight could have made.
+    """A turn in the shuttle's path that no free flight could have made.
 
-    The shuttle was seen, lost, and seen again going a very different way.
-    Between :attr:`before` and :attr:`after` something reversed it, and the
-    honest statement of what that was is: not known here.
+    Either the shuttle was seen, lost, and seen again going a very different
+    way, or -- on a track continuous enough to show it -- it was seen turning
+    from one frame to the next, in which case :attr:`gap` is zero. Between
+    :attr:`before` and :attr:`after` something reversed it, and the honest
+    statement of what that was is: not known here.
 
     **A seam is not a contact, and the reason is the camera.** At the top of a
     lift the shuttle stalls and falls back, and from behind the baseline that
@@ -1691,6 +1711,7 @@ def turning_seams(
     min_turn_deg: float = MIN_SEAM_TURN_DEG,
     min_speed_px: float = MIN_SEAM_SPEED_PX,
     max_gap_s: float = MAX_SEAM_GAP_S,
+    min_inflight_turn_deg: float = MIN_INFLIGHT_TURN_DEG,
 ) -> list[Seam]:
     """Where a tracked shuttle changed direction more than free flight allows.
 
@@ -1699,14 +1720,20 @@ def turning_seams(
     not pretend otherwise: :class:`Seam` says why, at length, and every seam
     returned here is a question rather than an answer.
 
-    Two known limits, both stated rather than worked around. Only turns
-    *between* flights are found, because that is what has been measured: a
-    contact the tracker never lost the shuttle through would turn within one
-    flight, and whether that happens on real footage is unknown, so looking for
-    it would be a guess wearing a measurement's clothes. And a seam whose
-    flights are slow is dropped rather than reported with a wide error bar,
-    because a stalling shuttle is precisely the case where the direction is
-    genuinely ambiguous.
+    Turns are looked for in two places. *Between* flights, across a gap the
+    shuttle went unseen for, which is all the classical track ever shows
+    because it loses the shuttle at the racket. And *within* a flight, which
+    the learned track (:mod:`mikiri.tracknet`) made measurable by following the
+    shuttle through the hit: on the one range examined, half the turns were of
+    this kind. See :data:`MIN_INFLIGHT_TURN_DEG`.
+
+    One limit is stated rather than worked around: a turn whose flights are
+    slow is dropped rather than reported with a wide error bar, because a
+    stalling shuttle is precisely the case where the direction is genuinely
+    ambiguous. On a continuous track that is also what keeps the top of a lift
+    out -- the five apexes in the range examined all passed at under 5 px a
+    frame -- and it is equally what loses a soft net shot, which nothing here
+    recovers.
 
     Args:
         track: A track from :func:`track_shuttle`.
@@ -1715,13 +1742,15 @@ def turning_seams(
             frame. See :data:`MIN_SEAM_SPEED_PX`.
         max_gap_s: Longest unseen gap two flights may span. See
             :data:`MAX_SEAM_GAP_S`.
+        min_inflight_turn_deg: Turn a shuttle seen straight through must
+            exceed. See :data:`MIN_INFLIGHT_TURN_DEG`.
 
     Returns:
         Seams in frame order, with absolute frame numbers. Empty when the track
-        holds fewer than two flights.
+        holds no flight long enough to measure a direction on.
     """
     runs = _flights(track)
-    if len(runs) < 2:
+    if not runs:
         return []
     max_gap = max(1, int(round(max_gap_s * float(track.fps or 0.0))))
     out: list[Seam] = []
@@ -1741,6 +1770,55 @@ def turning_seams(
             Seam(
                 before=int(track.start + cur[-1]),
                 after=int(track.start + nxt[0]),
+                turn_deg=float(turn),
+                in_deg=float(in_deg),
+                out_deg=float(out_deg),
+                in_speed_px=float(in_speed),
+                out_speed_px=float(out_speed),
+            )
+        )
+    for run in runs:
+        out.extend(_turns_within(track, run, min_inflight_turn_deg, min_speed_px))
+    out.sort(key=lambda seam: seam.before)
+    return out
+
+
+def _turns_within(
+    track: ShuttleTrack, run: list[int], min_turn_deg: float, min_speed_px: float
+) -> list[Seam]:
+    """Turns inside one flight, each the sharpest within its own neighbourhood.
+
+    At every frame with :data:`SEAM_FIT_POINTS` detections either side, the
+    direction arriving is compared with the direction leaving from the next
+    frame on, exactly as :func:`turning_seams` does across a gap. A real turn
+    shows on several neighbouring frames, since each span straddles it a little
+    differently, so only the largest within :data:`SEAM_FIT_POINTS` frames is
+    kept: one hit must be one question.
+    """
+    k = SEAM_FIT_POINTS
+    found: list[tuple[int, float, float, float, float, float]] = []
+    for j in range(k - 1, len(run) - k):
+        in_deg, in_speed = _end_direction(track, run[: j + 1], leaving=True)
+        out_deg, out_speed = _end_direction(track, run[j + 1 :], leaving=False)
+        if not all(math.isfinite(v) for v in (in_deg, in_speed, out_deg, out_speed)):
+            continue
+        if in_speed < min_speed_px or out_speed < min_speed_px:
+            continue
+        turn = abs((out_deg - in_deg + 180.0) % 360.0 - 180.0)
+        if turn >= min_turn_deg:
+            found.append((run[j], turn, in_deg, out_deg, in_speed, out_speed))
+    out: list[Seam] = []
+    for i, turn, in_deg, out_deg, in_speed, out_speed in found:
+        rivals = [t for f, t, *_ in found if abs(f - i) <= k and f != i]
+        # Ties go to the earlier frame, so a plateau still yields one seam.
+        if any(t > turn for t in rivals) or any(
+            t == turn and f < i for f, t, *_ in found if abs(f - i) <= k
+        ):
+            continue
+        out.append(
+            Seam(
+                before=int(track.start + i),
+                after=int(track.start + i + 1),
                 turn_deg=float(turn),
                 in_deg=float(in_deg),
                 out_deg=float(out_deg),

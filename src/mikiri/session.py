@@ -1571,8 +1571,12 @@ class ProjectSession:
                         f"{seam.before / fps:.1f} s. Did a racket do it?"
                     ),
                     "detail": (
-                        f"Last seen at frame {seam.before}, next seen at {seam.after}. "
-                        "No free flight turns this far, but the top of a lift reverses "
+                        (
+                            f"Seen turning between frames {seam.before} and {seam.after}. "
+                            if seam.gap == 0
+                            else f"Last seen at frame {seam.before}, next seen at {seam.after}. "
+                        )
+                        + "No free flight turns this far, but the top of a lift reverses "
                         "the same way from behind the baseline, so this cannot be told "
                         "apart without looking. Scrub to the hit before answering."
                     ),
@@ -1824,11 +1828,19 @@ class ProjectSession:
 
         Returns the number of turns found for review.
         """
+        from mikiri import tracknet
         from mikiri.shuttle import background_plate, track_shuttle, turning_seams
 
         stretches = self.play_stretches()
         if not stretches:
             return 0
+        # The learned detector when its file is there, the classical one when
+        # it is not. Measured side by side on the benchmark broadcast the
+        # learned one sees the shuttle on far more frames and at a tenth of
+        # the cost (see mikiri.tracknet), so it is the default and not an
+        # option; the track it returns says which of the two spoke.
+        model = tracknet.model_path(self.settings.resolved_models_dir())
+        net = tracknet.TrackNet(model) if model.is_file() else None
         H = self.homography()
         boxes = self.player_boxes()
         total = sum(hi - lo + 1 for lo, hi in stretches)
@@ -1837,10 +1849,16 @@ class ProjectSession:
         with VideoReader(self.info.path, self.info) as reader:
             # One plate for the whole clip rather than one per stretch: the
             # camera does not move between rallies, and building it per stretch
-            # would pay for a sample of frames again on every one of them.
-            plate = background_plate(
-                reader, self.project.trim_start, self.project.trim_end, colour=True
-            )
+            # would pay for a sample of frames again on every one of them. The
+            # learned detector's is taken over the play only, because it is
+            # shown the plate as a picture of the room and a median with the
+            # cutaways in it is no room.
+            if net is not None:
+                plate = tracknet.background(reader, stretches)
+            else:
+                plate = background_plate(
+                    reader, self.project.trim_start, self.project.trim_end, colour=True
+                )
             for k, (lo, hi) in enumerate(stretches):
                 span = hi - lo + 1
                 base = done
@@ -1852,19 +1870,32 @@ class ProjectSession:
                             f"Shuttle through play {k + 1} of {len(stretches)}",
                         )
 
-                tracks.append(
-                    track_shuttle(
-                        reader,
-                        lo,
-                        hi,
-                        self.info.fps,
-                        homography=H,
-                        player_boxes=boxes,
-                        plate=plate,
-                        check_cancel=check_cancel,
-                        progress=report,
+                if net is not None:
+                    tracks.append(
+                        net.track(
+                            reader,
+                            lo,
+                            hi,
+                            self.info.fps,
+                            plate=plate,
+                            check_cancel=check_cancel,
+                            progress=report,
+                        )
                     )
-                )
+                else:
+                    tracks.append(
+                        track_shuttle(
+                            reader,
+                            lo,
+                            hi,
+                            self.info.fps,
+                            homography=H,
+                            player_boxes=boxes,
+                            plate=plate,
+                            check_cancel=check_cancel,
+                            progress=report,
+                        )
+                    )
                 done += span
         seams = [s for t in tracks for s in turning_seams(t)]
         with self.lock:
@@ -1904,8 +1935,12 @@ class ProjectSession:
         }
         judged = [verdicts[(s.before, s.after)] for s in seams if (s.before, s.after) in verdicts]
         contacts = [v for v in judged if v.verdict == "contact"]
+        sources = sorted({t.source for t in self._shuttle_tracks})
         return {
             "n_seams": len(seams),
+            # Which detector the track came from: the learned one and the
+            # classical one fail differently, so the count is owed its source.
+            "source": sources[0] if len(sources) == 1 else None,
             "n_judged": len(judged),
             "n_contacts": len(contacts),
             "n_turns": len(judged) - len(contacts),
