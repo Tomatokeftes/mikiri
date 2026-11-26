@@ -103,6 +103,7 @@ Notes that will otherwise cost time:
 | `footwork.py` | split steps and the moves they prepare |
 | `strokes.py` | swing detection and the two-tier stroke description |
 | `shuttle.py`, `shots.py` | classical shuttle search after each contact, the rally-long track and the turns in it, and shot naming gated on the first |
+| `tracknet.py` | the learned shuttle detector (TrackNetV3 through onnxruntime), used for the rally-long track when `tracknetv3.onnx` is in the models folder; `scripts/export_tracknet.py` makes that file |
 | `coaching.py` | turning the numbers into at most three things to work on |
 | `tracking.py` | one tracker per player, each held to its side of the net by the homography, and all of them inside the court |
 | `pipeline.py` | the tracking run and its cache (`CACHE_VERSION`); segments the clip first and spends the model only where there is something to see |
@@ -282,6 +283,32 @@ Not verified, and the module docstrings say so:
   positions. And only two rallies were cropped. So the launch path is now
   worth believing when it speaks, and says nothing about how often it should
   have. Contact sheets are in the 2026-09-07 session.
+* **A learned shuttle detector replaced the classical one for the rally-long
+  track on 2026-11-26, and it is the first executive decision of the restart:
+  perception may be a trained network, claims may not.** The user came back
+  after two months, said the app felt mid, and asked for fundamental decisions;
+  the diagnosis was that everything tactical waits on the shuttle and the
+  contact, and both were hand-built. TrackNetV3 (MIT, code and weights) through
+  onnxruntime finds all nineteen hand-read positions (worst 12 px, which is its
+  512x288 grid), puts a detection on 829 of 940 frames where the classical
+  track has 489, and costs about 40 ms a frame against 400. Because it follows
+  the shuttle through the hit, turns are now found *within* a flight
+  (`MIN_INFLIGHT_TURN_DEG`, 90 degrees), and on the one range examined the top
+  of a lift separates from a racket by the speed bar that already existed:
+  apexes under 5 px a frame, hits 10 or more. Through the app's own job the
+  whole of game one gives 201 turns for 29 points -- 6.9 a point against a
+  published 9.9 and the pose chain's 17 -- so the turns undercount and the
+  wrists overcount. **Not established:** recall, since no flight is labelled;
+  that a turn is a hit, since the 201 are unreviewed and still raised as
+  questions; soft shots, which the speed bar drops; any camera but this
+  broadcast (about five of 48 sampled detections on `doubles_club_hall` were
+  not the shuttle, and portrait is unmeasured). **Not done:** the launch path
+  and shot names still run on the classical search; contacts are not yet
+  *taken* from the turns; the track is still its own button and not part of
+  the run. The model file is not shipped or downloaded:
+  `scripts/export_tracknet.py` makes it, once, in an environment with PyTorch,
+  and without it the app falls back to the classical track. See
+  `docs/shuttle.md`.
 * **Reading contacts off a rally-long shuttle track: measured, and it does
   not work yet.** The idea was that a contact *is* the shuttle turning, so
   the turns would settle `MIN_PEAK_SPEED_BH` without hand-labelling. With the

@@ -704,9 +704,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def track_shuttle_route(pid: str) -> dict:
         """Track the shuttle across the play, and raise its turns as questions.
 
-        Separate from the launch search above and far more expensive -- about
-        0.4 s a frame -- so it is its own button and its own job rather than
-        something a run does on the way past.
+        Separate from the launch search above and, on the classical detector,
+        far more expensive -- about 0.4 s a frame -- so it is its own button
+        and its own job rather than something a run does on the way past. With
+        the learned detector installed it is a few hundredths of a second a
+        frame, which is cheap enough to fold into the run; that has not been
+        done yet.
         """
         s = session(pid)
 

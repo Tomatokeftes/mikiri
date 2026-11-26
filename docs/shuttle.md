@@ -97,10 +97,10 @@ manufacture a reversal out of nothing. And the gap must be under 0.8 s, because
 beyond that the two flights need not be the same passage of the same shuttle at
 all -- joining them would invent a turn rather than measure one.
 
-**Only turns between flights are found.** A contact the tracker never lost the
-shuttle through would turn within one flight, and whether that happens on real
-footage is unknown here, so looking for it would be a guess wearing a
-measurement's clothes.
+**Only turns between flights were found when this was written.** A contact the
+tracker never lost the shuttle through would turn within one flight, and on the
+classical track that never happens. The learned detector made it measurable,
+and turns within a flight are now found too; see the section on it below.
 
 `ProjectSession.track_shuttle_over_play` runs the track over the stretches of
 play the clip's own segmentation gives, which on a calibrated broadcast is the
@@ -154,6 +154,77 @@ gap this document already records for the launch pass -- 13 of 38 is not 13
 right out of 38 possible -- and closing it needs the flights hand-labelled, not
 merely the turns judged. The Turns panel reports what was judged and refuses
 the rate.
+
+## The learned detector, and what it changed (2026-11-26)
+
+Everything above this section describes finding the shuttle from first
+principles. It got as far as being right when it spoke and silent most of the
+time, at 0.4 s a frame. On 2026-11-26 a published network, TrackNetV3 (Sun et
+al., 2023; code and weights MIT), was run on the same footage, and the
+comparison was not close. It is now what the rally-long track uses whenever
+`tracknetv3.onnx` is in the models folder, with the classical track as the
+fallback when it is not. `mikiri/tracknet.py` is the module and
+`scripts/export_tracknet.py` makes the file; the network runs through
+onnxruntime, which pose already needs, so the app gained no dependency.
+
+Measured on `momota_lindan_broadcast`:
+
+| | classical | learned |
+| --- | --- | --- |
+| hand-read positions found, of 19 | 19, within 8 px | 19, worst 12 px |
+| frames with a detection, 10861-11800 | 489 of 939 | 829 of 940 |
+| turns raised on that range | 12 | 20 |
+| cost per frame, 1920x1080, this CPU | about 400 ms | 25 ms inference, 36 to 39 with decoding |
+| needs a calibrated court and player boxes | yes | no |
+
+The 12 px is the network's grid and not a miss: it sees a 512x288 picture, so
+one of its pixels is 3.75 of the source's. Forty-eight detections sampled
+across the range were cropped and looked at, and all 48 are the shuttle,
+including those in front of the LED boards and the crowd.
+
+**The track is continuous through the hit, and that changes what a turn is.**
+The classical track loses the shuttle at the racket, so every turn it shows is
+across a gap. The learned one follows it through, and half the turns on that
+range are seen from one frame to the next. Looking for those was refused above
+as a guess; it is now a measurement. With both speeds above 10 px a frame the
+in-flight turns on that range split into eleven of 98 degrees or more and five
+of 36 or less, with nothing between, and all eleven have a player's racket at
+the turn in a thumbnail. Two of them turn about 100 degrees and not 180 -- an
+overhead clear from the far end -- which is why in-flight turns have their own
+bar of 90 degrees (`MIN_INFLIGHT_TURN_DEG`) rather than the 150 used across a
+gap.
+
+**And the top of a lift separates after all.** The apex confusion recorded
+above stands for a track that loses the shuttle. On a continuous one the five
+apexes in the range all pass at under 5 px a frame, against 10 or more for
+every turn with a racket at it, so the speed bar that already existed is what
+tells them apart. One range of one clip: an observation, not yet a rule.
+
+**The whole of game one, through the app's own job:** 10,099 play frames in 33
+stretches, 390 s, a detection on 86% of them, and 201 turns -- 130 seen straight
+through and 71 across a gap. That is 6.9 turns a point over 29 points, against
+a published elite 9.9 shots a rally, where the pose detector's chain holds 494
+contacts, or 17. So the turns undercount and the wrists overcount, from
+opposite sides. 180 of the 201 turns have a pose contact within ten frames;
+only 235 of the 494 pose contacts have a turn within ten. Five stretches hold
+no turn at all.
+
+What this does **not** establish:
+
+* **Recall.** Still no flight in the repository is labelled end to end. 86% is
+  a count of frames with a detection, and 201 is a count of turns found.
+* **That a turn is a hit.** The eleven were read as thumbnails, not answered
+  one by one in the review queue, and the 201 have not been looked at. They
+  are still raised as questions.
+* **Soft shots.** A net shot or a serve leaves at under 10 px a frame and the
+  speed bar drops it, which is one known reason for 6.9 against 9.9.
+* **Other cameras.** On `doubles_club_hall` (20 s, 60 fps) about five of 48
+  sampled detections were a racket shaft, a shoe or a sign, and several were
+  the shuttle lying on the floor between points. A portrait clip is squashed
+  into the network's 16:9 input and has not been measured at all.
+* **The launch path.** *Find shuttle* and the shot names still run on the
+  classical search after a contact. Reading launches off the learned track is
+  the obvious next step and is not done.
 
 ## Shot names need a side-on camera, and Mikiri checks
 
@@ -315,8 +386,9 @@ Even so, speed is the most caveated number here:
 
 The search decodes video, so it never runs implicitly. It is a background job
 with progress and a cancel button, and its results survive until tracking is
-re-run. The general tracker costs roughly a quarter of a second per frame on a
-2340x1080 clip, which is why only the post-hit search is exposed in the app.
+re-run. The classical general tracker costs roughly a quarter of a second per
+frame on a 2340x1080 clip, which is why only the post-hit search was exposed in
+the app at first. The learned detector costs about 40 ms a frame with decoding.
 
 ## What is deliberately not attempted
 

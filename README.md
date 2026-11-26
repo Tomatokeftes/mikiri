@@ -391,4 +391,4 @@ anyone (or anything) picking the codebase up cold.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The pose models are downloaded on first run and come under their own terms.
+MIT, see [LICENSE](LICENSE). The pose models are downloaded on first run and come under their own terms. The optional learned shuttle detector is TrackNetV3 (Sun et al., 2023), MIT, code and weights; it is not downloaded, and `scripts/export_tracknet.py` says how to install it.
