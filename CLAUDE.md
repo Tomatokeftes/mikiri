@@ -108,7 +108,7 @@ Notes that will otherwise cost time:
 | `pipeline.py` | the tracking run and its cache (`CACHE_VERSION`); segments the clip first and spends the model only where there is something to see |
 | `benchmarks.py` | dev tooling: finding the benchmark clips and reading their manifest |
 | `session.py` | in-memory state for one open project; the layer between the API and the maths |
-| `server/` | FastAPI app plus `static/` (one `app.js`, no build step) |
+| `server/` | FastAPI app plus `static/` (one `app.js`, no build step); the interface is two views of one project, Report and Analysis, built from the tokens and components in `docs/design-system.md` |
 | `pose/` | RTMPose, MediaPipe and synthetic backends behind one interface |
 
 Docs are one file per subject in `docs/`, and `DECISIONS.md` carries the

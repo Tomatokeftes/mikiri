@@ -8,33 +8,46 @@
 </head>
 <body>
 <header id="topbar">
-  <div class="brand">Mikiri <span class="sub">badminton movement, footwork and technique from video</span></div>
+  <div class="brand">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="5.6" cy="14.4" r="2.7" fill="currentColor" stroke="none"/><path d="M7.4 12.6 16.6 3.4M8 13.4l9-3.2M6.6 12 9.8 3M9.8 3q5.4.6 7.2 7.2"/></svg>
+    Mikiri
+  </div>
   <div id="project-tabs" class="tabs"></div>
   <div class="spacer"></div>
-  <button id="open-btn" class="btn">Open video</button>
-  <button id="open-project-btn" class="btn">Open project</button>
-  <button id="save-btn" class="btn" disabled>Save</button>
-  <button id="export-btn" class="btn" disabled>Export pack</button>
-  <button id="compare-btn" class="btn" disabled>Compare</button>
-  <button id="explain-btn" class="btn" title="Show the sentence under each panel title and each withheld number">What this means</button>
-  <button id="keys-btn" class="btn" title="Keyboard shortcuts (?)">Keys</button>
-  <button id="settings-btn" class="btn">Settings</button>
+  <div id="view-switch" class="segmented project-only" role="group" aria-label="What the right-hand side shows">
+    <button type="button" id="view-report" aria-pressed="true" title="What happened in the clip: the score, the rallies, where the players stood">Report</button>
+    <button type="button" id="view-analysis" aria-pressed="false" title="Every panel and every tool: angles, events, contacts, the review queue, keypoint correction">Analysis</button>
+  </div>
+  <div class="topbar-actions">
+    <button id="open-btn" class="btn">Open video</button>
+    <button id="open-project-btn" class="btn">Open project</button>
+    <button id="save-btn" class="btn" disabled>Save</button>
+    <button id="export-btn" class="btn" disabled>Export pack</button>
+    <button id="compare-btn" class="btn" disabled>Compare</button>
+    <span class="topbar-sep" aria-hidden="true"></span>
+    <button id="explain-btn" class="btn ghost" aria-pressed="false" title="Show the sentence under each panel title and each withheld number">What this means</button>
+    <button id="keys-btn" class="btn ghost" title="Keyboard shortcuts (?)">Keys</button>
+    <button id="settings-btn" class="btn ghost">Settings</button>
+  </div>
 </header>
 
 <main id="main" class="no-project">
   <section id="welcome">
+    <div class="eyebrow">Badminton from one camera, on this machine</div>
     <h1>Load a clip to begin</h1>
-    <p>Open a clip and run tracking on the player: angles, events, an assessment and coaching follow.
-       Calibrate the court, four clicks on its corners, for footwork in metres and rallies; track the
+    <p class="lede">Open a clip and run tracking on the player: angles, events, an assessment and coaching
+       follow. Calibrate the court, four clicks on its corners, for footwork in metres and rallies; track the
        player at the other end as well for serves, outcomes and the score.</p>
-    <p class="muted small-text">For technique, film side-on, 4 to 5 m back, camera at hip to chest height, 120 fps or more.
-       For the match figures, film from a raised camera behind one end. Mikiri measures in the image
-       plane and on the court plane: it is a single-camera tool and says so where that limits it.</p>
     <div class="welcome-actions">
       <button class="btn primary" id="welcome-open">Open video</button>
       <button class="btn" id="welcome-open-project">Open project</button>
     </div>
     <p class="muted small-text">You can also drop a video here; it is copied into the Mikiri folder first.</p>
+    <div class="film-tips">
+      <div class="film-tip"><h2>For the match figures</h2><p>Film from a raised camera behind one end.</p></div>
+      <div class="film-tip"><h2>For technique</h2><p>Film side-on, 4 to 5 m back, camera at hip to chest height, 120 fps or more.</p></div>
+    </div>
+    <p class="muted small-text">Mikiri measures in the image plane and on the court plane: it is a single-camera tool and says so where that limits it.</p>
     <div id="recent" class="recent hidden">
       <div class="recent-title muted small-text">Recently saved</div>
       <ul id="recent-list" class="recent-list"></ul>
@@ -49,7 +62,7 @@
 
   <section id="workspace">
     <div id="video-column">
-      <div id="video-info" class="info-row"></div>
+      <div id="video-info" class="info-row analysis-only"></div>
       <div id="video-wrap" class="video-wrap">
         <canvas id="video-canvas"></canvas>
         <div id="video-overlay-msg" class="overlay-msg hidden"></div>
@@ -60,8 +73,8 @@
       </div>
       <div class="controls">
         <button id="play-btn" class="btn icon" title="Space">Play</button>
-        <button id="prev-frame" class="btn icon" title="Left arrow">-1</button>
-        <button id="next-frame" class="btn icon" title="Right arrow">+1</button>
+        <button id="prev-frame" class="btn icon" title="Left arrow" aria-label="Back one frame">-1</button>
+        <button id="next-frame" class="btn icon" title="Right arrow" aria-label="Forward one frame">+1</button>
         <label>Speed
           <select id="speed">
             <option value="0.1">0.1x</option><option value="0.25">0.25x</option>
@@ -71,6 +84,8 @@
         </label>
         <span class="frame-readout">Frame <b id="frame-number">0</b> / <span id="frame-total">0</span>
           <span id="frame-time">0.000 s</span></span>
+      </div>
+      <div class="overlays analysis-only" role="group" aria-label="Drawn over the video">
         <label class="chk"><input type="checkbox" id="show-skeleton" checked> Skeleton</label>
         <label class="chk"><input type="checkbox" id="show-labels"> Labels</label>
         <label class="chk"><input type="checkbox" id="show-court" checked> Court points</label>
@@ -83,13 +98,21 @@
         <button id="redo-btn" class="btn icon" title="Ctrl+Y" disabled>Redo</button>
       </div>
       <div id="timeline" class="timeline">
-        <canvas id="timeline-canvas"></canvas>
+        <canvas id="timeline-canvas" role="img" aria-label="Timeline of the clip. Left and right arrows step a frame, Home and End jump to the ends of the trimmed range."></canvas>
+      </div>
+      <div class="timeline-legend explain" aria-hidden="true">
+        <span><i style="background:#3fc380"></i>play</span>
+        <span><i style="background:#5b6270"></i>rest</span>
+        <span><i style="background:#ff6b6b"></i>court not in view</span>
+        <span><i style="background:#6ea8ff"></i>trimmed range</span>
+        <span><i style="background:#b388ff"></i>contact</span>
+        <span><i style="background:#ffd166"></i>event</span>
       </div>
       <div class="trim-row">
         <button class="btn small" id="set-in">Set in (I)</button>
-        <input id="trim-in" type="number" min="0" value="0">
+        <input id="trim-in" type="number" min="0" value="0" aria-label="In point, frame">
         <button class="btn small" id="set-out">Set out (O)</button>
-        <input id="trim-out" type="number" min="0" value="0">
+        <input id="trim-out" type="number" min="0" value="0" aria-label="Out point, frame">
         <span id="trim-summary" class="muted"></span>
         <span class="spacer"></span>
         <button class="btn" id="court-setup-btn" title="Four clicks on the court corners: footwork in metres, rallies and the match figures">Court calibration</button>
@@ -102,7 +125,7 @@
         <button class="btn small primary" id="next-step-btn"></button>
         <button class="btn small" id="next-step-dismiss" title="Hide this for this project">Hide</button>
       </div>
-      <div id="edit-panel" class="panel hidden">
+      <div id="edit-panel" class="panel analysis-only hidden">
         <div class="panel-title">Keypoint correction</div>
         <p class="muted small-text">Drag a joint to fix it. Right-click a magenta (corrected) joint to remove the correction. Corrected points stay fixed when smoothing is on.</p>
         <div class="row">
@@ -129,11 +152,59 @@
     </div>
 
     <div id="side-column">
+      <div id="report">
+        <div class="report-head">
+          <div class="eyebrow" id="report-kind">Report</div>
+          <h1 id="report-title"></h1>
+          <div class="meta" id="report-meta"></div>
+        </div>
+        <div class="panel report-section hidden" id="report-score">
+          <h2 id="report-score-title">Result</h2>
+          <div id="report-score-body"></div>
+          <p class="report-note" id="report-score-note"></p>
+          <p class="report-note explain" id="report-score-explain">Confirmed means you answered it, inferred means the rules of the game derived it from confirmed facts, auto means unreviewed detection. No result is stated while it would rest on auto alone.</p>
+        </div>
+        <div class="ask hidden" id="report-ask">
+          <div class="what" id="report-ask-text"></div>
+          <button type="button" class="btn primary" id="report-ask-btn">Answer them</button>
+        </div>
+        <div class="panel report-section hidden" id="report-rallies">
+          <h2><span id="report-rallies-title">Rallies</span><span class="count muted" id="report-rallies-count"></span></h2>
+          <ul class="rally-list" id="report-rally-list"></ul>
+          <p class="report-note" id="report-rallies-note"></p>
+        </div>
+        <div class="panel report-section hidden" id="report-coverage">
+          <h2>Court coverage<span class="spacer"></span>
+            <label class="count">Show <select id="report-court-scope">
+              <option value="rally">this rally</option>
+              <option value="clip">whole clip</option>
+            </select></label>
+          </h2>
+          <div class="report-court">
+            <canvas id="report-court-canvas" role="img" aria-label="Top-down court with where the players stood"></canvas>
+            <div class="kv" id="report-coverage-kv"></div>
+          </div>
+          <div class="legend" id="report-coverage-legend"></div>
+        </div>
+        <div class="panel report-section hidden" id="report-formation">
+          <h2>Formation</h2>
+          <div id="report-formation-body"></div>
+          <p class="report-note" id="report-formation-note"></p>
+        </div>
+        <div class="panel report-section hidden" id="report-work">
+          <h2>To work on</h2>
+          <div id="report-work-list"></div>
+        </div>
+        <div class="panel report-section hidden" id="report-steps">
+          <h2 id="report-steps-title">Before the report can say more</h2>
+          <ol class="steps" id="report-steps-list"></ol>
+        </div>
+      </div>
       <div id="side-tabs" class="side-tabs" role="tablist">
-        <button class="side-tab active" data-page="movement" id="side-tab-movement" title="Angles, events, footwork and coaching for the tracked player">Movement</button>
-        <button class="side-tab" data-page="match" id="side-tab-match" title="Contacts, rallies, serves, outcomes and what was played">Match <span class="count" id="side-count-match"></span></button>
-        <button class="side-tab" data-page="time" id="side-tab-time" title="This clip against the same player's kept sessions">Over time <span class="count" id="side-count-time"></span></button>
-        <button class="side-tab" data-page="project" id="side-tab-project" title="Camera side, racket hand, notes, how the clip was tracked">Project</button>
+        <button class="side-tab active" role="tab" data-page="movement" id="side-tab-movement" title="Angles, events, footwork and coaching for the tracked player">Movement</button>
+        <button class="side-tab" role="tab" data-page="match" id="side-tab-match" title="Contacts, rallies, serves, outcomes and what was played">Match <span class="count" id="side-count-match"></span></button>
+        <button class="side-tab" role="tab" data-page="time" id="side-tab-time" title="This clip against the same player's kept sessions">Over time <span class="count" id="side-count-time"></span></button>
+        <button class="side-tab" role="tab" data-page="project" id="side-tab-project" title="Camera side, racket hand, notes, how the clip was tracked">Project</button>
       </div>
       <div class="tab-page" data-page="movement">
       <div class="panel">
@@ -144,7 +215,7 @@
         <div id="movement-desc" class="muted small-text"></div>
         <div id="event-presets" class="preset-row"></div>
         <div class="row">
-          <input id="custom-event-name" type="text" placeholder="custom event name">
+          <input id="custom-event-name" type="text" placeholder="custom event name" aria-label="Custom event name">
           <button class="btn small" id="custom-event-btn">Add</button>
           <span class="spacer"></span>
           <button class="btn small" id="suggest-btn">Auto-detect takeoff / landing</button>
@@ -290,13 +361,13 @@
   </section>
 </main>
 
-<footer id="statusbar"><span id="status">Ready</span></footer>
+<footer id="statusbar"><span id="status" role="status" aria-live="polite">Ready</span></footer>
 
 <!-- modals -->
 <div id="modal-root" class="hidden">
   <div class="modal-backdrop"></div>
 
-  <div class="modal hidden" id="modal-open">
+  <div class="modal hidden" id="modal-open" role="dialog" aria-modal="true" tabindex="-1">
     <div class="modal-title">Open <span id="open-kind-label">video</span></div>
     <div class="row">
       <button class="btn small" id="native-dialog-btn">System file dialog</button>
@@ -308,7 +379,7 @@
     <div class="modal-actions"><button class="btn" data-close>Cancel</button></div>
   </div>
 
-  <div class="modal hidden" id="modal-run">
+  <div class="modal hidden" id="modal-run" role="dialog" aria-modal="true" tabindex="-1">
     <div class="modal-title">Run tracking</div>
     <p class="muted small-text" id="run-hint">Click the athlete to track. Default: the largest person.</p>
     <div class="select-wrap"><canvas id="select-canvas"></canvas></div>
@@ -321,13 +392,13 @@
       <div id="job-message" class="small-text"></div>
     </div>
     <div class="modal-actions">
-      <button class="btn" id="run-cancel-job" class="hidden">Cancel job</button>
+      <button class="btn" id="run-cancel-job">Cancel job</button>
       <button class="btn" data-close id="run-close">Close</button>
       <button class="btn primary" id="run-largest">Track largest person</button>
     </div>
   </div>
 
-  <div class="modal hidden" id="modal-export">
+  <div class="modal hidden" id="modal-export" role="dialog" aria-modal="true" tabindex="-1">
     <div class="modal-title">Export pack</div>
     <div class="col">
       <label class="chk"><input type="checkbox" id="exp-videos" checked> Include overlay.mp4 and stick.mp4 (large)</label>
@@ -347,7 +418,7 @@
     </div>
   </div>
 
-  <div class="modal hidden" id="modal-settings">
+  <div class="modal hidden" id="modal-settings" role="dialog" aria-modal="true" tabindex="-1">
     <div class="modal-title">Settings</div>
     <div class="col" id="settings-form">
       <label>Pose backend
@@ -374,7 +445,7 @@
     </div>
   </div>
 
-  <div class="modal hidden" id="modal-calib">
+  <div class="modal hidden" id="modal-calib" role="dialog" aria-modal="true" tabindex="-1">
     <div class="modal-title">Scale calibration</div>
     <p class="muted small-text">Converts pixels to centimetres for hip height, loading depth and jump height.</p>
     <div class="col">
@@ -389,7 +460,7 @@
     <div class="modal-actions"><button class="btn" data-close>Close</button></div>
   </div>
 
-  <div class="modal hidden" id="modal-court">
+  <div class="modal hidden" id="modal-court" role="dialog" aria-modal="true" tabindex="-1">
     <div class="modal-title">Court calibration</div>
     <p class="muted small-text">Maps the floor in the video to a top-down court in metres. Choose which court points you can see, then click them on the video in the order given. Any frame works; the camera must not move during the clip.</p>
     <div class="col">
@@ -406,7 +477,7 @@
     </div>
   </div>
 
-  <div class="modal hidden" id="modal-keys">
+  <div class="modal hidden" id="modal-keys" role="dialog" aria-modal="true" tabindex="-1">
     <div class="modal-title">Keyboard</div>
     <table class="keys">
       <tr><td><kbd>Space</kbd></td><td>play / pause</td></tr>
@@ -429,7 +500,7 @@
     <div class="modal-actions"><button class="btn" data-close>Close</button></div>
   </div>
 
-  <div class="modal hidden" id="modal-compare">
+  <div class="modal hidden" id="modal-compare" role="dialog" aria-modal="true" tabindex="-1">
     <div class="modal-title">Compare with another project</div>
     <div class="col">
       <label>Project <select id="compare-project"></select></label>

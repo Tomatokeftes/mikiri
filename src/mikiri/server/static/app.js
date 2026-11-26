@@ -6,7 +6,7 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 const COLORS = {
   left: '#3fc380', right: '#ff7f2a', center: '#e6c85a', corrected: '#ff5cff',
-  low: '#8a8f9c', accent: '#4f8cff', cursor: '#ffffff', event: '#ffd166', compare: '#c9d1ff',
+  low: '#8a8f9c', accent: '#6ea8ff', cursor: '#ffffff', event: '#ffd166', compare: '#c9d1ff',
   // The other player: one flat colour, so the subject's coloured limbs stay the thing the eye lands on.
   other: '#d7dbe3',
 };
@@ -66,12 +66,25 @@ const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
 function fps() { return S.state ? S.state.video.fps : 30; }
 function nFrames() { return S.state ? S.state.video.n_frames : 0; }
 
+// A dialog takes the keyboard when it opens and hands it back to whatever
+// opened it when it closes, so a keyboard user is never left behind it.
 function showModal(id) {
+  if ($('#modal-root').classList.contains('hidden')) S.modalReturn = document.activeElement;
   $('#modal-root').classList.remove('hidden');
   $$('.modal').forEach((m) => m.classList.add('hidden'));
-  $(id).classList.remove('hidden');
+  const m = $(id);
+  m.classList.remove('hidden');
+  const title = m.querySelector('.modal-title');
+  if (title) { title.id = title.id || `${m.id}-title`; m.setAttribute('aria-labelledby', title.id); }
+  m.focus({ preventScroll: true });
 }
-function closeModals() { $('#modal-root').classList.add('hidden'); $$('.modal').forEach((m) => m.classList.add('hidden')); }
+function closeModals() {
+  const wasOpen = !$('#modal-root').classList.contains('hidden');
+  $('#modal-root').classList.add('hidden'); $$('.modal').forEach((m) => m.classList.add('hidden'));
+  if (wasOpen && document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  if (wasOpen && S.modalReturn && document.contains(S.modalReturn)) S.modalReturn.focus({ preventScroll: true });
+  S.modalReturn = null;
+}
 
 async function pollJob(jobId, onProgress) {
   for (;;) {
@@ -398,9 +411,9 @@ function renderTimeline() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, g.w, g.h);
   const y0 = 36, y1 = g.h - 8;
-  ctx.fillStyle = '#2a2e38'; ctx.fillRect(g.pad, y0, g.w - 2 * g.pad, y1 - y0);
+  ctx.fillStyle = '#22262d'; ctx.fillRect(g.pad, y0, g.w - 2 * g.pad, y1 - y0);
   // trimmed range
-  ctx.fillStyle = 'rgba(79,140,255,0.28)'; ctx.fillRect(g.x(S.state.trim_start), y0, g.x(S.state.trim_end) - g.x(S.state.trim_start), y1 - y0);
+  ctx.fillStyle = 'rgba(110,168,255,0.22)'; ctx.fillRect(g.x(S.state.trim_start), y0, g.x(S.state.trim_end) - g.x(S.state.trim_start), y1 - y0);
   // What each stretch of the clip is, along the top of the bar: play in
   // green, rest in grey, another scene in red. Read straight off the
   // segmenter's runs, so a twelve-minute match shows its points at a glance.
@@ -442,7 +455,7 @@ function renderTimeline() {
   // cursor
   const xc = g.x(S.frame);
   ctx.strokeStyle = COLORS.cursor; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(xc, y0 - 6); ctx.lineTo(xc, y1 + 4); ctx.stroke();
-  ctx.fillStyle = '#ccc'; ctx.font = '10px sans-serif'; ctx.fillText('0', g.pad, g.h - 0); ctx.fillText(String(nFrames() - 1), g.w - g.pad - 24, g.h - 0);
+  ctx.fillStyle = '#a9b0bd'; ctx.font = '10px sans-serif'; ctx.fillText('0', g.pad, g.h - 0); ctx.fillText(String(nFrames() - 1), g.w - g.pad - 24, g.h - 0);
 }
 
 const TIMELINE_STATE = {
@@ -582,9 +595,9 @@ function renderPlots() {
     const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.font = '11px sans-serif'; ctx.fillStyle = '#c8ccd6'; ctx.fillText(seriesLabel(p.name), PLOT_PAD.l + 4, 10);
-    if (!S.pose) { ctx.fillStyle = '#666'; ctx.fillText('run tracking to see angles', PLOT_PAD.l + 4, h / 2); continue; }
+    if (!S.pose) { ctx.fillStyle = '#878f9d'; ctx.fillText('run tracking to see angles', PLOT_PAD.l + 4, h / 2); continue; }
     const vals = seriesValues(S.pose, S.state, p.name);
-    if (!vals) { ctx.fillStyle = '#666'; ctx.fillText('not available', PLOT_PAD.l + 4, h / 2); continue; }
+    if (!vals) { ctx.fillStyle = '#878f9d'; ctx.fillText('not available', PLOT_PAD.l + 4, h / 2); continue; }
     const n = vals.length; const x0 = PLOT_PAD.l, x1 = w - PLOT_PAD.r, y0 = PLOT_PAD.t, y1 = h - PLOT_PAD.b;
     const finite = vals.filter((v) => v != null);
     let cmpVals = null;
@@ -809,6 +822,15 @@ function renderAll() {
   renderVideo(); renderTimeline(); renderPlots(); renderCourt();
   renderStrokes(); renderSeams(); renderRallies(); renderMatch(); renderReview(); renderTactics(); renderDoubles(); renderTrends(); renderCoaching(); renderCameraView();
   renderSideTabs(); renderNextStep();
+  document.body.classList.toggle('has-pose', !!S.state.has_pose);
+  renderReport();
+  makeRowsPressable();
+}
+
+// A row that seeks when clicked takes the keyboard too: it can be tabbed to,
+// and Enter presses it. Set after every render because the lists are rebuilt.
+function makeRowsPressable() {
+  for (const li of $$('li[data-frame]')) { li.tabIndex = 0; li.setAttribute('role', 'button'); }
 }
 
 // ------------------------------------------------------------ explanations
@@ -833,7 +855,7 @@ function foldedPanels() {
 function setFolded(panel, key, folded) {
   panel.classList.toggle('folded', folded);
   const btn = panel.querySelector(':scope > .panel-title > .fold');
-  if (btn) { btn.textContent = folded ? '+' : '-'; btn.title = folded ? 'Unfold this panel' : 'Fold this panel to its title'; }
+  if (btn) { btn.textContent = folded ? '+' : '-'; btn.title = folded ? 'Unfold this panel' : 'Fold this panel to its title'; btn.setAttribute('aria-label', `${folded ? 'Unfold' : 'Fold'} ${key.replace(/-panel$/, '')}`); btn.setAttribute('aria-expanded', folded ? 'false' : 'true'); }
   const set = foldedPanels();
   if (folded) set.add(key); else set.delete(key);
   try { localStorage.setItem('mikiri.folded', JSON.stringify([...set])); } catch (e) { /* private mode */ }
@@ -875,10 +897,33 @@ function showSidePage(page, remember = true) {
   for (const p of SIDE_PAGES) {
     $(`.tab-page[data-page="${p}"]`).classList.toggle('hidden', p !== page);
     $(`#side-tab-${p}`).classList.toggle('active', p === page);
+    $(`#side-tab-${p}`).setAttribute('aria-selected', p === page ? 'true' : 'false');
   }
   // Canvases drawn while their page was display:none measured zero wide.
-  if (page === 'movement' && S.state) { renderPlots(); renderCourt(); }
+  if (page === 'movement' && S.state && S.view === 'analysis') { renderPlots(); renderCourt(); }
 }
+
+// ------------------------------------------------------------------- views
+
+// Two readings of one project. The report is the default: what happened, in
+// the order someone who played the match would ask for it. The analysis is
+// every panel and tool that got it there. The choice is remembered, so
+// whoever works in the panels all day is not sent back to the report.
+function setView(view, remember = true) {
+  S.view = view === 'analysis' ? 'analysis' : 'report';
+  document.body.classList.toggle('view-report', S.view === 'report');
+  document.body.classList.toggle('view-analysis', S.view === 'analysis');
+  $('#view-report').setAttribute('aria-pressed', S.view === 'report' ? 'true' : 'false');
+  $('#view-analysis').setAttribute('aria-pressed', S.view === 'analysis' ? 'true' : 'false');
+  if (remember) { try { localStorage.setItem('mikiri.view', S.view); } catch (e) { /* private mode */ } }
+  if (!S.state) return;
+  // Canvases drawn while their view was display:none measured zero wide.
+  renderVideo(); renderTimeline();
+  if (S.view === 'analysis') showSidePage(S.sidePage, false);
+  else renderReport();
+}
+
+function openReview() { setView('analysis'); showSidePage('match'); }
 
 function renderSideTabs() {
   const q = S.state.review, t = S.state.trends;
@@ -908,7 +953,7 @@ function nextStep() {
   if (!st.has_pose) return { text: 'Set in and out, then run tracking.', why: 'With the court in, tick the other end on the same run.', btn: 'Run tracking', act: openRunModal };
   if (!court) return { text: 'Calibrate the court.', why: 'Four clicks on its corners, for footwork in metres, rallies and the match figures.', btn: 'Court calibration', act: openCourtModal };
   if (players.length < 2) return { text: 'Only one player was tracked.', why: 'Run tracking again with the other end ticked, for serves, outcomes and the score.', btn: 'Run tracking', act: openRunModal };
-  if (q && q.n_open) return { text: `${q.n_open} question${q.n_open === 1 ? '' : 's'} waiting in Review.`, why: 'These are the contradictions the rally chain could not settle; a keypress answers each.', btn: 'Open Review', act: () => showSidePage('match') };
+  if (q && q.n_open) return { text: `${q.n_open} question${q.n_open === 1 ? '' : 's'} waiting in Review.`, why: 'These are the contradictions the rally chain could not settle; a keypress answers each.', btn: 'Open Review', act: openReview };
   if (!st.project_path) return { text: 'Save the project to keep this session.', why: 'The next clip of the same player is then read against it in Over time.', btn: 'Save', act: () => saveProject(false) };
   return null;
 }
@@ -929,11 +974,15 @@ async function refreshTabs() {
   const list = await api('GET', '/api/projects');
   const tabs = $('#project-tabs'); tabs.innerHTML = '';
   for (const p of list) {
-    const t = document.createElement('div'); t.className = 'tab' + (p.id === S.pid ? ' active' : ''); t.textContent = p.name || p.video.name;
-    const x = document.createElement('span'); x.className = 'close'; x.textContent = 'x'; x.title = 'close';
+    const t = document.createElement('div'); t.className = 'tab' + (p.id === S.pid ? ' active' : '');
+    t.tabIndex = 0; t.setAttribute('role', 'button'); t.title = p.name || p.video.name;
+    if (p.id === S.pid) t.setAttribute('aria-current', 'true');
+    const nm = document.createElement('span'); nm.className = 'tab-name'; nm.textContent = p.name || p.video.name; t.appendChild(nm);
+    const x = document.createElement('button'); x.type = 'button'; x.className = 'close'; x.textContent = 'x'; x.title = 'close'; x.setAttribute('aria-label', `Close ${p.name || p.video.name}`);
     x.addEventListener('click', async (ev) => { ev.stopPropagation(); await api('DELETE', `/api/projects/${p.id}`); if (p.id === S.pid) { S.pid = null; S.state = null; S.pose = null; $('#main').classList.add('no-project'); const rest = await api('GET', '/api/projects'); if (rest.length) await setProject(await api('GET', `/api/projects/${rest[rest.length - 1].id}`)); } if (S.compare && S.compare.pid === p.id) { S.compare = null; } refreshTabs(); renderAll(); });
     t.appendChild(x);
     t.addEventListener('click', async () => { if (p.id !== S.pid) await setProject(await api('GET', `/api/projects/${p.id}`)); });
+    t.addEventListener('keydown', (ev) => { if (ev.target === t && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); ev.stopPropagation(); t.click(); } });
     tabs.appendChild(t);
   }
 }
@@ -943,7 +992,7 @@ async function refreshTabs() {
 function seek(f) {
   if (!S.state) return;
   S.frame = clamp(Math.round(f), 0, Math.max(0, nFrames() - 1));
-  renderVideo(); renderTimeline(); renderPlots(); renderCourt();
+  renderVideo(); renderTimeline(); renderPlots(); renderCourt(); markReportRow();
 }
 function step(d) { seek(S.frame + d); }
 
@@ -977,7 +1026,7 @@ function startPlayback() {
       renderVideo();
       if (now - lastPanels > 1000 / PANEL_HZ) {
         lastPanels = now;
-        renderTimeline(); renderPlots(); renderCourt();
+        renderTimeline(); renderPlots(); renderCourt(); markReportRow();
       }
     }
     S.timer = requestAnimationFrame(tick);
@@ -1400,7 +1449,7 @@ function renderMatch() {
   panel.classList.toggle('hidden', !has);
   if (!has) return;
   const kv = (k, v) => `<span class="k">${k}</span><span>${v}</span>`;
-  const fact = (f) => (f && f.value != null) ? `${Array.isArray(f.value) ? f.value.join('-') : f.value} <span class="muted small-text">(${f.how})</span>` : '<span class="muted">withheld</span>';
+  const fact = (f) => (f && f.value != null) ? `${Array.isArray(f.value) ? f.value.join('-') : f.value} ${provPill(f.how)}` : provPill('withheld');
   const you = S.state.tracking && S.state.tracking.side;
   const who = (side) => side == null ? '?' : (side === you ? `you (${side})` : side);
   const rows = [kv('rallies', String(m.n_rallies))];
@@ -1410,7 +1459,7 @@ function renderMatch() {
   const sv = m.serves || {};
   rows.push(kv('serves', `${sv.detected} found; ${sv.consistent} of ${sv.checked} tested stand where the count puts them`));
   const prov = m.by_provenance || {};
-  rows.push(kv('outcomes by', `confirmed ${prov.confirmed ?? 0}, inferred ${prov.inferred ?? 0}, auto ${prov.auto ?? 0}, withheld ${prov.withheld ?? 0}`));
+  rows.push(kv('outcomes by', provCounts(prov)));
   $('#match-summary').innerHTML = rows.join('');
 
   const rate = fps();
@@ -1422,7 +1471,7 @@ function renderMatch() {
     const how = r.winner.how || 'withheld';
     const n = r.n_contacts ? `${r.n_contacts} contacts` : 'no contacts';
     return `<li data-frame="${r.start + start}"><span class="mono">${t}s</span> <b>rally ${r.index + 1}</b>`
-      + `<span class="muted small-text"> ${r.duration_s} s, ${n}; ${server}; ${winner} <i>(${how})</i>${r.issues.length ? `; ${r.issues.length} question${r.issues.length === 1 ? '' : 's'}` : ''}</span></li>`;
+      + `<span class="muted small-text"> ${r.duration_s} s, ${n}; ${server}; ${winner} ${provPill(how)}${r.issues.length ? `; ${r.issues.length} question${r.issues.length === 1 ? '' : 's'}` : ''}</span></li>`;
   }).join('');
   $('#match-issues').innerHTML = (m.issues || []).map((i) =>
     `<li data-frame="${i.frame + start}"><span class="mono">${((i.frame + start) / rate).toFixed(1)}s</span> ${i.question}</li>`
@@ -1432,13 +1481,39 @@ function renderMatch() {
     li.addEventListener('click', () => seek(Number(li.dataset.frame)));
   }
 
+  $('#match-note').textContent = matchNotes(m).join(' ');
+  $('#match-explain').textContent = 'Who won a rally is read off who serves next; the serve is the first detected contact of a bout. Confirmed means you answered it, inferred means the rules of the game derived it from confirmed facts, auto means unreviewed detection. A rejected swing is the receiver reacting: two contacts the shuttle would have had to cross the court between in a fraction of a second are not two contacts.';
+}
+
+// What the chain says about its own result, one sentence each, the headline
+// or its withholding first. The Match panel and the report both print these,
+// from here, so neither can drop a sentence the other keeps.
+function matchNotes(m) {
   const notes = [];
   notes.push(m.headline ? m.headline.charAt(0).toUpperCase() + m.headline.slice(1) + '.' : `No result is stated: ${m.headline_withheld}.`);
   if (m.contacts_rejected) notes.push(`${m.contacts_rejected} swing${m.contacts_rejected === 1 ? '' : 's'} rejected: the shuttle could not have reached them.`);
   if (m.n_issues) notes.push(`${m.n_issues} question${m.n_issues === 1 ? '' : 's'} open in Review.`);
   if (m.note) notes.push(m.note.charAt(0).toUpperCase() + m.note.slice(1) + '.');
-  $('#match-note').textContent = notes.join(' ');
-  $('#match-explain').textContent = 'Who won a rally is read off who serves next; the serve is the first detected contact of a bout. Confirmed means you answered it, inferred means the rules of the game derived it from confirmed facts, auto means unreviewed detection. A rejected swing is the receiver reacting: two contacts the shuttle would have had to cross the court between in a fraction of a second are not two contacts.';
+  return notes;
+}
+
+// How a fact is known, as a pill. The word is always printed; the colour is
+// a second reading of it. Anything that is not one of the three provenances
+// is drawn as withheld, the weakest, so an unfamiliar word never looks
+// stronger than it is.
+const PROVENANCE = {
+  confirmed: 'Answered by you',
+  inferred: 'Derived through the rules of the game from confirmed facts',
+  auto: 'Detected and not reviewed',
+  withheld: 'Not stated: the measurement cannot defend it',
+};
+function provPill(how) {
+  const word = how || 'withheld';
+  const cls = PROVENANCE[word] ? word : 'withheld';
+  return `<span class="pill ${cls}" title="${PROVENANCE[cls]}">${word}</span>`;
+}
+function provCounts(prov) {
+  return Object.keys(PROVENANCE).map((k) => `<span class="pill ${k}" title="${PROVENANCE[k]}">${k} ${(prov || {})[k] ?? 0}</span>`).join(' ');
 }
 
 // The review queue: one question at a time, the video already at its frame,
@@ -1495,7 +1570,7 @@ function renderTactics() {
   if (!has) return;
   const kv = (k, v) => `<span class="k">${k}</span><span>${v}</span>`;
   const pct = (x) => `${Math.round(100 * x)}%`;
-  const how = (h) => h ? ` <span class="muted small-text">(${h})</span>` : ' <span class="muted small-text">(withheld)</span>';
+  const how = (h) => ` ${provPill(h)}`;
   const counts = (obj) => Object.entries(obj || {}).map(([k, v]) => `${k} ${v}`).join(', ') || 'none';
   const r = t.rallies || {};
   const rows = [];
@@ -1551,7 +1626,7 @@ function renderDoubles() {
     const r = s.response || {};
     lines.push(kv('own shots', `${r.n_judged || 0} judged (${(r.by_basis || {}).name || 0} by name, ${(r.by_basis || {}).height || 0} by contact height), ${r.n_unjudged || 0} not`));
     if (r.wrong_shape_share != null) {
-      lines.push(kv('wrong shape after', `${pct(r.wrong_shape_share)} of the time <span class="muted small-text">(${r.how || 'withheld'})</span>`));
+      lines.push(kv('wrong shape after', `${pct(r.wrong_shape_share)} of the time ${provPill(r.how)}`));
       if (r.rotation_median_s != null) lines.push(kv('time to right shape', `${r.rotation_median_s} s median, reached after ${r.reached} of ${r.n_judged}`));
     } else if (r.note) {
       lines.push(kv('', `<span class="muted small-text">${r.note}</span>`));
@@ -1780,14 +1855,14 @@ function courtUpto(lo, hi) {
 
 // Visits per cell, coloured cold to hot. Cached: it depends on the track, the
 // range and the canvas size and on nothing that changes as the video plays.
-function heatLayer(tracks, lo, hi, W, Hh, P, scale) {
+function heatLayer(slot, tracks, lo, hi, upto, W, Hh, P, scale) {
   // A rally is shown as it was played: only up to where the playhead is, and
   // against the peak the *finished* rally reaches, so the map reddens as the
   // rally goes on. Normalising against the peak so far would make the first
   // two positions of a rally as hot as the base position at the end of it.
-  const upto = courtUpto(lo, hi);
   const key = [S.pid, S.poseKey || '', tracks.length, lo, hi, upto, W, Hh].join(':');
-  if (S.heat && S.heat.key === key) return S.heat.canvas;
+  if (!S.heat) S.heat = {};
+  if (S.heat[slot] && S.heat[slot].key === key) return S.heat[slot].canvas;
   const cell = Math.max(2, HEAT_CELL_M * scale);
   const gw = Math.ceil(W / cell), gh = Math.ceil(Hh / cell);
   const counts = new Float32Array(gw * gh);
@@ -1825,7 +1900,7 @@ function heatLayer(tracks, lo, hi, W, Hh, P, scale) {
   const sctx = soft.getContext('2d');
   sctx.filter = `blur(${blur.toFixed(1)}px)`;
   sctx.drawImage(off, 0, 0);
-  S.heat = { key, canvas: soft };
+  S.heat[slot] = { key, canvas: soft };
   return soft;
 }
 
@@ -1854,14 +1929,27 @@ function renderCourt() {
   const has = !!(cal && cal.image_points && cal.image_points.length >= 4);
   panel.classList.toggle('hidden', !has && !S.courtPick);
   if (!has && !S.courtPick) return;
-  const margin = 1.0; const W = 220; const Hh = Math.round(W * (meta.length + 2 * margin) / (meta.width + 2 * margin));
+  const [lo, hi] = courtRange();
+  // Only the map on screen is drawn: the other view's canvas is display:none
+  // and this runs ten times a second during playback.
+  if (S.view === 'report') { if (has) drawCourtMap($('#report-court-canvas'), 200, lo, hi, courtUpto(lo, hi)); renderReportCoverage(lo, hi); return; }
+  drawCourtMap(canvas, 220, lo, hi, courtUpto(lo, hi));
+  renderFootwork(lo, hi);
+}
+
+// The top-down court, the heat, the paths and the playhead, into ``canvas``
+// at ``W`` CSS pixels wide, for pose indices ``lo`` to ``hi`` drawn as far as
+// ``upto``.
+function drawCourtMap(canvas, W, lo, hi, upto) {
+  const meta = S.state.meta.court;
+  const margin = 1.0; const Hh = Math.round(W * (meta.length + 2 * margin) / (meta.width + 2 * margin));
   const dpr = window.devicePixelRatio || 1;
   if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(Hh * dpr)) { canvas.width = Math.round(W * dpr); canvas.height = Math.round(Hh * dpr); canvas.style.height = Hh + 'px'; }
   const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const scale = W / (meta.width + 2 * margin);
   const P = (x, y) => [(x + margin) * scale, Hh - (y + margin) * scale];
-  ctx.fillStyle = '#3c6e3c'; ctx.fillRect(0, 0, W, Hh);
-  ctx.fillStyle = '#3ca0c8'; const [cx0, cy0] = P(0, meta.length); ctx.fillRect(cx0, cy0, meta.width * scale, meta.length * scale);
+  ctx.fillStyle = '#2f5a35'; ctx.fillRect(0, 0, W, Hh);
+  ctx.fillStyle = '#2f86ad'; const [cx0, cy0] = P(0, meta.length); ctx.fillRect(cx0, cy0, meta.width * scale, meta.length * scale);
   ctx.strokeStyle = '#fafafa'; ctx.lineWidth = 1.5;
   const alley = (meta.width - meta.singles_width) / 2;
   const line = (x1, y1, x2, y2) => { const a = P(x1, y1), b = P(x2, y2); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); };
@@ -1870,12 +1958,10 @@ function renderCourt() {
   line(meta.width / 2, 0, meta.width / 2, meta.net_y - meta.short_service); line(meta.width / 2, meta.net_y + meta.short_service, meta.width / 2, meta.length);
   ctx.strokeStyle = '#222'; ctx.lineWidth = 2.5; line(-0.3, meta.net_y, meta.width + 0.3, meta.net_y);
   const pos = S.pose && S.pose.positions;
-  const [lo, hi] = courtRange();
-  const upto = courtUpto(lo, hi);
   if (pos) {
     if (S.showHeat !== false) {
       const tracks = [pos, ...((S.pose.others || []).map((o) => o.positions).filter(Boolean))];
-      ctx.drawImage(heatLayer(tracks, lo, hi, W, Hh, P, scale), 0, 0, W, Hh);
+      ctx.drawImage(heatLayer(canvas.id, tracks, lo, hi, upto, W, Hh, P, scale), 0, 0, W, Hh);
     }
     if (S.showPath !== false) {
       const n = hi - lo + 1;
@@ -1922,8 +2008,15 @@ function renderCourt() {
     ctx.fillStyle = 'rgba(90,230,255,0.9)'; ctx.font = '9px sans-serif';
     ctx.fillText(`95% error, worst ${Math.round(worst * 100)} cm`, 4, Hh - 4);
   }
-  const fw = S.pose && S.pose.footwork; const el = $('#footwork-metrics');
-  if (fw && fw.distance_m != null) {
+}
+
+// The footwork figures as rows of key and value. The Court panel prints all
+// of them; the report prints the ones a player asks about first and every
+// one that says how far the map can be trusted.
+function footworkRows(lo, hi) {
+  const fw = S.pose && S.pose.footwork;
+  if (!(fw && fw.distance_m != null)) return null;
+  const pos = S.pose.positions;
     const zones = fw.zone_seconds ? Object.entries(fw.zone_seconds).map(([k, v]) => `${k} ${v} s`).join(', ') : '';
     const pi = poseIndex(S.frame);
     const cur = (pos && pi >= 0 && pos[pi]) ? pos[pi] : null;
@@ -1948,10 +2041,14 @@ function renderCourt() {
       rows.push(['camera', 'unknown -- click the net-post tops to correct the far-court bias']);
     }
     if (fw.jump_clearance_m != null) rows.push(['jump clearance', `${(fw.jump_clearance_m * 100).toFixed(0)} cm`]);
-    el.innerHTML = rows.map(([k, v]) => `<span class="k">${k}</span><span>${v}</span>`).join('');
-  } else {
-    el.innerHTML = S.courtPick ? `<span class="k">clicking</span><span>${courtPickPrompt()}</span>` : '<span class="k">footwork</span><span>run tracking to see the track</span>';
-  }
+    return rows;
+}
+
+function renderFootwork(lo, hi) {
+  const el = $('#footwork-metrics');
+  const rows = footworkRows(lo, hi);
+  if (rows) el.innerHTML = rows.map(([k, v]) => `<span class="k">${k}</span><span>${v}</span>`).join('');
+  else el.innerHTML = S.courtPick ? `<span class="k">clicking</span><span>${courtPickPrompt()}</span>` : '<span class="k">footwork</span><span>run tracking to see the track</span>';
 }
 
 // compare
@@ -2091,6 +2188,18 @@ function bindUI() {
   setExplain(explainOn);
   $('#next-step-dismiss').addEventListener('click', () => { S.hideStepFor = S.pid; renderNextStep(); });
   $$('.side-tab').forEach((t) => t.addEventListener('click', () => showSidePage(t.dataset.page)));
+  $('#view-report').addEventListener('click', () => setView('report'));
+  $('#view-analysis').addEventListener('click', () => setView('analysis'));
+  $('#report-ask-btn').addEventListener('click', openReview);
+  let view = 'report';
+  try { view = localStorage.getItem('mikiri.view') || 'report'; } catch (e) { /* private mode */ }
+  setView(view, false);
+  // Enter presses whatever row has the keyboard: a rally, a contact, a
+  // recently saved project. Space is left alone, because it plays the video.
+  document.addEventListener('keydown', (e) => {
+    const el = document.activeElement;
+    if (e.key === 'Enter' && el && el.matches && el.matches('li[data-frame], .recent-list li')) { e.preventDefault(); el.click(); }
+  });
   // A video dropped anywhere on the page opens the way an upload does.
   window.addEventListener('dragover', (e) => { e.preventDefault(); $('#welcome').classList.add('dropping'); });
   window.addEventListener('dragleave', () => $('#welcome').classList.remove('dropping'));
@@ -2100,6 +2209,7 @@ function bindUI() {
   $('#court-clear').addEventListener('click', async () => { applyState(await api('DELETE', `/api/projects/${S.pid}/court`)); await loadPose(); closeModals(); renderAll(); });
   $('#show-court').addEventListener('change', renderVideo);
   $('#court-scope').addEventListener('change', (e) => { S.courtScope = e.target.value; S.heat = null; renderCourt(); });
+  $('#report-court-scope').addEventListener('change', (e) => { S.courtScope = e.target.value; $('#court-scope').value = e.target.value; S.heat = null; renderCourt(); });
   $('#court-heat').addEventListener('change', (e) => { S.showHeat = e.target.checked; renderCourt(); });
   $('#court-path').addEventListener('change', (e) => { S.showPath = e.target.checked; renderCourt(); });
   $('#show-racket').addEventListener('change', renderVideo);
@@ -2161,10 +2271,16 @@ function bindUI() {
 
   window.addEventListener('resize', () => { renderVideo(); renderTimeline(); renderPlots(); });
   window.addEventListener('keydown', (e) => {
+    // Escape closes a dialog from anywhere in it, a text field included, and
+    // with no project open: Settings is reachable from the welcome page.
+    if (!$('#modal-root').classList.contains('hidden')) { if (e.key === 'Escape') closeModals(); return; }
     if (!S.state) return;
     const tag = (document.activeElement && document.activeElement.tagName) || '';
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-    if (!$('#modal-root').classList.contains('hidden')) { if (e.key === 'Escape') closeModals(); return; }
+    // Space on a button the keyboard walked to presses that button. A button
+    // that was clicked with the mouse does not hold on to Space, so it still
+    // plays the video straight after pressing +1.
+    if (e.key === ' ' && tag === 'BUTTON' && document.activeElement.matches(':focus-visible')) return;
     // Escape abandons a click-on-the-video pick. Without this a half-finished
     // calibration traps the user: the points are not enough to store, and every
     // further click adds another one.
@@ -2174,7 +2290,7 @@ function bindUI() {
     }
     // The review queue answers by number, and leaves a question with d. Only
     // while a question is showing, so the keys mean nothing otherwise.
-    const reviewShowing = !$('#review-panel').classList.contains('hidden') && S.sidePage === 'match' && !e.ctrlKey && !e.metaKey;
+    const reviewShowing = !$('#review-panel').classList.contains('hidden') && S.view === 'analysis' && S.sidePage === 'match' && !e.ctrlKey && !e.metaKey;
     if (reviewShowing && (e.key === 't' || e.key === 'T') && !$('#tag-toggle').classList.contains('hidden')) {
       $('#tag-toggle').click(); e.preventDefault(); return;
     }
@@ -2236,6 +2352,207 @@ async function init() {
     const list = await api('GET', '/api/projects');
     if (list.length) await setProject(await api('GET', `/api/projects/${list[list.length - 1].id}`));
   } catch (e) { setStatus(e.message, true); }
+}
+
+// ------------------------------------------------------------------ report
+
+// The report is the same project state the panels read, laid out in the
+// order someone who played the match asks for it: what was the result, which
+// rallies, where did we stand, what is left to settle. It adds no figure of
+// its own and it drops no caution: every sentence in which a measurement
+// refuses to say something is printed here as it is in its panel, and a
+// score is drawn as a headline only when the rally chain states one.
+
+function fmtClock(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function hasCourt() {
+  const cal = S.state && S.state.court;
+  return !!(cal && cal.image_points && cal.image_points.length >= 4);
+}
+
+function renderReport() {
+  if (!S.state) return;
+  const st = S.state;
+  const v = st.video;
+  const m = st.match && st.match.n_rallies ? st.match : null;
+  const q = st.review;
+  const players = st.players || [];
+  const you = st.tracking && st.tracking.side;
+  const end = (side) => `${side} end${side === you ? ' (you)' : ''}`;
+  const kv = (k, val) => `<span class="k">${k}</span><span>${val}</span>`;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+  $('#report-kind').textContent = m ? 'Match report' : 'Session report';
+  $('#report-title').textContent = st.name || v.name;
+  const meta = [`${fmtClock(v.duration_s)} clip`];
+  if (st.has_pose && S.pose) {
+    meta.push(`${fmtClock((S.pose.end - S.pose.start + 1) / fps())} tracked`);
+    if (players.length) meta.push(`${plural(players.length, 'player')} followed`);
+  } else meta.push('not tracked yet');
+  $('#report-meta').textContent = meta.join(', ');
+
+  // The result. Large numerals are a headline, so they are drawn only when
+  // the chain states one; until then the withholding is the headline and the
+  // count so far is a row with its provenance, as in the Match panel.
+  $('#report-score').classList.toggle('hidden', !m);
+  if (m) {
+    const notes = matchNotes(m);
+    const sc = m.score && Array.isArray(m.score.value) ? m.score : null;
+    const what = m.score_is_absolute ? 'score' : 'points in this clip';
+    let body;
+    if (m.headline && sc) {
+      body = `<div class="scoreline"><div class="side near"><span class="who">${end('near')}</span><span class="num">${sc.value[0]}</span></div>`
+        + `<div class="mid"><span>${what}</span>${provPill(sc.how)}</div>`
+        + `<div class="side far"><span class="who">${end('far')}</span><span class="num">${sc.value[1]}</span></div></div>`;
+    } else {
+      body = `<div class="score-withheld">${notes.shift()}</div>`;
+      if (sc) body += `<div class="kv" style="margin-top:8px">${kv(`${what} (near-far)`, `${sc.value.join('-')} ${provPill(sc.how)}`)}</div>`;
+    }
+    const won = m.rallies_won || {};
+    const parts = [['near', won.near || 0], ['far', won.far || 0], ['open', won.open || 0]];
+    body += `<div class="split" role="img" aria-label="Rallies won: near ${parts[0][1]}, far ${parts[1][1]}, open ${parts[2][1]}">`
+      + parts.filter(([, n]) => n).map(([k, n]) => `<i class="${k}" style="flex:${n} 0 0"></i>`).join('') + '</div>'
+      + `<div class="split-key"><span><i style="background:var(--c-near)"></i>near won ${parts[0][1]}</span>`
+      + `<span><i style="background:var(--c-far)"></i>far won ${parts[1][1]}</span>`
+      + (parts[2][1] ? `<span><i style="background:var(--c-border-strong)"></i>open ${parts[2][1]}</span>` : '') + '</div>'
+      + `<div class="prov-row"><span>Outcomes known by</span>${provCounts(m.by_provenance)}</div>`;
+    $('#report-score-body').innerHTML = body;
+    $('#report-score-note').textContent = notes.join(' ');
+  }
+
+  // What only the person who played can settle.
+  const open = q && q.n_open ? q.n_open : 0;
+  $('#report-ask').classList.toggle('hidden', !open);
+  if (open) $('#report-ask-text').innerHTML = `${plural(open, 'question')} only you can settle<small>Each is one keypress in Review.</small>`;
+
+  // Rallies from the chain where there is one, else the bouts of play, named
+  // as what they are: a bout is movement, not a rally with a server and a winner.
+  const off = S.pose ? S.pose.start : (st.tracking ? st.tracking.start : 0);
+  const rate = fps();
+  const bouts = (st.bouts && st.bouts.bouts) || [];
+  let rows = [];
+  if (m) {
+    rows = (m.rallies || []).map((r, i) => {
+      const w = r.winner.value;
+      const server = r.server.value ? `${end(r.server.value)} served${r.service_court.value ? ` from the ${r.service_court.value}` : ''}` : 'server unknown';
+      const issues = r.issues.length ? ` <span class="muted">${plural(r.issues.length, 'question')}</span>` : '';
+      return `<li data-frame="${r.start + off}" data-end="${r.end + off}"><span class="n">${i + 1}</span><span class="mono">${fmtClock((r.start + off) / rate)}</span>`
+        + `<span class="what">${r.duration_s} s, ${r.n_contacts ? plural(r.n_contacts, 'contact') : 'no contacts'}<small>${server}</small></span>`
+        + `<span class="out">${w ? `<span class="${w}">${end(w)} won</span>` : '<span class="muted">open</span>'} ${provPill(r.winner.how)}${issues}</span></li>`;
+    });
+  } else {
+    rows = bouts.map((x, i) => `<li data-frame="${x.start + off}" data-end="${x.end + off}"><span class="n">${i + 1}</span><span class="mono">${fmtClock((x.start + off) / rate)}</span>`
+      + `<span class="what">${x.duration_s} s<small>${x.distance_m} m, peak ${x.peak_speed_mps} m/s${x.n_contacts ? `, ${plural(x.n_contacts, 'contact')}` : ''}</small></span><span class="out"></span></li>`);
+  }
+  $('#report-rallies').classList.toggle('hidden', !rows.length);
+  $('#report-rallies-title').textContent = m ? 'Rallies' : 'Bouts of play';
+  $('#report-rallies-count').textContent = rows.length ? `${rows.length}, press one to watch it` : '';
+  $('#report-rally-list').innerHTML = rows.join('');
+  for (const li of $('#report-rally-list').querySelectorAll('li')) {
+    li.addEventListener('click', () => { seek(Number(li.dataset.frame)); startPlayback(); });
+  }
+  // The bouts panel's own cautions travel with the bouts.
+  $('#report-rallies-note').textContent = m ? '' : $('#rally-note').textContent;
+  markReportRow();
+
+  const [lo, hi] = courtRange();
+  renderReportCoverage(lo, hi);
+
+  // Formation, for each pair: the shape shares as one bar where the module
+  // gives shares, and its own sentence where it withholds them.
+  const d = st.doubles;
+  const hasPairs = !!(d && d.sides && Object.keys(d.sides).length);
+  $('#report-formation').classList.toggle('hidden', !hasPairs);
+  if (hasPairs) {
+    const pct = (x) => `${Math.round(100 * x)}%`;
+    const tones = ['a', 'b', 'c'];
+    const tone = { a: 'var(--c-accent)', b: '#b79bff', c: 'var(--c-warn)' };
+    $('#report-formation-body').innerHTML = Object.entries(d.sides).map(([side, s]) => {
+      let html = `<div class="formation-side ${side}"><div class="who">${side} pair${side === d.you ? ' (you)' : ''}</div>`;
+      if (s.note && !s.counts) return `${html}<p class="report-note">${s.note}</p></div>`;
+      const lines = [];
+      if (s.shares) {
+        const sh = Object.entries(s.shares);
+        html += `<div class="split" role="img" aria-label="${sh.map(([k, x]) => `${k} ${pct(x)}`).join(', ')}">`
+          + sh.map(([, x], i) => `<i class="${tones[i % 3]}" style="flex:${Math.max(0.001, x)} 0 0"></i>`).join('') + '</div>'
+          + `<div class="split-key">${sh.map(([k, x], i) => `<span><i style="background:${tone[tones[i % 3]]}"></i>${k} ${pct(x)}</span>`).join('')}</div>`;
+      } else {
+        lines.push(kv('shape', `${Object.entries(s.counts || {}).map(([k, n]) => `${k} ${n}`).join(', ')} frames <span class="muted small-text">${s.note || ''}</span>`));
+      }
+      lines.push(kv('located', `${s.located_s} s of ${s.play_s} s of play`));
+      if (s.separation_median_m != null) lines.push(kv('apart', `${s.separation_median_m} m median; within 1.5 m of each other ${pct(s.crowded_share || 0)} of the time`));
+      const r = s.response || {};
+      if (r.wrong_shape_share != null) lines.push(kv('wrong shape after own shot', `${pct(r.wrong_shape_share)} of the time ${provPill(r.how)}`));
+      else if (r.note) lines.push(kv('', `<span class="muted small-text">${r.note}</span>`));
+      return `${html}<div class="kv" style="margin-top:8px">${lines.join('')}</div></div>`;
+    }).join('');
+    $('#report-formation-note').textContent = $('#doubles-note').textContent;
+  }
+
+  // At most three things to work on, which is all the coaching module gives.
+  const work = (st.coaching || []).filter((a) => a.severity === 'work-on').slice(0, 3);
+  $('#report-work').classList.toggle('hidden', !work.length);
+  $('#report-work-list').innerHTML = work.map((a) => `
+    <div class="advice warn">
+      <div class="advice-title">${a.title}</div>
+      <div class="advice-detail">${a.detail}</div>
+      <div class="muted small-text">${a.evidence}${a.drill ? ` &middot; try: ${a.drill}` : ''}</div>
+    </div>`).join('');
+
+  // What is left to do, in the order the analysis is built. The same order as
+  // the Next line under the video, shown whole so the path is visible.
+  const steps = [
+    { done: hasCourt(), what: 'Calibrate the court', why: 'Four clicks on its corners: footwork in metres, rallies and the match figures. Skip it for a clip that does not show the court.', btn: 'Court calibration', act: openCourtModal },
+    { done: !!st.has_pose, what: 'Run tracking', why: 'With the court in, tick the other end on the same run.', btn: 'Run tracking', act: openRunModal },
+    { done: players.length >= 2, what: 'Track the other end as well', why: 'For serves, outcomes and the score.', btn: 'Run tracking', act: openRunModal },
+    { done: !!m && !open, what: 'Answer the review questions', why: 'The contradictions the rally chain could not settle; a keypress answers each.', state: open ? `${open} open` : '', btn: 'Open Review', act: openReview, ready: !!open },
+    { done: !!st.project_path, what: 'Save the project', why: 'Keeps this session, so the next clip of the same player is read against it.', btn: 'Save', act: () => saveProject(false) },
+  ];
+  const first = steps.findIndex((s) => !s.done);
+  $('#report-steps').classList.toggle('hidden', first < 0);
+  $('#report-steps-title').textContent = st.has_pose ? 'Before the report can say more' : 'Nothing to report yet';
+  const list = $('#report-steps-list'); list.innerHTML = '';
+  steps.forEach((s, i) => {
+    const li = document.createElement('li');
+    li.className = s.done ? 'done' : (i === first ? 'current' : '');
+    li.innerHTML = `<span class="what" title="${s.why}">${s.what}<small class="explain">${s.why}</small></span>`;
+    if (!s.done && i === first && s.ready !== false) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'btn small primary'; b.textContent = s.btn; b.addEventListener('click', s.act); li.appendChild(b);
+    } else {
+      const t = document.createElement('span'); t.className = 'state'; t.textContent = s.done ? 'done' : (s.state || 'to do'); li.appendChild(t);
+    }
+    list.appendChild(li);
+  });
+  makeRowsPressable();
+}
+
+// The figures beside the report's court map: the ones a player asks about
+// first, and every one that says how far the map can be trusted.
+const REPORT_FOOTWORK = new Set(['map shows', 'distance', 'speed', 'zones', 'measured', 'position error (95%)', 'camera', 'bias corrected']);
+
+function renderReportCoverage(lo, hi) {
+  const has = hasCourt() && !!(S.pose && S.pose.positions);
+  $('#report-coverage').classList.toggle('hidden', !has);
+  if (!has) return;
+  $('#report-court-scope').value = S.courtScope;
+  const rows = (footworkRows(lo, hi) || []).filter(([k]) => REPORT_FOOTWORK.has(k));
+  $('#report-coverage-kv').innerHTML = rows.map(([k, val]) => `<span class="k">${k}</span><span>${val}</span>`).join('');
+  const others = ((S.pose.others || []).filter((o) => o.positions)).length;
+  $('#report-coverage-legend').innerHTML = '<span><i style="background:#ff3b3b"></i>the player you picked</span>'
+    + (others ? `<span><i style="background:#d7dbe3"></i>${others} other${others === 1 ? '' : 's'}</span>` : '')
+    + '<span><i style="background:#ffdc00;border-radius:1px"></i>base position</span>'
+    + (S.state.court_uncertainty ? '<span><i style="background:none;border:1px solid #5ae6ff"></i>95% position error</span>' : '');
+}
+
+// The rally the playhead is in, marked in the report's list as it plays.
+function markReportRow() {
+  if (S.view !== 'report') return;
+  for (const li of $$('#report-rally-list li')) {
+    li.classList.toggle('here', S.frame >= Number(li.dataset.frame) && S.frame <= Number(li.dataset.end));
+  }
 }
 
 // Debug/test hooks.
