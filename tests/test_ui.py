@@ -87,6 +87,13 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         expect(page.locator("#video-info")).to_contain_text("720 x 1280")
         expect(page.locator("#video-info")).to_contain_text("30.000 fps")
         page.wait_for_timeout(600)
+        # A project opens on the report, not on the panels: with nothing
+        # tracked yet it is the list of what to do, in order, and the tools
+        # that only the analysis needs are out of the way.
+        expect(page.locator("#report")).to_be_visible()
+        expect(page.locator("#report-steps-list")).to_contain_text("Calibrate the court")
+        expect(page.locator("#side-tabs")).to_be_hidden()
+        expect(page.locator("#edit-toggle")).to_be_hidden()
         page.screenshot(path=str(SCREENSHOTS / "01_loaded.png"))
         # The next-step line walks a new user through the flow: the court
         # first, so one tracking run can follow everyone on it.
@@ -109,6 +116,10 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         expect(page.locator("#status")).to_contain_text("Tracking done")
         expect(page.locator("#tracking-info")).to_contain_text("Tracked frames 5-110")
         expect(page.locator("#next-step")).to_contain_text("Calibrate the court")
+        # Every panel and tool is one press away, behind Analysis.
+        page.click("#view-analysis")
+        expect(page.locator("#side-tabs")).to_be_visible()
+        expect(page.locator("#report")).to_be_hidden()
         page.wait_for_timeout(600)
         page.screenshot(path=str(SCREENSHOTS / "03_tracked.png"))
 
@@ -286,6 +297,34 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         page.locator("#rally-panel").scroll_into_view_if_needed()
         page.wait_for_timeout(200)
         page.locator("#rally-panel").screenshot(path=str(SCREENSHOTS / "09_rallies.png"))
+
+        # Back on the report, the same project reads as what happened: the
+        # bouts as a list to watch, the court map, and the bouts panel's own
+        # caution carried over rather than dropped. One player was tracked, so
+        # there is no rally chain and no result, and the report draws neither.
+        page.click("#view-report")
+        expect(page.locator("#report-rally-list")).to_contain_text("peak")
+        expect(page.locator("#report-rallies-title")).to_have_text("Bouts of play")
+        expect(page.locator("#report-coverage")).to_be_visible()
+        expect(page.locator("#report-coverage-kv")).to_contain_text("position error")
+        expect(page.locator("#report-score")).to_be_hidden()
+        assert page.locator("#report-rallies-note").inner_text() == page.evaluate(
+            "document.querySelector('#rally-note').textContent"
+        )
+        # The report's title is the project's name and can be typed over. The
+        # name ends up in an export folder's name, so what a file name cannot
+        # hold is dropped as it is typed rather than failing at export.
+        page.fill("#report-title", "demo: night/1")
+        page.press("#report-title", "Enter")
+        page.wait_for_function("JL.S.state.name === 'demo night 1'")
+        expect(page.locator("#project-tabs")).to_contain_text("demo night 1")
+        # Pressing a bout plays it from its first frame.
+        page.click("#report-rally-list li")
+        expect(page.locator("#play-btn")).to_have_text("Pause")
+        page.click("#play-btn")
+        page.wait_for_timeout(300)
+        page.screenshot(path=str(SCREENSHOTS / "11_report.png"))
+        page.click("#view-analysis")
 
         # A panel folds to its title and unfolds again; the table under it goes and comes back.
         page.click("#assessment-panel > .panel-title > .fold")

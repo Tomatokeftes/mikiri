@@ -12,6 +12,13 @@ network access is the one-off model download.
 Mikiri is a **single-camera 2D tool**: it measures angles in the image plane
 from a side-on view. See "Limitations" before trusting a number.
 
+A project opens on the **Report**: what happened in the clip -- the result
+where the rally chain states one, the rallies or bouts to press and watch, the
+court map, what is left to do. **Analysis**, one press away in the header, is
+every panel and tool behind it.
+
+![The report for a tracked clip: bouts to watch, the court map, what to work on](docs/screenshots/11_report.png)
+
 ![Tracked clip with skeleton overlay, events and angle plots](docs/screenshots/03_tracked.png)
 
 ## 60 second quick start
