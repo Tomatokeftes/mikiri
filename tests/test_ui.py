@@ -311,6 +311,13 @@ def test_ui_smoke(server: str, demo_video: Path, tmp_path: Path):
         assert page.locator("#report-rallies-note").inner_text() == page.evaluate(
             "document.querySelector('#rally-note').textContent"
         )
+        # The report's title is the project's name and can be typed over. The
+        # name ends up in an export folder's name, so what a file name cannot
+        # hold is dropped as it is typed rather than failing at export.
+        page.fill("#report-title", "demo: night/1")
+        page.press("#report-title", "Enter")
+        page.wait_for_function("JL.S.state.name === 'demo night 1'")
+        expect(page.locator("#project-tabs")).to_contain_text("demo night 1")
         # Pressing a bout plays it from its first frame.
         page.click("#report-rally-list li")
         expect(page.locator("#play-btn")).to_have_text("Pause")

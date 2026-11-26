@@ -94,7 +94,8 @@ to show against footage. There is one theme, and it is light.
 | --- | --- | --- |
 | Button | `.btn`, with `.primary`, `.ghost`, `.small` | a thin outline; `.primary` is filled with ink, one per region. Ghost is for the header. A toggle sets `aria-pressed` |
 | View switch | `.segmented` | Report / Analysis: two serif words, the current one underlined in rust. Buttons with `aria-pressed` |
-| Panel | `.panel` > `.panel-title` | folds from the small button `bindFolding` puts in the title. A `.panel-title` one level down names a block: one side of the net |
+| Panel | `.panel` > `.panel-title` | a section of a page, not a card: a hairline above and room below, in Analysis as in the report. Folds from the small button `bindFolding` puts in the title. A `.panel-title` one level down names a block: one side of the net |
+| Title | `#report-title` | the project's name, set as the report's heading and typed over in place to rename it; also a field on the Project tab |
 | Key and value | `.footwork` or `.kv`, children `.k` and a value | the row most of the app is made of |
 | Seekable list | `.events-list`, `.rally-list` | a row with `data-frame` seeks, takes the keyboard, and Enter presses it |
 | Tabs | `.side-tabs` > `.side-tab` | a word and an underline. `.empty` dims a page with nothing on it; `.count` is the open-question badge |

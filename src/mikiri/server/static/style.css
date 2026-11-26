@@ -287,7 +287,9 @@ canvas#video-canvas, canvas#compare-canvas { display: block; max-width: 100%; ma
 .timeline-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 body.show-explain .timeline-legend.explain { display: flex; }
 .trim-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.trim-row > .muted { font-size: var(--text-sm); }
+.trim-row > .muted { font-size: var(--text-sm); flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trim-row > .spacer { display: none; }
+.trim-row input[type="number"] { width: 74px; }
 
 /* The one line that says what to do next, under the transport. A celadon
    wash, the only tinted block on the page. */
@@ -301,7 +303,11 @@ body:not(.show-explain) .next-step #next-step-text { flex: 1 1 auto; }
 
 /* ---------------------------------------------------------------- panels */
 
-.panel { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-lg); padding: var(--sp-3) var(--sp-4) var(--sp-4); }
+/* A panel is a section of a page, not a card: a hairline above it and room
+   below. The first on a page needs no line, the tab strip is one. */
+.panel { border-top: 1px solid var(--c-border); padding: var(--sp-4) 0 var(--sp-5); }
+.tab-page > .panel:first-child, .tab-page > .hidden + .panel:first-of-type { border-top-color: transparent; }
+#edit-panel { padding-bottom: var(--sp-3); }
 .panel-title { font-family: var(--font-display); font-weight: 400; font-size: var(--text-lg); margin-bottom: var(--sp-2); display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; min-height: 28px; }
 .panel-title label, .panel-title .btn, .panel-title .small-text { font-family: var(--font-ui); }
 .panel-title label { color: var(--c-text-2); }
@@ -333,7 +339,7 @@ body.show-explain .explain { color: var(--c-text-3); }
 .panel.folded > :not(.panel-title) { display: none !important; }
 .panel.folded > .panel-title { margin-bottom: 0; }
 .panel.folded > .panel-title > :not(.fold):not(.ttl) { display: none; }
-.panel.folded { padding-bottom: var(--sp-3); }
+.panel.folded { padding: var(--sp-3) 0; }
 
 /* Key and value, the row most of the app is made of. */
 .footwork, .kv { font-size: var(--text-md); display: grid; grid-template-columns: minmax(96px, max-content) 1fr; gap: 4px var(--sp-4); align-content: start; font-variant-numeric: tabular-nums; }
@@ -370,6 +376,7 @@ body.show-explain .explain { color: var(--c-text-3); }
 .toggle-row .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
 .plots { display: flex; flex-direction: column; gap: 0; }
 .plot { border-top: 1px solid var(--c-border); overflow: hidden; }
+.plot:first-child { border-top: none; }
 .plot canvas { display: block; width: 100%; height: 96px; cursor: crosshair; }
 .current-values { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 2px var(--sp-3); font-size: var(--text-sm); margin-top: var(--sp-2); font-variant-numeric: tabular-nums; }
 .current-values span b { color: var(--c-text); font-weight: 500; }
@@ -398,7 +405,8 @@ body.show-explain .explain { color: var(--c-text-3); }
 .assessment td, .assessment th { padding: 7px 8px; border-bottom: 1px solid var(--c-border); text-align: left; vertical-align: top; }
 .assessment tr:last-child td { border-bottom: none; }
 .assessment th { color: var(--c-text-3); font-weight: 500; font-size: var(--text-sm); }
-.assessment td:first-child { font-size: var(--text-md); }
+.assessment td:first-child { font-size: var(--text-md); width: 34%; }
+.assessment td, .assessment th { padding-left: 0; }
 .assessment td .muted { font-size: var(--text-sm); color: var(--c-text-3); }
 .assessment .val { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .assessment .cue { color: var(--c-text); }
@@ -417,7 +425,7 @@ body.show-explain .explain { color: var(--c-text-3); }
 .advice .small-text { color: var(--c-text-3); }
 
 /* Camera-view badge: which metrics this viewpoint can actually support */
-.view-badge { font-size: var(--text-sm); padding: 6px var(--sp-3); border-radius: var(--r-md); border: 1px solid transparent; }
+.view-badge { font-size: var(--text-sm); padding: 6px var(--sp-3); border-radius: var(--r-md); border: 1px solid transparent; margin-bottom: var(--sp-4); }
 .view-badge:empty { display: none; }
 .view-badge.ok { background: var(--c-ok-soft); color: var(--c-ok); }
 .view-badge.warn { background: var(--c-warn-soft); color: var(--c-warn); }
@@ -432,12 +440,13 @@ body.show-explain .explain { color: var(--c-text-3); }
 .side-tab.empty { color: var(--c-text-3); }
 .side-tab .count { display: inline-block; background: var(--c-far); color: var(--c-surface); border-radius: var(--r-pill); padding: 0 7px; font-size: var(--text-xs); margin-left: 4px; font-weight: 700; }
 .side-tab .count:empty { display: none; }
-.tab-page { display: flex; flex-direction: column; gap: var(--sp-3); }
+.tab-page { display: flex; flex-direction: column; gap: 0; }
 .tab-empty { padding: var(--sp-5) var(--sp-4); text-align: center; font-family: var(--font-display); font-style: italic; font-size: var(--text-base); }
 
 /* The review card: one question, the answers as keys. It is the one panel
    that asks instead of telling, so it is the one with the wash. */
-#review-panel { background: var(--c-accent-soft); border-color: var(--c-accent-line); }
+#review-panel { background: var(--c-accent-soft); border: none; border-radius: var(--r-lg); padding: var(--sp-4) var(--sp-4) var(--sp-4); margin: var(--sp-4) 0 var(--sp-2); }
+#review-panel + .panel { border-top-color: transparent; }
 #review-question { font-family: var(--font-display); font-size: 19px; line-height: 1.35; margin-top: 0; }
 #review-options { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
 #review-options:empty { display: none; }
@@ -469,8 +478,12 @@ body.view-report.has-pose .trim-row { display: none; }
 
 .report-head { padding-bottom: var(--sp-4); }
 .report-head h1 { font-family: var(--font-display); font-size: var(--text-xl); font-weight: 400; line-height: 1.2; margin-top: 2px; overflow-wrap: anywhere; }
+#report-title { display: block; width: 100%; font: inherit; color: inherit; background: transparent; border: none; border-bottom: 1px solid transparent; border-radius: 0; padding: 0 0 2px; min-height: 0; text-overflow: ellipsis; }
+#report-title:hover { border-bottom-color: var(--c-border-strong); }
+#report-title:focus-visible { outline: none; border-bottom-color: var(--c-accent); }
+#report-title::placeholder { font-style: italic; }
 .report-head .meta { color: var(--c-text-3); font-size: var(--text-md); margin-top: var(--sp-1); font-variant-numeric: tabular-nums; }
-#report .report-section { background: transparent; border: none; border-top: 1px solid var(--c-border); border-radius: 0; padding: var(--sp-4) 0 var(--sp-5); }
+#report .report-section { padding: var(--sp-4) 0 var(--sp-5); }
 .report-section > h2 { font-family: var(--font-display); font-style: italic; font-weight: 400; font-size: var(--text-base); color: var(--c-text-3); margin-bottom: var(--sp-3); display: flex; align-items: baseline; gap: var(--sp-2); }
 .report-section > h2 .count { font-family: var(--font-ui); font-style: normal; font-size: var(--text-sm); }
 .report-note { color: var(--c-text-2); font-size: var(--text-md); margin-top: var(--sp-3); max-width: 70ch; }

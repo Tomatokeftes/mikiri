@@ -2008,7 +2008,7 @@ function drawCourtMap(canvas, W, lo, hi, upto) {
   // 1-sigma position error across the court: shows where the map can be trusted.
   const unc = S.showUncertainty !== false && S.state.court_uncertainty;
   if (unc && unc.points.length) {
-    ctx.strokeStyle = 'rgba(44,107,98,0.4)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(44,107,98,0.26)'; ctx.lineWidth = 0.75;
     unc.points.forEach(([gx, gy], i) => {
       const [x, y] = P(gx, gy);
       ctx.beginPath();
@@ -2203,6 +2203,18 @@ function bindUI() {
   $('#view-report').addEventListener('click', () => setView('report'));
   $('#view-analysis').addEventListener('click', () => setView('analysis'));
   $('#report-ask-btn').addEventListener('click', openReview);
+  // Renaming a project. The name ends up in an export folder's name, so the
+  // characters a file name cannot hold are dropped here rather than there.
+  const rename = async (e) => {
+    const name = e.target.value.replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!name || !S.state || name === S.state.name) { renderReport(); return; }
+    try { applyState(await api('PUT', `/api/projects/${S.pid}/options`, { name })); refreshTabs(); setStatus(`Renamed to ${name}`); }
+    catch (err) { setStatus(err.message, true); }
+  };
+  for (const id of ['#report-title', '#project-name']) {
+    $(id).addEventListener('change', rename);
+    $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.blur(); else if (e.key === 'Escape') { e.target.value = S.state ? (S.state.name || S.state.video.name) : ''; e.target.blur(); } });
+  }
   let view = 'report';
   try { view = localStorage.getItem('mikiri.view') || 'report'; } catch (e) { /* private mode */ }
   setView(view, false);
@@ -2398,7 +2410,13 @@ function renderReport() {
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
   $('#report-kind').textContent = m ? 'Match report' : 'Session report';
-  $('#report-title').textContent = st.name || v.name;
+  // The title is the project's own name and can be typed over. Never while
+  // it is being typed in: a render lands on every state change.
+  for (const id of ['#report-title', '#project-name']) {
+    const el = $(id);
+    if (document.activeElement !== el) el.value = st.name || v.name;
+    el.title = `${st.name || v.name} -- type to rename`;
+  }
   const meta = [`${fmtClock(v.duration_s)} clip`];
   if (st.has_pose && S.pose) {
     meta.push(`${fmtClock((S.pose.end - S.pose.start + 1) / fps())} tracked`);
