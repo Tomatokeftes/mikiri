@@ -10,6 +10,15 @@ const COLORS = {
   // The other player: one flat colour, so the subject's coloured limbs stay the thing the eye lands on.
   other: '#d7dbe3',
 };
+// What is drawn on the page itself -- the timeline, the plots, the court
+// map -- is ink on ivory, so it cannot share the colours above, which are
+// chosen to show against video. Same meanings, darker values.
+const PAPER = {
+  ink: '#262b29', soft: '#636c67', rule: '#e0dacd', track: '#e9e5db', wash: '#dfe9e2', line: '#7fa091',
+  left: '#2f6f58', right: '#a34a36', center: '#9a7a1c', accent: '#2c6b62', corrected: '#b0379f',
+  event: '#9a6b1f', contact: 'rgba(110,84,160,0.9)', lost: 'rgba(168,56,43,0.85)', compare: '#5d6fae',
+  rust: '#a34a36', paper: '#fbfaf6',
+};
 const LEFT = new Set([1, 3, 5, 7, 9, 11, 13, 15, 20, 22, 24]);
 const RIGHT = new Set([2, 4, 6, 8, 10, 12, 14, 16, 21, 23, 25]);
 const sideOf = (i) => (LEFT.has(i) ? 'left' : RIGHT.has(i) ? 'right' : 'center');
@@ -411,9 +420,9 @@ function renderTimeline() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, g.w, g.h);
   const y0 = 36, y1 = g.h - 8;
-  ctx.fillStyle = '#22262d'; ctx.fillRect(g.pad, y0, g.w - 2 * g.pad, y1 - y0);
+  ctx.fillStyle = PAPER.track; ctx.fillRect(g.pad, y0, g.w - 2 * g.pad, y1 - y0);
   // trimmed range
-  ctx.fillStyle = 'rgba(110,168,255,0.22)'; ctx.fillRect(g.x(S.state.trim_start), y0, g.x(S.state.trim_end) - g.x(S.state.trim_start), y1 - y0);
+  ctx.fillStyle = 'rgba(44,107,98,0.16)'; ctx.fillRect(g.x(S.state.trim_start), y0, g.x(S.state.trim_end) - g.x(S.state.trim_start), y1 - y0);
   // What each stretch of the clip is, along the top of the bar: play in
   // green, rest in grey, another scene in red. Read straight off the
   // segmenter's runs, so a twelve-minute match shows its points at a glance.
@@ -430,39 +439,41 @@ function renderTimeline() {
     ctx.fillRect(g.x(band.start), y0 + 6, Math.max(1, g.x(band.end + 1) - g.x(band.start)), y1 - 6 - (y0 + 6));
   }
   // tracked range
-  if (S.pose) { ctx.fillStyle = 'rgba(63,195,128,0.35)'; ctx.fillRect(g.x(S.pose.start), y1 - 5, g.x(S.pose.end) - g.x(S.pose.start), 5); }
+  if (S.pose) { ctx.fillStyle = 'rgba(47,111,88,0.55)'; ctx.fillRect(g.x(S.pose.start), y1 - 5, g.x(S.pose.end) - g.x(S.pose.start), 5); }
   // lost frames
-  if (S.pose && S.pose.meta) { ctx.fillStyle = 'rgba(255,92,92,0.7)'; for (const m of S.pose.meta) if (m.lost) ctx.fillRect(g.x(m.frame) - 1, y1 - 5, 2, 5); }
+  if (S.pose && S.pose.meta) { ctx.fillStyle = PAPER.lost; for (const m of S.pose.meta) if (m.lost) ctx.fillRect(g.x(m.frame) - 1, y1 - 5, 2, 5); }
   // detected contacts, as short ticks so they never crowd the event labels
   if (S.pose && S.pose.strokes && S.pose.strokes.strokes.length) {
-    ctx.fillStyle = 'rgba(179,136,255,0.9)';
+    ctx.fillStyle = PAPER.contact;
     for (const st of S.pose.strokes.strokes) ctx.fillRect(g.x(st.frame + S.pose.start) - 1, y0 + 6, 2, 8);
   }
   // handles
-  for (const f of [S.state.trim_start, S.state.trim_end]) { ctx.fillStyle = COLORS.accent; ctx.fillRect(g.x(f) - 3, y0 - 4, 6, y1 - y0 + 8); }
+  for (const f of [S.state.trim_start, S.state.trim_end]) { ctx.fillStyle = PAPER.ink; ctx.fillRect(g.x(f) - 1.5, y0 - 4, 3, y1 - y0 + 8); }
   // events (labels use up to three rows so close events stay readable)
   ctx.font = '11px sans-serif';
   const lastLabelEnd = [-Infinity, -Infinity, -Infinity];
   for (const ev of [...S.state.events].sort((a, b) => a.frame - b.frame)) {
     const x = g.x(ev.frame);
-    ctx.strokeStyle = COLORS.event; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, y0 - 2); ctx.lineTo(x, y1); ctx.stroke();
+    ctx.strokeStyle = PAPER.event; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, y0 - 2); ctx.lineTo(x, y1); ctx.stroke();
     const w = ctx.measureText(ev.name).width;
     let row = lastLabelEnd.findIndex((end) => x + 3 >= end);
     if (row < 0) row = lastLabelEnd.indexOf(Math.min(...lastLabelEnd));
     lastLabelEnd[row] = x + 3 + w + 6;
-    ctx.fillStyle = COLORS.event; ctx.fillText(ev.name, x + 3, 10 + row * 11);
+    ctx.fillStyle = PAPER.event; ctx.fillText(ev.name, x + 3, 10 + row * 11);
   }
   // cursor
   const xc = g.x(S.frame);
-  ctx.strokeStyle = COLORS.cursor; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(xc, y0 - 6); ctx.lineTo(xc, y1 + 4); ctx.stroke();
-  ctx.fillStyle = '#a9b0bd'; ctx.font = '10px sans-serif'; ctx.fillText('0', g.pad, g.h - 0); ctx.fillText(String(nFrames() - 1), g.w - g.pad - 24, g.h - 0);
+  ctx.strokeStyle = PAPER.ink; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(xc, y0 - 6); ctx.lineTo(xc, y1 + 4); ctx.stroke();
+  // The playhead carries a shuttle's cork, the one small joke on the page.
+  ctx.fillStyle = PAPER.rust; ctx.beginPath(); ctx.arc(xc, y0 - 8, 3.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = PAPER.soft; ctx.font = '10px sans-serif'; ctx.fillText('0', g.pad, g.h - 0); ctx.fillText(String(nFrames() - 1), g.w - g.pad - 24, g.h - 0);
 }
 
 const TIMELINE_STATE = {
-  play: 'rgba(63,195,128,0.55)', idle: 'rgba(154,160,173,0.28)', interval: 'rgba(154,160,173,0.28)',
-  warm_up: 'rgba(230,200,90,0.45)', not_badminton: 'rgba(255,92,92,0.45)',
+  play: 'rgba(47,111,88,0.75)', idle: 'rgba(99,108,103,0.3)', interval: 'rgba(99,108,103,0.3)',
+  warm_up: 'rgba(154,122,28,0.55)', not_badminton: 'rgba(168,56,43,0.6)',
 };
-const TIMELINE_WINNER = { near: 'rgba(63,195,128,0.22)', far: 'rgba(255,127,42,0.22)' };
+const TIMELINE_WINNER = { near: 'rgba(47,111,88,0.28)', far: 'rgba(163,74,54,0.28)' };
 
 // The bands the timeline draws and names: the chain's rallies with their
 // outcome where there is a chain, else the bouts of play. Frames absolute.
@@ -474,12 +485,12 @@ function timelineBands() {
     return m.rallies.map((r, i) => {
       const w = r.winner && r.winner.value;
       const label = `rally ${i + 1}, ${r.duration_s} s, ${r.n_contacts} contacts, ${w ? `${w} won (${r.winner.how})` : 'open'}`;
-      return { start: r.start + off, end: r.end + off, fill: TIMELINE_WINNER[w] || 'rgba(154,160,173,0.18)', label };
+      return { start: r.start + off, end: r.end + off, fill: TIMELINE_WINNER[w] || 'rgba(99,108,103,0.16)', label };
     });
   }
   const b = S.state.bouts;
   if (b && b.bouts && b.bouts.length) {
-    return b.bouts.map((x, i) => ({ start: x.start + off, end: x.end + off, fill: 'rgba(154,160,173,0.18)', label: `bout ${i + 1}, ${x.duration_s} s` }));
+    return b.bouts.map((x, i) => ({ start: x.start + off, end: x.end + off, fill: 'rgba(99,108,103,0.16)', label: `bout ${i + 1}, ${x.duration_s} s` }));
   }
   return [];
 }
@@ -531,10 +542,10 @@ function bindTimeline() {
 // ---------------------------------------------------------------- plots
 
 function seriesColor(name) {
-  if (name.endsWith('_L') || name.includes('_L_')) return COLORS.left;
-  if (name.endsWith('_R') || name.includes('_R_')) return COLORS.right;
-  if (name === 'hip_y') return COLORS.accent;
-  return COLORS.center;
+  if (name.endsWith('_L') || name.includes('_L_')) return PAPER.left;
+  if (name.endsWith('_R') || name.includes('_R_')) return PAPER.right;
+  if (name === 'hip_y') return PAPER.accent;
+  return PAPER.center;
 }
 function seriesLabel(name) {
   if (name === 'hip_y') return 'hip height (px, up = higher)';
@@ -594,10 +605,10 @@ function renderPlots() {
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
     const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    ctx.font = '11px sans-serif'; ctx.fillStyle = '#c8ccd6'; ctx.fillText(seriesLabel(p.name), PLOT_PAD.l + 4, 10);
-    if (!S.pose) { ctx.fillStyle = '#878f9d'; ctx.fillText('run tracking to see angles', PLOT_PAD.l + 4, h / 2); continue; }
+    ctx.font = '11px sans-serif'; ctx.fillStyle = '#4a534f'; ctx.fillText(seriesLabel(p.name), PLOT_PAD.l + 4, 10);
+    if (!S.pose) { ctx.fillStyle = PAPER.soft; ctx.fillText('run tracking to see angles', PLOT_PAD.l + 4, h / 2); continue; }
     const vals = seriesValues(S.pose, S.state, p.name);
-    if (!vals) { ctx.fillStyle = '#878f9d'; ctx.fillText('not available', PLOT_PAD.l + 4, h / 2); continue; }
+    if (!vals) { ctx.fillStyle = PAPER.soft; ctx.fillText('not available', PLOT_PAD.l + 4, h / 2); continue; }
     const n = vals.length; const x0 = PLOT_PAD.l, x1 = w - PLOT_PAD.r, y0 = PLOT_PAD.t, y1 = h - PLOT_PAD.b;
     const finite = vals.filter((v) => v != null);
     let cmpVals = null;
@@ -609,16 +620,16 @@ function renderPlots() {
     const X = (i) => x0 + (i / Math.max(1, n - 1)) * (x1 - x0);
     const Y = (v) => y1 - ((v - lo) / (hi - lo)) * (y1 - y0);
     // grid
-    ctx.strokeStyle = '#2c313d'; ctx.lineWidth = 1; ctx.fillStyle = '#8a8f9c'; ctx.font = '10px sans-serif';
+    ctx.strokeStyle = PAPER.rule; ctx.lineWidth = 1; ctx.fillStyle = PAPER.soft; ctx.font = '10px sans-serif';
     for (let k = 0; k <= 2; k++) { const v = lo + ((hi - lo) * k) / 2; const y = Y(v); ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); ctx.fillText(v.toFixed(0), 4, y + 3); }
     // events
     for (const ev of S.state.events) {
       const i = ev.frame - S.pose.start; if (i < 0 || i >= n) continue;
-      ctx.strokeStyle = 'rgba(255,209,102,0.7)'; ctx.beginPath(); ctx.moveTo(X(i), y0); ctx.lineTo(X(i), y1); ctx.stroke();
+      ctx.strokeStyle = 'rgba(154,107,31,0.6)'; ctx.beginPath(); ctx.moveTo(X(i), y0); ctx.lineTo(X(i), y1); ctx.stroke();
     }
     // compare series
     if (cmpVals) {
-      ctx.strokeStyle = COLORS.compare; ctx.lineWidth = 1; ctx.setLineDash([4, 3]); ctx.beginPath(); let pen = false;
+      ctx.strokeStyle = PAPER.compare; ctx.lineWidth = 1; ctx.setLineDash([4, 3]); ctx.beginPath(); let pen = false;
       for (let i = 0; i < n; i++) {
         const j = i + S.pose.start + S.compare.offset - S.compare.pose.start;
         const v = j >= 0 && j < cmpVals.length ? cmpVals[j] : null;
@@ -636,15 +647,15 @@ function renderPlots() {
       if (!pen) { ctx.moveTo(X(i), Y(v)); pen = true; } else ctx.lineTo(X(i), Y(v));
     }
     ctx.stroke();
-    if (conf) { ctx.fillStyle = 'rgba(255,92,92,0.9)'; for (let i = 0; i < n; i++) if (conf[i] < S.state.conf_threshold + 0.15 && vals[i] != null) ctx.fillRect(X(i) - 1, Y(vals[i]) - 1, 2, 2); }
+    if (conf) { ctx.fillStyle = PAPER.lost; for (let i = 0; i < n; i++) if (conf[i] < S.state.conf_threshold + 0.15 && vals[i] != null) ctx.fillRect(X(i) - 1, Y(vals[i]) - 1, 2, 2); }
     // corrected markers
-    for (let i = 0; i < n; i++) if (S.pose.corrected[i] && S.pose.corrected[i].length && vals[i] != null) { ctx.fillStyle = COLORS.corrected; ctx.fillRect(X(i) - 1.5, y1 - 3, 3, 3); }
+    for (let i = 0; i < n; i++) if (S.pose.corrected[i] && S.pose.corrected[i].length && vals[i] != null) { ctx.fillStyle = PAPER.corrected; ctx.fillRect(X(i) - 1.5, y1 - 3, 3, 3); }
     // cursor
     const ci = S.frame - S.pose.start;
     if (ci >= 0 && ci < n) {
-      ctx.strokeStyle = COLORS.cursor; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(ci), y0); ctx.lineTo(X(ci), y1); ctx.stroke();
+      ctx.strokeStyle = PAPER.ink; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(ci), y0); ctx.lineTo(X(ci), y1); ctx.stroke();
       const v = vals[ci];
-      if (v != null) { ctx.fillStyle = '#fff'; ctx.font = '11px sans-serif'; const txt = v.toFixed(1); const tx = Math.min(X(ci) + 4, x1 - 34); ctx.fillText(txt, tx, Math.max(y0 + 10, Math.min(Y(v) - 4, y1 - 2))); }
+      if (v != null) { ctx.fillStyle = PAPER.ink; ctx.font = '11px sans-serif'; const txt = v.toFixed(1); const tx = Math.min(X(ci) + 4, x1 - 34); ctx.fillText(txt, tx, Math.max(y0 + 10, Math.min(Y(v) - 4, y1 - 2))); }
     }
   }
   renderCurrentValues();
@@ -1905,14 +1916,15 @@ function heatLayer(slot, tracks, lo, hi, upto, W, Hh, P, scale) {
 }
 
 // Cold where the player passed through, hot where they stood: the ramp reads
-// as a count, which is the whole point of a heat map.
+// as a count, which is the whole point of a heat map. Celadon through ochre
+// to rust, the page's own three colours, so the map is not the one loud thing.
 function heatColour(t) {
   const stops = [
-    [0.00, [60, 220, 140], 0.10],
-    [0.20, [90, 230, 110], 0.45],
-    [0.45, [235, 225, 70], 0.68],
-    [0.70, [245, 150, 40], 0.82],
-    [1.00, [235, 45, 40], 0.94],
+    [0.00, [150, 190, 170], 0.12],
+    [0.20, [105, 165, 140], 0.42],
+    [0.45, [205, 178, 92], 0.62],
+    [0.70, [200, 125, 70], 0.78],
+    [1.00, [163, 74, 54], 0.90],
   ];
   let i = 1;
   while (i < stops.length - 1 && t > stops[i][0]) i++;
@@ -1948,15 +1960,15 @@ function drawCourtMap(canvas, W, lo, hi, upto) {
   const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const scale = W / (meta.width + 2 * margin);
   const P = (x, y) => [(x + margin) * scale, Hh - (y + margin) * scale];
-  ctx.fillStyle = '#2f5a35'; ctx.fillRect(0, 0, W, Hh);
-  ctx.fillStyle = '#2f86ad'; const [cx0, cy0] = P(0, meta.length); ctx.fillRect(cx0, cy0, meta.width * scale, meta.length * scale);
-  ctx.strokeStyle = '#fafafa'; ctx.lineWidth = 1.5;
+  ctx.clearRect(0, 0, W, Hh);
+  ctx.fillStyle = PAPER.wash; const [cx0, cy0] = P(0, meta.length); ctx.fillRect(cx0, cy0, meta.width * scale, meta.length * scale);
+  ctx.strokeStyle = PAPER.line; ctx.lineWidth = 1;
   const alley = (meta.width - meta.singles_width) / 2;
   const line = (x1, y1, x2, y2) => { const a = P(x1, y1), b = P(x2, y2); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); };
   for (const x of [0, alley, meta.width - alley, meta.width]) line(x, 0, x, meta.length);
   for (const y of [0, meta.long_service, meta.net_y - meta.short_service, meta.net_y + meta.short_service, meta.length - meta.long_service, meta.length]) line(0, y, meta.width, y);
   line(meta.width / 2, 0, meta.width / 2, meta.net_y - meta.short_service); line(meta.width / 2, meta.net_y + meta.short_service, meta.width / 2, meta.length);
-  ctx.strokeStyle = '#222'; ctx.lineWidth = 2.5; line(-0.3, meta.net_y, meta.width + 0.3, meta.net_y);
+  ctx.strokeStyle = PAPER.ink; ctx.lineWidth = 1.5; line(-0.3, meta.net_y, meta.width + 0.3, meta.net_y);
   const pos = S.pose && S.pose.positions;
   if (pos) {
     if (S.showHeat !== false) {
@@ -1965,19 +1977,19 @@ function drawCourtMap(canvas, W, lo, hi, upto) {
     }
     if (S.showPath !== false) {
       const n = hi - lo + 1;
-      ctx.strokeStyle = `rgba(255,255,255,${n > 3000 ? 0.16 : n > 1200 ? 0.3 : 0.6})`;
+      ctx.strokeStyle = `rgba(38,43,41,${n > 3000 ? 0.12 : n > 1200 ? 0.22 : 0.55})`;
       ctx.lineWidth = n > 1200 ? 0.7 : 1.2;
       ctx.beginPath(); let pen = false;
       for (let k = lo; k <= upto && k < pos.length; k++) { const p = pos[k]; if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
       ctx.stroke();
     }
     const i = poseIndex(S.frame);
-    if (i >= 0 && pos[i]) { const [x, y] = P(pos[i][0], pos[i][1]); ctx.fillStyle = '#ff3b3b'; ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
+    if (i >= 0 && pos[i]) { const [x, y] = P(pos[i][0], pos[i][1]); ctx.fillStyle = PAPER.rust; ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = PAPER.paper; ctx.lineWidth = 2; ctx.stroke(); }
     const fw = S.pose.footwork;
     if (fw && fw.base_m) {
       // Footwork figures are in the subject's own frame; a far-end subject's base sits a half turn away on the shared map.
       const b = S.pose.side === 'far' ? [meta.width - fw.base_m[0], meta.length - fw.base_m[1]] : fw.base_m;
-      const [x, y] = P(b[0], b[1]); ctx.strokeStyle = '#ffdc00'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 7, y); ctx.lineTo(x + 7, y); ctx.moveTo(x, y - 7); ctx.lineTo(x, y + 7); ctx.stroke();
+      const [x, y] = P(b[0], b[1]); ctx.strokeStyle = PAPER.ink; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x - 7, y); ctx.lineTo(x + 7, y); ctx.moveTo(x, y - 7); ctx.lineTo(x, y + 7); ctx.stroke();
     }
   }
   // The other player's track, when one was tracked: a faint path and the current position.
@@ -1985,18 +1997,18 @@ function drawCourtMap(canvas, W, lo, hi, upto) {
     if (!o.positions) continue;
     if (S.showPath !== false) {
       const n = hi - lo + 1;
-      ctx.strokeStyle = `rgba(215,219,227,${n > 3000 ? 0.12 : n > 1200 ? 0.22 : 0.45})`;
+      ctx.strokeStyle = `rgba(99,108,103,${n > 3000 ? 0.12 : n > 1200 ? 0.2 : 0.45})`;
       ctx.lineWidth = 0.7; ctx.beginPath(); let pen = false;
       for (let k = lo; k <= upto && k < o.positions.length; k++) { const p = o.positions[k]; if (!p) { pen = false; continue; } const [x, y] = P(p[0], p[1]); if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y); }
       ctx.stroke();
     }
     const i = poseIndex(S.frame);
-    if (i >= 0 && o.positions[i]) { const [x, y] = P(o.positions[i][0], o.positions[i][1]); ctx.fillStyle = COLORS.other; ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#222'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    if (i >= 0 && o.positions[i]) { const [x, y] = P(o.positions[i][0], o.positions[i][1]); ctx.fillStyle = PAPER.paper; ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = PAPER.ink; ctx.lineWidth = 1.5; ctx.stroke(); }
   }
   // 1-sigma position error across the court: shows where the map can be trusted.
   const unc = S.showUncertainty !== false && S.state.court_uncertainty;
   if (unc && unc.points.length) {
-    ctx.strokeStyle = 'rgba(90,230,255,0.85)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(44,107,98,0.4)'; ctx.lineWidth = 1;
     unc.points.forEach(([gx, gy], i) => {
       const [x, y] = P(gx, gy);
       ctx.beginPath();
@@ -2005,7 +2017,7 @@ function drawCourtMap(canvas, W, lo, hi, upto) {
       ctx.stroke();
     });
     const worst = Math.max(...unc.major_m);
-    ctx.fillStyle = 'rgba(90,230,255,0.9)'; ctx.font = '9px sans-serif';
+    ctx.fillStyle = PAPER.soft; ctx.font = '10px sans-serif';
     ctx.fillText(`95% error, worst ${Math.round(worst * 100)} cm`, 4, Hh - 4);
   }
 }
@@ -2469,7 +2481,7 @@ function renderReport() {
   if (hasPairs) {
     const pct = (x) => `${Math.round(100 * x)}%`;
     const tones = ['a', 'b', 'c'];
-    const tone = { a: 'var(--c-accent)', b: '#b79bff', c: 'var(--c-warn)' };
+    const tone = { a: 'var(--c-accent)', b: 'var(--c-far)', c: 'var(--c-border-strong)' };
     $('#report-formation-body').innerHTML = Object.entries(d.sides).map(([side, s]) => {
       let html = `<div class="formation-side ${side}"><div class="who">${side} pair${side === d.you ? ' (you)' : ''}</div>`;
       if (s.note && !s.counts) return `${html}<p class="report-note">${s.note}</p></div>`;
@@ -2541,10 +2553,10 @@ function renderReportCoverage(lo, hi) {
   const rows = (footworkRows(lo, hi) || []).filter(([k]) => REPORT_FOOTWORK.has(k));
   $('#report-coverage-kv').innerHTML = rows.map(([k, val]) => `<span class="k">${k}</span><span>${val}</span>`).join('');
   const others = ((S.pose.others || []).filter((o) => o.positions)).length;
-  $('#report-coverage-legend').innerHTML = '<span><i style="background:#ff3b3b"></i>the player you picked</span>'
-    + (others ? `<span><i style="background:#d7dbe3"></i>${others} other${others === 1 ? '' : 's'}</span>` : '')
-    + '<span><i style="background:#ffdc00;border-radius:1px"></i>base position</span>'
-    + (S.state.court_uncertainty ? '<span><i style="background:none;border:1px solid #5ae6ff"></i>95% position error</span>' : '');
+  $('#report-coverage-legend').innerHTML = '<span><i style="background:var(--c-far)"></i>the player you picked</span>'
+    + (others ? `<span><i style="background:var(--c-surface);border:1.5px solid var(--c-text)"></i>${others} other${others === 1 ? '' : 's'}</span>` : '')
+    + '<span>+ base position</span>'
+    + (S.state.court_uncertainty ? '<span><i style="background:none;border:1px solid var(--c-accent-line)"></i>95% position error</span>' : '');
 }
 
 // The rally the playhead is in, marked in the report's list as it plays.
